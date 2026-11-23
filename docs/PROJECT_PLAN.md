@@ -1,8 +1,8 @@
 # The Next Dollar: Capital Allocation
 
-Initial Project Plan
+Project Plan
 
-Version: Initial (G1), November 15, 2026. Owner: the student, as Executive Producer. This plan moves into Asana after G1, where owners, acceptance criteria and the full Risk Register will live.
+Version: Revised (post-G1), November 22, 2026 (updated from Initial G1, November 15, 2026). Owner: the student, as Executive Producer. This plan moves into Asana after G1, where owners, acceptance criteria and the full Risk Register will live.
 
 ## Gate dates
 
@@ -26,28 +26,48 @@ Version: Initial (G1), November 15, 2026. Owner: the student, as Executive Produ
 
 Gate work is due at the start of class unless a separate deadline is stated.
 
+## Reboot strategy (student decided, Nov 22)
+
+The earlier codebase's mechanics, UI, assets and flat map did not feel right. Rather than patching the old frontend or rewriting everything from scratch, the project follows a **clean presentation reboot** over the salvaged financial core:
+
+- **Salvage (do not rewrite):** Pure TypeScript domain math (`ledger.ts`, `value.ts` and their tests).
+- **Rebuild from zero:** Clean Vite + React + TypeScript project (`src/core/`, `src/world/`, `src/ui/`, `src/server/`) with a **2.5D walkable NYC world**, a **2.5D Manhattan overview map**, walkable seller stands down the block, in-world floating accounting toasts, a modern Books drawer, and the sealed-bid deal panel.
+- **Visual style (locked, student decided Nov 22):** **Straight-On 3/4 JRPG HD-2D** (like *Dragon Quest III HD-2D* / *Octopath Traveler*) built in **Three.js**—axis-aligned rectangular Manhattan grid (no diagonal isometric), front-facing 3D buildings/curbs/walls with crisp `NearestFilter` pixel-art textures, upright chibi 2D pixel-art character & stand sprites, warm directional shadows, and subtle tilt-shift depth-of-field.
+
+## 6-day sprint schedule (Nov 22 to Nov 28 first-playable)
+
+| Day | Focus | Concrete deliverables |
+|---|---|---|
+| Days 1–2 (Nov 22–23) | Scaffold, salvage core & Central Park HD-2D vertical slice | Scaffold `src/core/`, `src/world/`, `src/ui/`, `src/server/` with Three.js HD-2D renderer; salvage `ledger.ts` + `value.ts`; add 6 neighborhoods, 6-stand cap and 30-day career; ship 1 playable Straight-On 3/4 HD-2D Central Park block (axis-aligned WASD/click-to-walk character, lemonade stand, customers, in-world accounting toasts) |
+| Day 3 (Nov 24) | Deal loop, sealed bids & NYC expansion (no AI yet) | Walkable seller stand down the block; 3 seeded deals (books, asking price, hidden reservation price, 1–2 off-book facts); 1-shot sealed-bid deal panel; template pitch baseline; Books drawer + catch reveal; 2.5D Manhattan overview map + visual themes for the other 5 neighborhoods |
+| Day 4 (Nov 25) | AI seller, validator & tuning | Cloudflare Worker → Vertex AI (`seller-prompt-v1`), shape/number checks, pitch-only volunteer guard, 1 silent retry + neutral fallback, 3-question cap, 6 s timeout, full stub tests, and offline balance tuning |
+| Day 5 (Nov 26–27) | Live eval & external playtest | Approved small live Gemini eval (false numbers, pitch leaks, direct-question truthfulness, latency, cost) + 1–2 external playtests comparing AI seller + sealed bid against the template baseline |
+| Day 6 (Sat Nov 28) | Polish & recording | Fix top playtest friction, verify `npm test` / CI, record first-playable video, and finalize G2/G3 handoff docs |
+
 ## First tasks through the G2 and G3 review
 
 Ordered by what unblocks what. The Needs column lists the tasks each one waits on.
 
 | # | Task | Done when | Needs |
 |---|---|---|---|
-| 1 | Neighborhood data table in config: six neighborhoods (three existing, plus the West Village, the Financial District and Fifth Avenue) with rent and base customer mix, using the GDD 5.2 starting values | Values load from one config table; existing three rents unchanged; tests check every mix sums to 100 | None |
-| 2 | Per-neighborhood customer mix in the engine | Customers at a stand are drawn from that neighborhood's mix; deterministic tests show the same seed gives the same customers, and two neighborhoods with the same seed give different mixes | 1 |
-| 3 | Art and map entries for the three new neighborhoods | Each new neighborhood appears on the New York map and can be scouted and visited; student checks the visuals | 1 (can run beside 2) |
-| 4 | Offline episodes to tune the starting values | Report shows each neighborhood's best price lands near the GDD's typical price, and higher rent goes with less price-sensitive crowds; changes recorded | 2 |
-| 5 | Three engine-generated deals placed in Central Park, the West Village and the Financial District, each with its own seller persona: books, price and at most one weakness, at least one clean | Deterministic tests show every weakness is visible in the published books and the same seed gives the same deal | 2 |
-| 6 | Template baseline pitch | Template never names the weakness and uses only book figures, under test | 5 |
-| 7 | Seller pitch behind a server call, with the number check, weakness check and 6-second fallback to the template | Stub tests pass for every pitch failure mode in the Configuration Document; no live calls in CI | 5, 6 |
-| 8 | Seller questions: up to three per deal, each answer checked, and questioning ends on a failed check or timeout | Stub tests pass for answer failures, including injection attempts and a fourth question | 7 |
-| 9 | Books points to the missed line, or confirms the deal was clean, after a bought stand has run | Deterministic tests for one flawed and one clean deal | 5 |
-| 10 | Board ranks by total value created, with value per day shown beside it | Tests on the score function and the board order | Can run beside 1 to 12 |
-| 11 | Small live evaluation (student approves the spend first) | Report of false numbers, named catches, injection results, latency and cost over a fixed set of deals and questions | 8 |
-| 12 | One external playtest of the deal loop: seller with questions against the template | Initial Playtest Log records book opens, questions asked, time per deal and bad deals refused, with observations kept apart from interpretation | 8 (11 helps) |
-| 13 | Permanent account: decide the smallest enforceable version | Written decision, and a server check if time allows | Can run beside 1 to 12 |
-| 14 | Plan and Risk Register moved into Asana right after G1 | Tasks and gate dates in Asana | None |
-| 15 | First-playable recording by Nov 28, updated GDD and Configuration Document, and a production plan for G3 | Submitted by the student | 4, 11, 12, 13, 14 |
+| 1 | Scaffold fresh Three.js HD-2D project (`src/core/`, `src/world/`, `src/ui/`, `src/server/`) salvaging `ledger.ts` and `value.ts` | Fresh Vite + React + TS + Three.js repo builds cleanly; salvaged ledger and value tests pass; Straight-On 3/4 HD-2D camera & `NearestFilter` sprite pipeline verified | None |
+| 2 | Neighborhood data table, per-neighborhood customer mixes & 6-stand cap: six neighborhoods (Central Park, Columbia, Broadway, West Village, Financial District, Fifth Avenue) with rent and base mix (GDD 5.2) | Values load from one config table; mixes sum to 100; deterministic tests show per-neighborhood customer draws; players can own up to 6 stands | 1 |
+| 3 | Central Park 2.5D vertical slice: walkable character, lemonade stand, animated pedestrians and **in-world floating accounting toasts** (`Cash`, `Equipment`, `Profit` deltas) | Player walks smoothly (WASD / click) around a 2.5D Central Park corner, runs a stand, serves customers and sees live ledger diffs above the stand | 1, 2 |
+| 4 | 2.5D Manhattan overview map & 5 remaining neighborhood block themes | All six neighborhoods appear on the 2.5D Manhattan overview map with real-inspired outlines and landmark pins, and transition into distinct 2.5D neighborhood blocks | 3 |
+| 5 | Offline episodes to tune neighborhood rents and customer mixes | Report shows each neighborhood's best price lands near the GDD's typical price, and higher rent goes with less price-sensitive crowds; changes recorded | 2 |
+| 6 | Three engine-generated deals (Central Park, West Village, Financial District) placed at walkable seller stands, with seller personas, books, asking price, hidden reservation price, on-book weakness and 1–2 structured off-book facts (at least one clean) | Deterministic tests show the same seed gives the same deal, reservation price is never exposed to the seller agent, and off-book facts are structured for validation | 2, 3 |
+| 7 | One-shot sealed-bid resolution, deal panel UI & Books drawer (including post-purchase catch reveal) | Player walks to a seller's stand, inspects books, submits one bid (or walks); engine accepts when `bid >= reservationPrice` at the bid price; Books highlights any catch after the stand runs | 6 |
+| 8 | Template baseline pitch | Template never volunteers off-book negatives and uses only book figures, under test | 6 |
+| 9 | Seller pitch behind a server call (`seller-prompt-v1`), with shape/number checks, pitch-only volunteer guard, one silent retry and 6-second fallback to the template | Stub tests pass for every pitch failure mode in the Configuration Document; no live calls in CI | 6, 8 |
+| 10 | Seller questions: up to three per deal, truthful when asked directly about off-book facts, with one silent retry and neutral fallback line that does not prematurely close remaining questions | Stub tests pass for answer failures, timeouts, injection attempts and a fourth question | 9 |
+| 11 | Fixed 30-day career (no undo within a run) & leaderboard ranking by 30-day total value created (with value per day shown); drop server-owned permanent save enforcement | Career settles cleanly at day 30; board ranks by 30-day total value created; tests cover day-30 settlement and board order | 1 (can run in parallel) |
+| 12 | Small live evaluation (student approves the spend first) | Report of false numbers, pitch leak rate, direct-question truthfulness (human sample), injection results, latency and cost over a fixed set of deals and questions | 10 |
+| 13 | One external playtest of the deal loop: seller with questions + sealed bid against the template | Initial Playtest Log records book opens, questions asked, bid-to-ask ratios, time per deal and bad deals avoided or discounted, with observations kept apart from interpretation | 7, 10 (12 helps) |
+| 14 | First-playable recording by Nov 28, updated GDD and Configuration Document, and a production plan for G3 | Submitted by the student | 4, 5, 7, 11, 12, 13 |
 
-Tasks 1 to 4 add six real neighborhoods to the prototype (student decided). The student's mitigation for the added scope is precise specifications, such as the GDD 5.2 table, so agents can build in parallel.
+**Deferred to post-Nov 30 (Alpha / Beta):**
+- Stacking multiple weaknesses of varying severity per deal.
+- Deeper 2.5D neighborhood polish (extra ambient props, day-to-evening lighting transitions, stand visual upgrade tiers).
+- Optional safe low-yield treasury option for idle cash (if playtests show holding cash needs an explicit yield).
 
-If time runs short, cut in this order (student decided): 1. landlords (already cut), 2. seller questions (fall back to the single pitch), 3. the number of weakness types.
+If time runs short before Nov 28, cut in this order (student decided): 1. landlords (already cut), 2. bespoke props for the 5 secondary neighborhoods (reuse Central Park block kit with palette/signage swaps), 3. seller questions (fall back to single pitch + sealed bid), 4. number of distinct off-book fact types.
