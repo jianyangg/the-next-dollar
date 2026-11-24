@@ -532,10 +532,6 @@ canvas {
   align-self: center;
 }
 
-.dock-cash-hero.is-cash-pulse {
-  animation: cashPillPulse 360ms cubic-bezier(0.22, 1.35, 0.36, 1);
-}
-
 .dock-cash-val {
   font-size: 21px;
   line-height: 1;
@@ -757,9 +753,23 @@ canvas {
   animation: promptBob 2s ease-in-out infinite;
 }
 
-.ledger-toast {
+/* Anchored wrapper for toasts / sale pops: useAnchorPoint writes left/top on it every frame,
+   this fixed transform centres it, and Motion animates the INNER element only. */
+.world-float {
   position: absolute;
   transform: translate(-50%, -100%);
+  pointer-events: none;
+}
+
+.world-float.is-toast {
+  z-index: 9;
+}
+
+.world-float.is-pop {
+  z-index: 12;
+}
+
+.ledger-toast {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -770,9 +780,6 @@ canvas {
   font-size: 11.5px;
   font-weight: 700;
   white-space: nowrap;
-  pointer-events: none;
-  z-index: 9;
-  animation: toastFloatUp 2.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 .ledger-toast.positive {
@@ -810,7 +817,6 @@ canvas {
   border-radius: 11px;
   color: var(--text-light);
   z-index: 15;
-  animation: drawerSlideIn 160ms ease;
 }
 
 .drawer-header {
@@ -965,7 +971,6 @@ canvas {
   justify-content: center;
   padding: 16px;
   z-index: 25;
-  animation: fadeIn 140ms ease;
 }
 
 .modal-shell {
@@ -980,7 +985,6 @@ canvas {
   border-radius: 12px;
   color: var(--text-light);
   overflow: hidden;
-  animation: panelPop 160ms ease;
 }
 
 .modal-shell.is-wide {
@@ -1418,7 +1422,6 @@ canvas {
   justify-content: center;
   padding: 16px;
   z-index: 35;
-  animation: fadeIn 140ms ease;
 }
 
 .founder-intro-narration {
@@ -1582,25 +1585,6 @@ canvas {
    Animations
    ========================================================================== */
 
-@keyframes toastFloatUp {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -65%) scale(0.92);
-  }
-  12% {
-    opacity: 1;
-    transform: translate(-50%, -100%) scale(1);
-  }
-  75% {
-    opacity: 1;
-    transform: translate(-50%, -138%) scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -178%) scale(0.97);
-  }
-}
-
 @keyframes promptBob {
   0%,
   100% {
@@ -1619,26 +1603,6 @@ canvas {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes drawerSlideIn {
-  from {
-    opacity: 0;
-    transform: translateX(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
   }
 }
 
@@ -1847,26 +1811,16 @@ canvas {
   font-weight: 800;
   letter-spacing: 0.04em;
   white-space: nowrap;
-  animation: comboPop 260ms cubic-bezier(0.22, 1.4, 0.36, 1);
-}
-
-.ticker-stat.is-cash-pulse {
-  animation: cashPillPulse 360ms cubic-bezier(0.22, 1.35, 0.36, 1);
 }
 
 .sale-pop {
-  position: absolute;
-  transform: translate(-50%, -100%);
   font-weight: 900;
   color: #fff6c2;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  pointer-events: none;
-  z-index: 12;
   text-shadow:
     0 2px 0 rgba(12, 26, 40, 0.95),
     0 0 10px rgba(255, 224, 102, 0.65);
-  animation: salePopFloat 1.15s cubic-bezier(0.18, 1.25, 0.32, 1) forwards;
 }
 
 .sale-pop.is-hot {
@@ -1891,56 +1845,6 @@ canvas {
     0 0 16px rgba(255, 224, 102, 0.95);
 }
 
-@keyframes salePopFloat {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, -45%) scale(0.55);
-  }
-  18% {
-    opacity: 1;
-    transform: translate(-50%, -115%) scale(1.18);
-  }
-  34% {
-    opacity: 1;
-    transform: translate(-50%, -128%) scale(1);
-  }
-  80% {
-    opacity: 1;
-    transform: translate(-50%, -175%) scale(1.02);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -215%) scale(0.95);
-  }
-}
-
-@keyframes cashPillPulse {
-  0% {
-    transform: scale(1);
-    background: transparent;
-  }
-  35% {
-    transform: scale(1.08);
-    background: rgba(56, 168, 82, 0.35);
-  }
-  100% {
-    transform: scale(1);
-    background: transparent;
-  }
-}
-
-@keyframes comboPop {
-  0% {
-    transform: scale(0.8);
-  }
-  60% {
-    transform: scale(1.12);
-  }
-  100% {
-    transform: scale(1);
-  }
-}
-
 /* 4-Challenge Arcade Brew Mini-Game Controls */
 .wb-tube-drop {
   position: absolute;
@@ -1958,10 +1862,6 @@ canvas {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.wb-stir-wrap.is-shake {
-  animation: stirErrorShake 180ms ease;
 }
 
 .wb-stir-keys {
@@ -1994,19 +1894,6 @@ canvas {
 .wb-stir-key.is-done {
   background: rgba(56, 168, 82, 0.45);
   color: #c8ffd4;
-}
-
-@keyframes stirErrorShake {
-  0%,
-  100% {
-    transform: translateX(0);
-  }
-  25% {
-    transform: translateX(-4px);
-  }
-  75% {
-    transform: translateX(4px);
-  }
 }
 
 /* 8:00 PM Closing Bell Scorecard & 30-Day Value Trajectory Strip */

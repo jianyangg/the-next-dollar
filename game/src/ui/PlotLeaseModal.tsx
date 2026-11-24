@@ -1,12 +1,14 @@
+import { AnimatePresence, motion } from 'motion/react';
 import { getNeighborhood } from '../core/neighborhoods';
 import { STALL_KIT_COST } from '../core/sliceModel';
 import { selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
 import { getIcons } from './assets';
+import { backdropMotion, modalShellMotion } from './motionPresets';
 
 /** Marked sidewalk plot: sign the lease, then build a stand on it with a Stall Kit. */
 export function PlotLeaseModal() {
   const open = useGameStore((s) => s.activeModal === 'plot-lease');
-  return open ? <PlotLeaseModalBody /> : null;
+  return <AnimatePresence>{open && <PlotLeaseModalBody key="plot-lease" />}</AnimatePresence>;
 }
 
 function PlotLeaseModalBody() {
@@ -18,8 +20,8 @@ function PlotLeaseModalBody() {
   const neighborhood = getNeighborhood(neighborhoodId);
 
   return (
-    <div className="modal-backdrop" onClick={actions.closeModal}>
-      <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
+    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.map} alt="" className="px-icon-lg" />
@@ -96,7 +98,7 @@ function PlotLeaseModalBody() {
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }

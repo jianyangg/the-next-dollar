@@ -1,3 +1,4 @@
+import { AnimatePresence, motion } from 'motion/react';
 import {
   getDailyHurdleCharge,
   getDailyWages,
@@ -11,6 +12,7 @@ import { getNeighborhood } from '../core/neighborhoods';
 import { selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
 import { getIcons } from './assets';
 import { fmtSignedMoney } from './format';
+import { drawerMotion } from './motionPresets';
 import { ValueTrajectoryStrip } from './ValueTrajectoryStrip';
 
 /**
@@ -20,7 +22,7 @@ import { ValueTrajectoryStrip } from './ValueTrajectoryStrip';
  */
 export function BooksDrawer() {
   const booksOpen = useGameStore((s) => s.booksOpen);
-  return booksOpen ? <BooksDrawerBody /> : null;
+  return <AnimatePresence>{booksOpen && <BooksDrawerBody key="books" />}</AnimatePresence>;
 }
 
 /** The financial statements: income statement, balance sheet, EVA hurdle meter, reviews. */
@@ -55,7 +57,7 @@ function BooksDrawerBody() {
   const clearsHurdle = projectedNopat >= dailyHurdle;
 
   return (
-    <aside className="books-drawer" aria-label="Financial Statements">
+    <motion.aside className="books-drawer" aria-label="Financial Statements" {...drawerMotion}>
       <div className="drawer-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <img src={icons.book} alt="" className="px-icon" />
@@ -256,6 +258,6 @@ function BooksDrawerBody() {
           )}
         </div>
       </div>
-    </aside>
+    </motion.aside>
   );
 }

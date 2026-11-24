@@ -1,5 +1,8 @@
 import React, { useRef } from 'react';
-import { useGameStore } from '../state/gameStore';
+import { AnimatePresence, motion } from 'motion/react';
+import type { LedgerToast } from '../core/sliceModel';
+import { type SalePop, useGameStore } from '../state/gameStore';
+import { EASE_IN, EASE_OUT } from './motionPresets';
 import {
   type Point,
   type PointSelector,
@@ -96,33 +99,46 @@ export function PatienceBars() {
   );
 }
 
-/** Escalating sale pop-numbers and perfect-brew bursts above the player's stand. */
-export function SalePopLayer() {
-  const salePops = useGameStore((s) => s.salePops);
+/**
+ * HOW THE FLOATING TOASTS / POPS SPLIT THE WORK (two nested elements)
+ *
+ *   outer `.world-float`  <- `useAnchorPoint` writes `left`/`top` on it every frame, and CSS
+ *                            centres it with a fixed `translate(-50%, -100%)`. Motion never
+ *                            touches this element.
+ *   inner `motion.div`    <- Motion animates ONLY `opacity` and the `transform` (y, scale).
+ *
+ * Because the two elements own different CSS properties, they can never fight over the same
+ * one. Stacking order (the n-th toast sits n * 30px higher) is a Motion `y` value, so when
+ * the oldest toast leaves, everything above it slides down smoothly instead of jumping.
+ */
+
+/** Spring used when a stacked item moves to a new slot. Settles in ~250ms with no wobble. */
+const STACK_SPRING = { type: 'spring', stiffness: 420, damping: 34, mass: 0.8 } as const;
+
+const TOAST_STACK_PX = 30;
+const POP_STACK_PX = 24;
+
+function ToastItem({ toast, index }: { toast: LedgerToast; index: number }) {
+  const y = -index * TOAST_STACK_PX;
   return (
-    <>
-      {salePops.map((pop, idx) => {
-        const fontSize = pop.isPerfect ? 18 : Math.min(24, 15 + (pop.combo - 1) * 2);
-        const popClass = pop.isPerfect
-          ? 'sale-pop is-perfect game-num'
-          : pop.combo >= 4
-          ? 'sale-pop is-fire game-num'
-          : pop.combo >= 2
-          ? 'sale-pop is-hot game-num'
-          : 'sale-pop game-num';
-        return (
-          <AnchoredDiv
-            key={pop.id}
-            select={selectOwnStand}
-            offset={{ x: 0, y: -76 - idx * 24 }}
-            className={popClass}
-            style={{ fontSize }}
-          >
-            {pop.text}
-          </AnchoredDiv>
-        );
-      })}
-    </>
+    <AnchoredDiv
+      select={toast.anchor === 'own-stand' ? selectOwnStand : selectSellerStand}
+      offset={{ x: 0, y: -46 }}
+      className="world-float is-toast"
+    >
+      <motion.div
+        className={`ledger-toast ${toast.tone} game-num`}
+        initial={{ opacity: 0, y: y + 12 }}
+        animate={{
+          opacity: 1,
+          y,
+          transition: { opacity: { duration: 0.18, ease: EASE_OUT }, y: STACK_SPRING },
+        }}
+        exit={{ opacity: 0, y: y - 18, transition: { duration: 0.28, ease: EASE_IN } }}
+      >
+        <span>{toast.text}</span>
+      </motion.div>
+    </AnchoredDiv>
   );
 }
 
@@ -130,17 +146,60 @@ export function SalePopLayer() {
 export function ToastLayer() {
   const toasts = useGameStore((s) => s.toasts);
   return (
-    <>
+    <AnimatePresence>
       {toasts.map((t, idx) => (
-        <AnchoredDiv
-          key={t.id}
-          select={t.anchor === 'own-stand' ? selectOwnStand : selectSellerStand}
-          offset={{ x: 0, y: -46 - idx * 30 }}
-          className={`ledger-toast ${t.tone} game-num`}
-        >
-          <span>{t.text}</span>
-        </AnchoredDiv>
+        <ToastItem key={t.id} toast={t} index={idx} />
       ))}
-    </>
+    </AnimatePresence>
+  );
+}
+
+function SalePopItem({ pop, index }: { pop: SalePop; index: number }) {
+  const fontSize = pop.isPerfect ? 18 : Math.min(24, 15 + (pop.combo - 1) * 2);
+  const popClass = pop.isPerfect
+    ? 'sale-pop is-perfect game-num'
+    : pop.combo >= 4
+    ? 'sale-pop is-fire game-num'
+    : pop.combo >= 2
+    ? 'sale-pop is-hot game-num'
+    : 'sale-pop game-num';
+  // "Punch": the number overshoots to this scale, then settles at 1. A bigger combo (or a
+  // perfect brew) punches harder, so the player feels the streak growing.
+  const punch = pop.isPerfect ? 1.3 : 1.1 + Math.min(pop.combo, 6) * 0.035;
+  const y = -index * POP_STACK_PX;
+  return (
+    <AnchoredDiv select={selectOwnStand} offset={{ x: 0, y: -76 }} className="world-float is-pop">
+      <motion.div
+        className={popClass}
+        style={{ fontSize }}
+        initial={{ opacity: 0, scale: 0.55, y: y + 14 }}
+        animate={{
+          opacity: 1,
+          scale: [0.55, punch, 1],
+          y: y - 30,
+          transition: {
+            opacity: { duration: 0.14 },
+            scale: { duration: 0.34, times: [0, 0.5, 1], ease: EASE_OUT },
+            // Slow drift upward for the whole life of the pop; stack shifts reuse the same spring.
+            y: { type: 'spring', stiffness: 60, damping: 18 },
+          },
+        }}
+        exit={{ opacity: 0, scale: 0.95, y: y - 62, transition: { duration: 0.3, ease: EASE_IN } }}
+      >
+        {pop.text}
+      </motion.div>
+    </AnchoredDiv>
+  );
+}
+
+/** Escalating sale pop-numbers and perfect-brew bursts above the player's stand. */
+export function SalePopLayer() {
+  const salePops = useGameStore((s) => s.salePops);
+  return (
+    <AnimatePresence>
+      {salePops.map((pop, idx) => (
+        <SalePopItem key={pop.id} pop={pop} index={idx} />
+      ))}
+    </AnimatePresence>
   );
 }
