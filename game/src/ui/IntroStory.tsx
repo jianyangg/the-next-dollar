@@ -21,8 +21,8 @@ import './styles/intro.css';
  *   - Every number comes from the engine (starting cash, the 5% rate, the number of
  *     days), so the story can never disagree with the books.
  *   - The $30 is a STAKE from family, not a loan: the game never charges interest in
- *     cash. The 5% is an opportunity cost that only lowers the score, which is what
- *     card 3 says ("must earn 5% a day").
+ *     cash. The 5% is an opportunity cost on EVERY dollar (idle cash too) that only
+ *     lowers the score, which is what card 3 says ("every dollar must earn 5% a day").
  *   - Shown once per browser (state/introSeen.ts); "Replay intro" on the founder
  *     screen brings it back. E / Enter / Space / click = next, Esc = skip.
  */
@@ -83,7 +83,7 @@ function IntroBody() {
         <img src={icons.pitcher} alt="" className="intro-icon" />
         <img src={icons.market} alt="" className="intro-icon" />
       </div>
-      <h2 className="pt-disp intro-line">Money in your stand must earn {ratePct} a day.</h2>
+      <h2 className="pt-disp intro-line">Every dollar must earn {ratePct} a day.</h2>
     </>,
     <>
       <img src={icons.sun} alt="" className="intro-icon is-big" aria-hidden="true" />

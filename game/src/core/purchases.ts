@@ -1,5 +1,5 @@
 import { cents } from './money';
-import { NeighborhoodId } from './neighborhoods';
+import { getPlot, isLeasable, type PlotId } from './plots';
 import { SliceState, STALL_KIT_COST } from './sliceModel';
 
 /**
@@ -23,10 +23,12 @@ export type PurchaseRefusal =
   | 'insufficient-cash'
   | 'no-pitchers'
   | 'no-built-stand'
-  | 'market-has-no-plots'
+  | 'plot-not-leasable'
   | 'plot-not-empty'
   | 'plot-not-leased'
-  | 'no-stall-kit';
+  | 'no-stall-kit'
+  | 'already-staffed'
+  | 'not-staffed';
 
 export const LEMON_CRATE_COST = 5;
 export const LEMON_CRATE_CUPS = 10;
@@ -95,9 +97,12 @@ export function sellUsedPitcher(s: SliceState): PurchaseResult {
   };
 }
 
-/** Sell the stand in this district for $8.40: the $3.60 shortfall on the $12 kit is a loss. */
-export function divestStand(s: SliceState, district: NeighborhoodId): PurchaseResult {
-  if (s.plots[district] !== 'built' || s.ownedStands < 1) return refuse('no-built-stand');
+/**
+ * Sell the stand on a plot for $8.40: the $3.60 shortfall on the $12 kit is a loss.
+ * The plot goes back to empty (lease ended) and its worker, if any, is let go.
+ */
+export function divestStand(s: SliceState, plotId: PlotId): PurchaseResult {
+  if (s.plots[plotId] !== 'built') return refuse('no-built-stand');
   const loss = cents(STALL_KIT_COST - STAND_DIVEST_PROCEEDS);
   return {
     ok: true,
@@ -105,40 +110,45 @@ export function divestStand(s: SliceState, district: NeighborhoodId): PurchaseRe
       ...s,
       cash: cents(s.cash + STAND_DIVEST_PROCEEDS),
       equipmentValue: Math.max(0, cents(s.equipmentValue - STALL_KIT_COST)),
-      ownedStands: Math.max(0, s.ownedStands - 1),
-      plots: { ...s.plots, [district]: 'empty' },
+      plots: { ...s.plots, [plotId]: 'empty' },
+      staffedPlots: s.staffedPlots.filter((id) => id !== plotId),
       dayCogs: cents(s.dayCogs + loss),
       totalCogs: cents(s.totalCogs + loss),
     },
   };
 }
 
-/** Lease an empty plot. Rent starts at the next day close. The market has no plots. */
-export function signLease(s: SliceState, district: NeighborhoodId): PurchaseResult {
-  if (district === 'market') return refuse('market-has-no-plots');
-  if (s.plots[district] !== 'empty') return refuse('plot-not-empty');
-  return { ok: true, state: { ...s, plots: { ...s.plots, [district]: 'leased' } } };
+/** Lease an empty plot. Rent starts at the next day close. The seller's stand is not for lease. */
+export function signLease(s: SliceState, plotId: PlotId): PurchaseResult {
+  if (!isLeasable(getPlot(plotId))) return refuse('plot-not-leasable');
+  if (s.plots[plotId] !== 'empty') return refuse('plot-not-empty');
+  return { ok: true, state: { ...s, plots: { ...s.plots, [plotId]: 'leased' } } };
 }
 
 /** Use one stall kit to build on a leased plot. */
-export function buildStand(s: SliceState, district: NeighborhoodId): PurchaseResult {
-  if (district === 'market') return refuse('market-has-no-plots');
-  if (s.plots[district] !== 'leased') return refuse('plot-not-leased');
+export function buildStand(s: SliceState, plotId: PlotId): PurchaseResult {
+  if (s.plots[plotId] !== 'leased') return refuse('plot-not-leased');
   if (s.stallKits < 1) return refuse('no-stall-kit');
   return {
     ok: true,
-    state: {
-      ...s,
-      stallKits: s.stallKits - 1,
-      ownedStands: s.ownedStands + 1,
-      plots: { ...s.plots, [district]: 'built' },
-    },
+    state: { ...s, stallKits: s.stallKits - 1, plots: { ...s.plots, [plotId]: 'built' } },
   };
 }
 
-/** Hire staff. Wages are charged at day close (see getDailyWages); hiring itself is free. */
-export function hireWorker(s: SliceState): SliceState {
-  return { ...s, workers: s.workers + 1 };
+/**
+ * Put a worker on a built stand ($3/day, charged at day close; hiring itself is free).
+ * One worker per stand. A staffed stand sells on its own while the player is elsewhere.
+ */
+export function hireWorker(s: SliceState, plotId: PlotId): PurchaseResult {
+  if (s.plots[plotId] !== 'built') return refuse('no-built-stand');
+  if (s.staffedPlots.includes(plotId)) return refuse('already-staffed');
+  return { ok: true, state: { ...s, staffedPlots: [...s.staffedPlots, plotId] } };
+}
+
+/** Let a stand's worker go (no more wage from tonight; the stand stops selling on its own). */
+export function letWorkerGo(s: SliceState, plotId: PlotId): PurchaseResult {
+  if (!s.staffedPlots.includes(plotId)) return refuse('not-staffed');
+  return { ok: true, state: { ...s, staffedPlots: s.staffedPlots.filter((id) => id !== plotId) } };
 }
 
 export function hireManager(s: SliceState): SliceState {

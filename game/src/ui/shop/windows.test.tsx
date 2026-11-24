@@ -64,12 +64,22 @@ describe('pitcher shop', () => {
 });
 
 describe('plot lease', () => {
-  it('shows rent per day and signs the lease', () => {
-    useGameStore.setState({ activeModal: 'plot-lease', neighborhoodId: 'broadway' });
+  it('shows the picked plot: its rent and foot traffic, and signs ITS lease only', () => {
+    useGameStore.setState({ activeModal: 'plot-lease', neighborhoodId: 'broadway', activePlotId: 'broadway/plaza' });
     render(wrap(<PlotLeaseModal />));
-    expect(screen.getByLabelText('RENT/DAY $4')).toBeTruthy();
+    // Plaza = Broadway rent $4 + $2; corner walkers (6 + 2 x 4 = 14) x 1.4 = 20.
+    expect(screen.getByLabelText('RENT/DAY $6')).toBeTruthy();
+    expect(screen.getByLabelText('WALKERS/DAY 20')).toBeTruthy();
     press('Enter');
-    expect(useGameStore.getState().economy.plots.broadway).toBe('leased');
+    const plots = useGameStore.getState().economy.plots;
+    expect(plots['broadway/plaza']).toBe('leased');
+    expect(plots['broadway/corner']).toBe('empty');
+  });
+
+  it('stays closed when no plot has been picked', () => {
+    useGameStore.setState({ activeModal: 'plot-lease', neighborhoodId: 'broadway', activePlotId: null });
+    render(wrap(<PlotLeaseModal />));
+    expect(screen.queryByLabelText(/RENT\/DAY/)).toBeNull();
   });
 });
 

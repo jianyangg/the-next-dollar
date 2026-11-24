@@ -1,17 +1,27 @@
-import { useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import { useStore } from 'zustand';
 import { CENTRAL_PARK_DEAL } from '../core/deal';
+import type { PlotView } from '../core/plots';
 import {
   anchorStore,
   selectMarketLemons,
   selectMarketPitchers,
   selectMarketStalls,
-  selectOwnStand,
   selectSellerStand,
   useAnchorEffect,
+  useNearbyPlotId,
   useNearbyTarget,
+  usePlotAnchorKnown,
 } from '../state/anchorStore';
-import { type GameData, selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
+import {
+  type GameData,
+  selectDistrictPlots,
+  selectDistrictPlotsKey,
+  selectSellerPresent,
+  useGameStore,
+} from '../state/gameStore';
+import type { NearbyTarget } from '../world/CentralParkScene';
+import { plotsOnStreet, sellerStandShown } from '../world/collision';
 import { getIcons } from './assets';
 import { Key } from './kit/Money';
 import { AnchoredButton } from './WorldOverlays';
@@ -33,59 +43,58 @@ export const selectNoOverlayOpen = (s: GameData): boolean =>
  * exception is the seller's asking price, an engine number, which rides along as a
  * paper tag when you are close.
  *
- * Signs: your stand or its plot ("Stand" / "Lease" / "Build"), the seller ("Seller"),
- * the Union Square stalls (Kits / Pitchers / Lemons), and the subway entrance (every
- * neighborhood has one).
+ * Signs: one per plot of the current district (see `plotSignWord`), the seller (only in
+ * Central Park while the seller is still in business), the Union Square stalls (Kits /
+ * Pitchers / Lemons), and the subway entrance (every neighborhood has one).
  *
- * Each is an `AnchoredButton`, so its screen position is written straight to the DOM
- * every frame; React only decides which ones EXIST (a few times per minute).
+ * Each sign's screen position is written straight to the DOM every frame; React only
+ * decides which ones EXIST (a few times per minute).
  */
 export function WorldPrompts() {
   const actions = useGameStore((s) => s.actions);
   const noOverlayOpen = useGameStore(selectNoOverlayOpen);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
-  const currentPlotStatus = useGameStore(selectCurrentPlotStatus);
+  const sellerPresent = useGameStore(selectSellerPresent);
+  // The plot list is a new array on every read, so we subscribe to its key (a string that
+  // changes only when a plot's status / staffing / rent changes) and rebuild the list then.
+  const plotsKey = useGameStore(selectDistrictPlotsKey);
+  const plots = useMemo(
+    () => plotsOnStreet(selectDistrictPlots(useGameStore.getState()), sellerPresent),
+    // `plotsKey` is the change signal for the list read inside; it is the dependency on purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [plotsKey, sellerPresent]
+  );
   const nearby = useNearbyTarget();
+  const nearbyPlotId = useNearbyPlotId();
+  const sellerShown = sellerStandShown(neighborhoodId, sellerPresent);
 
   const icons = getIcons();
-  // A built plot shows the stand; otherwise it is the plot: an empty one is leased first, a leased one built on.
-  const plotIsBuilt = currentPlotStatus === 'built';
-  const plotVerb = currentPlotStatus === 'leased' ? 'Build' : 'Lease';
-  const ownTarget = plotIsBuilt ? 'own-stand' : 'plot-lease';
-  const ownNearby = nearby === ownTarget;
 
   return (
     <>
       {noOverlayOpen && neighborhoodId !== 'market' && (
         <>
-          {/* Your stand (once built) or its plot. The word is the same near or far for a
-              plot ("Lease" / "Build" is the whole point of it); a built stand says "Stand"
-              from afar and "Open" up close. */}
-          <AnchoredButton
-            type="button"
-            className={`pt-sign world-sign ${ownNearby ? 'is-nearby' : 'is-idle'}`}
-            disabled={!ownNearby}
-            onClick={plotIsBuilt ? actions.enterStand : () => actions.openModal('plot-lease')}
-            select={selectOwnStand}
-            offset={{ x: 0, y: -12 }}
-          >
-            {ownNearby && <Key k="E" />}
-            <span className="pt-disp world-sign-word">{plotIsBuilt ? (ownNearby ? 'Open' : 'Stand') : plotVerb}</span>
-          </AnchoredButton>
+          {plots.map((plot) => {
+            const target = plotTarget(plot);
+            const near = nearby === target && nearbyPlotId === plot.id;
+            return <PlotSign key={plot.id} plot={plot} near={near} onUse={() => actions.interact(target, plot.id)} />;
+          })}
 
-          <AnchoredButton
-            type="button"
-            className={`pt-sign world-sign ${nearby === 'seller-stand' ? 'is-nearby' : 'is-idle'}`}
-            disabled={nearby !== 'seller-stand'}
-            onClick={() => actions.openModal('seller-stand')}
-            select={selectSellerStand}
-            offset={{ x: 0, y: -12 }}
-          >
-            {nearby === 'seller-stand' && <Key k="E" />}
-            <span className="pt-disp world-sign-word">{nearby === 'seller-stand' ? 'Talk' : 'Seller'}</span>
-            {/* Paper tag: the asking price is a real engine number. */}
-            {nearby === 'seller-stand' && <span className="pt-paper world-ask pt-num">${SELLER_ASK}</span>}
-          </AnchoredButton>
+          {sellerShown && (
+            <AnchoredButton
+              type="button"
+              className={`pt-sign world-sign ${nearby === 'seller-stand' ? 'is-nearby' : 'is-idle'}`}
+              disabled={nearby !== 'seller-stand'}
+              onClick={() => actions.openModal('seller-stand')}
+              select={selectSellerStand}
+              offset={{ x: 0, y: -12 }}
+            >
+              {nearby === 'seller-stand' && <Key k="E" />}
+              <span className="pt-disp world-sign-word">{nearby === 'seller-stand' ? 'Talk' : 'Seller'}</span>
+              {/* Paper tag: the asking price is a real engine number. */}
+              {nearby === 'seller-stand' && <span className="pt-paper world-ask pt-num">${SELLER_ASK}</span>}
+            </AnchoredButton>
+          )}
         </>
       )}
 
@@ -111,6 +120,60 @@ export function WorldPrompts() {
 
       {noOverlayOpen && <SubwaySign near={nearby === 'subway'} onOpen={() => actions.toggleMap({ click: true })} />}
     </>
+  );
+}
+
+/** What pressing E at a plot does: open a built stand, or lease / build on the plot. */
+export function plotTarget(plot: Pick<PlotView, 'status'>): Exclude<NearbyTarget, null> {
+  return plot.status === 'built' ? 'own-stand' : 'plot-lease';
+}
+
+/**
+ * The one word on a plot's sign.
+ *   - empty:  its name from afar ("Corner" / "Side" / "Plaza", so the player can tell the
+ *             plots apart), "Lease" up close (what E will do);
+ *   - leased: "Build" near or far (building is the whole point of a leased plot);
+ *   - built:  "Stand" from afar, "Open" up close.
+ */
+export function plotSignWord(plot: Pick<PlotView, 'status' | 'label'>, near: boolean): string {
+  if (plot.status === 'built') return near ? 'Open' : 'Stand';
+  if (plot.status === 'leased') return 'Build';
+  return near ? 'Lease' : plot.label;
+}
+
+/**
+ * One plot's sign, glued to `anchors.plots[plot.id]`. Like the subway sign, it is drawn
+ * only once the scene has published a real position for this plot; we never invent one.
+ */
+function PlotSign({ plot, near, onUse }: { plot: PlotView; near: boolean; onUse: () => void }) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const hasPosition = usePlotAnchorKnown(plot.id);
+
+  // Re-runs when the position first becomes known (the button only exists from then on).
+  useAnchorEffect(
+    (anchors) => {
+      const el = ref.current;
+      const p = anchors.plots[plot.id];
+      if (!el || !p) return;
+      el.style.left = `${p.x}px`;
+      el.style.top = `${p.y - 12}px`;
+    },
+    [hasPosition, plot.id]
+  );
+
+  if (!hasPosition) return null;
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className={`pt-sign world-sign ${near ? 'is-nearby' : 'is-idle'}`}
+      disabled={!near}
+      onClick={onUse}
+      data-plot={plot.id}
+    >
+      {near && <Key k="E" />}
+      <span className="pt-disp world-sign-word">{plotSignWord(plot, near)}</span>
+    </button>
   );
 }
 

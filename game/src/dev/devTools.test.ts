@@ -29,6 +29,7 @@ import { initRunRandom } from '../core/runRandom';
 import { resetAnchorStore } from '../state/anchorStore';
 import { resetGameStore, useGameStore } from '../state/gameStore';
 import * as dev from './devTools';
+import { countOwnedStands } from '../core/sliceModel';
 
 const eco = () => useGameStore.getState().economy;
 
@@ -191,8 +192,8 @@ describe('progress cheats', () => {
 
   it('buildStandHere leases, buys a kit and builds; the kit costs equity, not cash', () => {
     expect(dev.buildStandHere()).toEqual({ ok: true });
-    expect(eco().plots['central-park']).toBe('built');
-    expect(eco().ownedStands).toBe(1);
+    expect(eco().plots['central-park/corner']).toBe('built');
+    expect(countOwnedStands(eco())).toBe(1);
     expect(eco().stallKits).toBe(0); // consumed by the build
     expect(eco().cash).toBe(30);
   });
@@ -207,7 +208,7 @@ describe('progress cheats', () => {
 
   it('buildStandHere refuses in the market (no plots there)', () => {
     useGameStore.setState({ neighborhoodId: 'market' });
-    expect(dev.buildStandHere()).toEqual({ ok: false, reason: 'market-has-no-plots' });
+    expect(dev.buildStandHere()).toEqual({ ok: false, reason: 'no-plot-here' });
   });
 });
 

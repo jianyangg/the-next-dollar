@@ -43,7 +43,7 @@ describe('BooksDrawer', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Balance' }));
     expect(document.body.textContent).toContain('Balanced');
     fireEvent.click(screen.getByRole('menuitem', { name: 'Value' }));
-    expect(document.body.textContent).toContain('Money tied up');
+    expect(document.body.textContent).toContain('Money in business');
     expect(document.querySelector('.books-line-row.pt-line-row')).toBeTruthy(); // THE LINE row
     expect(document.querySelector('.books-meter .pt-line-fill')).toBeTruthy(); // the meter's 5% bar
     expect(screen.getByRole('button', { name: /Sell Pitcher/ })).toBeTruthy(); // sell button kept

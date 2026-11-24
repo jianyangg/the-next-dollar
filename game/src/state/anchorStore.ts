@@ -2,6 +2,7 @@ import { useLayoutEffect, type RefObject } from 'react';
 import { useStore } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { createStore } from 'zustand/vanilla';
+import type { PlotId } from '../core/plots';
 import type { NearbyTarget, ProjectedAnchors } from '../world/CentralParkScene';
 
 /**
@@ -32,8 +33,12 @@ const INITIAL_ANCHORS: ProjectedAnchors = {
     pitchers: { x: 640, y: 350 },
     lemons: { x: 920, y: 350 },
   },
+  // No plot positions until the scene publishes them: the UI draws no plot sign for a
+  // plot it has no real position for (see usePlotAnchorKnown).
+  plots: {},
   player: { x: 500, y: 400 },
   nearby: null,
+  nearbyPlotId: null,
   queue: [],
 };
 
@@ -67,6 +72,17 @@ export const selectSellerStand: PointSelector = (a) => a.sellerStand;
 export const selectMarketStalls: PointSelector = (a) => a.marketAnchors.stalls;
 export const selectMarketPitchers: PointSelector = (a) => a.marketAnchors.pitchers;
 export const selectMarketLemons: PointSelector = (a) => a.marketAnchors.lemons;
+
+/**
+ * Screen position of one plot's sign, or undefined while the scene has not published
+ * one for it (the plot is not on the current street, or the scene has not started).
+ * Not a PointSelector on purpose: callers must handle "no position yet" instead of
+ * being handed a made-up point.
+ */
+export const selectPlotAnchor =
+  (id: PlotId) =>
+  (a: ProjectedAnchors): Point | undefined =>
+    a.plots[id];
 
 // ---------------------------------------------------------------------------
 // React hooks
@@ -150,6 +166,22 @@ export function useQueueIds(): number[] {
     anchorStore,
     useShallow((a) => a.queue.map((c) => c.id))
   );
+}
+
+/**
+ * Which plot the player is next to (or null). Discrete like `useNearbyTarget`: re-renders
+ * only when the player walks from one plot's reach into another's (or out of all).
+ */
+export function useNearbyPlotId(): PlotId | null {
+  return useStore(anchorStore, (a) => a.nearbyPlotId);
+}
+
+/**
+ * Has the scene published a position for plot `id`? A boolean, so it re-renders only
+ * when the plot appears on or leaves the street, never as it moves.
+ */
+export function usePlotAnchorKnown(id: PlotId): boolean {
+  return useStore(anchorStore, (a) => a.plots[id] !== undefined);
 }
 
 /** How many customers are waiting (a plain number, so it re-renders only on change). */

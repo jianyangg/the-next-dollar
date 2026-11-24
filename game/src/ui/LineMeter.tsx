@@ -1,3 +1,4 @@
+import { countOwnedStands } from '../core/sliceModel';
 import { useAnimate } from 'motion/react';
 import { useEffect, useRef } from 'react';
 import { projectDay } from '../core/dayEnd';
@@ -26,7 +27,7 @@ import { fmtSignedMoney } from './format';
 export function LineMeter() {
   const earned = useGameStore((s) => projectDay(s.economy).earned);
   const line = useGameStore((s) => projectDay(s.economy).line);
-  const hasStand = useGameStore((s) => s.economy.ownedStands >= 1);
+  const hasStand = useGameStore((s) => countOwnedStands(s.economy) >= 1);
   const value = +(earned - line).toFixed(2);
   const beating = value >= 0;
 

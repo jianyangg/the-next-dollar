@@ -43,6 +43,7 @@ import {
   TRAVEL_REVEAL_MS,
   useGameStore,
 } from './gameStore';
+import { countOwnedStands } from '../core/sliceModel';
 
 const store = () => useGameStore.getState();
 const actions = () => useGameStore.getState().actions;
@@ -56,11 +57,11 @@ const ok = (r: P.PurchaseResult): SliceState => {
 /** The same tutorial path as core/economy.test.ts, computed with the pure rules only. */
 function tutorialEconomyFromCore(): SliceState {
   let s = createInitialState();
-  s = ok(P.signLease(s, 'central-park'));
+  s = ok(P.signLease(s, 'central-park/corner'));
   s = ok(P.buyStallKit(s));
   s = ok(P.buyPitcher(s));
   s = ok(P.buyLemons(s));
-  return ok(P.buildStand(s, 'central-park'));
+  return ok(P.buildStand(s, 'central-park/corner'));
 }
 
 /** Overwrite part of the economy directly (test setup only). */
@@ -81,6 +82,9 @@ afterEach(() => {
 
 describe('shopping actions match the pure core rules', () => {
   it('walks the tutorial path to exactly the economy core/economy.test.ts expects', () => {
+    // Walking up to the corner plot picks it (interact with a plot id).
+    actions().interact('plot-lease', 'central-park/corner');
+    actions().closeModal();
     actions().signLease();
     actions().buyStallKit();
     actions().buyPitcher();
@@ -89,7 +93,7 @@ describe('shopping actions match the pure core rules', () => {
 
     expect(store().economy).toEqual(tutorialEconomyFromCore());
     expect(store().economy.cash).toBe(3);
-    expect(store().economy.plots['central-park']).toBe('built');
+    expect(store().economy.plots['central-park/corner']).toBe('built');
   });
 
   it('refuses an unaffordable purchase: economy untouched, buzz sound, negative toast', () => {
@@ -118,7 +122,6 @@ describe('shopping actions match the pure core rules', () => {
       { kind: 'cash', delta: -5 },
       { kind: 'stock', delta: 5 },
       { kind: 'profit', delta: 0 },
-      { kind: 'line', delta: 0.25 },
     ]);
   });
 
@@ -137,13 +140,13 @@ describe('shopping actions match the pure core rules', () => {
 
   it('clamps brewedCups to the cups in stock when the economy changes', () => {
     useGameStore.setState({ economy: { ...store().economy, cupsInStock: 2, pitchers: 1 }, brewedCups: 6 });
-    actions().hireWorker(); // any economy commit re-applies the clamp
+    actions().setPrice(4); // any economy commit re-applies the clamp
     expect(store().brewedCups).toBe(2);
   });
 
   it('a sale no longer ends the tutorial; closing the first day with a sale does (once)', () => {
     useGameStore.setState({ economy: applySale({ ...createInitialState(), cupsInStock: 5 }, 1, 1) });
-    actions().hireWorker(); // an economy commit must NOT end the tutorial any more
+    actions().setPrice(4); // an economy commit must NOT end the tutorial any more
     expect(store().tutorialActive).toBe(true);
     actions().startNextDay(); // the player closes the first end-of-day screen
     expect(store().tutorialActive).toBe(false);
@@ -203,7 +206,9 @@ describe('day end', () => {
     // A day with a built stand, a few sales and a hired worker.
     let econ = tutorialEconomyFromCore();
     econ = applySale(applySale(applySale(econ, 1, 1), 0.5, 2), 0.2, 3);
-    econ = P.hireWorker(econ);
+    const hired = P.hireWorker(econ, 'central-park/corner');
+    if (!hired.ok) throw new Error(hired.reason);
+    econ = hired.state;
     useGameStore.setState({ economy: econ, brewedCups: 4, workingAtStand: true });
 
     const expected = closeBooks(econ);
@@ -278,7 +283,7 @@ describe('seller deal (deal machine + seller server client)', () => {
     actions().submitBid(reservation);
     await vi.waitFor(() => expect(store().deal?.phase).toBe('won'));
     expect(store().economy.dealStatus).toBe('won');
-    expect(store().economy.ownedStands).toBe(1);
+    expect(countOwnedStands(store().economy)).toBe(1);
     expect(store().economy.cash).toBe(20);
     expect(client.close).toHaveBeenCalledTimes(1);
   });

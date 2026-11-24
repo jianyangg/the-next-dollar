@@ -16,7 +16,7 @@ export function Key({ k, nav = false }: { k: string; nav?: boolean }) {
   );
 }
 
-/** Plain-word chip labels. "5%/day" is THE LINE: the daily cost of money tied up. */
+/** Plain-word chip labels. "5%/day" is THE LINE: the daily cost of every dollar in the business. */
 export const CHIP_LABEL: Record<ChipKind, string> = {
   cash: 'CASH',
   stock: 'STOCK',

@@ -5,7 +5,7 @@ import { beatTheLine } from '../core/dayEnd';
 import { getDailyPlotRent } from '../core/rent';
 import { getNeighborhood } from '../core/neighborhoods';
 import { getRunSeed } from '../core/runRandom';
-import { getDailyWages, getInvestedCapital, HURDLE_RATE } from '../core/sliceModel';
+import { getDailyWages, HURDLE_RATE } from '../core/sliceModel';
 import type { DayRecord } from '../core/sliceModel';
 import { INPUT_PRIORITY } from '../state/input';
 import { useGameStore } from '../state/gameStore';
@@ -44,7 +44,6 @@ const CONFIRM_KEYS = ['Enter', 'e', 'E'];
 function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
   const actions = useGameStore((s) => s.actions);
   const maxDays = useGameStore((s) => s.economy.maxDays);
-  const investedCap = useGameStore((s) => getInvestedCapital(s.economy));
   // The record stores rent + wages as one sum; the engine's own functions give the two parts.
   const dailyRent = useGameStore((s) => getDailyPlotRent(s.economy));
   const dailyWages = useGameStore((s) => getDailyWages(s.economy));
@@ -52,8 +51,8 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
   const neighborhood = getNeighborhood(neighborhoodId);
 
   const rows = useMemo(
-    () => buildReceipt({ record: eodRecord, investedCapital: investedCap, dailyRent, dailyWages }),
-    [eodRecord, investedCap, dailyRent, dailyWages]
+    () => buildReceipt({ record: eodRecord, dailyRent, dailyWages }),
+    [eodRecord, dailyRent, dailyWages]
   );
   const split = useMemo(() => splitProfit(eodRecord), [eodRecord]);
 
@@ -142,9 +141,9 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
                   No profit to split. Short of the 5% line by ${split.short.toFixed(2)}
                 </div>
               )}
-              {/* The same fact as a rate: profit as a share of the money tied up. */}
+              {/* The same fact as a rate: profit as a share of all the money in the business. */}
               <div className="eodr-split-cap">
-                <span>Return on money tied up: {eodRecord.roicPct.toFixed(1)}%</span>
+                <span>Return on your money: {eodRecord.roicPct.toFixed(1)}%</span>
                 <span>Line asks {(HURDLE_RATE * 100).toFixed(0)}%</span>
               </div>
             </div>

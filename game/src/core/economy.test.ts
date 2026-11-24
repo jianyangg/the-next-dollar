@@ -13,7 +13,8 @@ import { CENTRAL_PARK_DEAL, resolveSealedBid, toPublicView } from './deal';
 import * as P from './purchases';
 import { getDailyPlotRent } from './rent';
 import { applySale, applyWalkout, salePopLabel } from './sales';
-import { createInitialState, SliceState } from './sliceModel';
+import { countOwnedStands, createInitialState, getDailyHurdleCharge, getDailyWages, SliceState } from './sliceModel';
+import { SELLER_PLOT_ID } from './plots';
 
 /**
  * Characterization tests: they pin the exact numbers the original App.tsx handlers
@@ -25,14 +26,15 @@ const ok = (r: P.PurchaseResult): SliceState => {
   return r.state;
 };
 
-/** The tutorial path: lease Central Park, buy kit + pitcher + lemons, build. */
+/** The tutorial path: lease the Central Park corner, buy kit + pitcher + lemons, build. */
+const CP = 'central-park/corner';
 function tutorialStand(): SliceState {
   let s = createInitialState(); // $30 cash
-  s = ok(P.signLease(s, 'central-park'));
+  s = ok(P.signLease(s, CP));
   s = ok(P.buyStallKit(s)); // 30 − 12 = 18
   s = ok(P.buyPitcher(s)); // 18 − 10 = 8
   s = ok(P.buyLemons(s)); // 8 − 5 = 3, +10 cups
-  s = ok(P.buildStand(s, 'central-park'));
+  s = ok(P.buildStand(s, CP));
   return s;
 }
 
@@ -44,8 +46,8 @@ describe('purchases', () => {
     expect(s.equipmentValue).toBe(22); // kit 12 + pitcher 10
     expect(s.cupsInStock).toBe(10);
     expect(s.stallKits).toBe(0);
-    expect(s.ownedStands).toBe(1);
-    expect(s.plots['central-park']).toBe('built');
+    expect(countOwnedStands(s)).toBe(1);
+    expect(s.plots[CP]).toBe('built');
   });
 
   it('refuses purchases the player cannot afford, without changing state', () => {
@@ -66,26 +68,40 @@ describe('purchases', () => {
   });
 
   it('books a $3.60 loss when divesting a stand for $8.40', () => {
-    const s = ok(P.divestStand(tutorialStand(), 'central-park'));
+    const staffed = ok(P.hireWorker(tutorialStand(), CP));
+    const s = ok(P.divestStand(staffed, CP));
     expect(s.cash).toBe(11.4);
     expect(s.equipmentValue).toBe(10);
-    expect(s.ownedStands).toBe(0);
-    expect(s.plots['central-park']).toBe('empty');
+    expect(countOwnedStands(s)).toBe(0);
+    expect(s.plots[CP]).toBe('empty');
+    expect(s.staffedPlots).toEqual([]); // the stand's worker goes with it
     expect(s.dayCogs).toBe(3.6);
   });
 
   it('enforces the plot lifecycle empty → leased → built', () => {
     const s = createInitialState();
-    expect(P.signLease(s, 'market')).toEqual({ ok: false, reason: 'market-has-no-plots' });
-    expect(P.buildStand(s, 'columbia')).toEqual({ ok: false, reason: 'plot-not-leased' });
-    const leased = ok(P.signLease(s, 'columbia'));
-    expect(P.signLease(leased, 'columbia')).toEqual({ ok: false, reason: 'plot-not-empty' });
-    expect(P.buildStand(leased, 'columbia')).toEqual({ ok: false, reason: 'no-stall-kit' });
+    expect(P.signLease(s, SELLER_PLOT_ID)).toEqual({ ok: false, reason: 'plot-not-leasable' });
+    expect(P.buildStand(s, 'columbia/side')).toEqual({ ok: false, reason: 'plot-not-leased' });
+    const leased = ok(P.signLease(s, 'columbia/side'));
+    expect(P.signLease(leased, 'columbia/side')).toEqual({ ok: false, reason: 'plot-not-empty' });
+    expect(P.buildStand(leased, 'columbia/side')).toEqual({ ok: false, reason: 'no-stall-kit' });
+    // Plots in one district are independent: the corner is still free.
+    expect(leased.plots['columbia/corner']).toBe('empty');
   });
 
-  it('hiring is free and only increments headcount', () => {
-    const s = P.hireManager(P.hireWorker(createInitialState()));
-    expect(s.workers).toBe(1);
+  it('one worker per built stand, $3/day each from the bell; letting go stops the wage', () => {
+    const s = tutorialStand();
+    expect(P.hireWorker(createInitialState(), CP)).toEqual({ ok: false, reason: 'no-built-stand' });
+    const staffed = ok(P.hireWorker(s, CP));
+    expect(staffed.cash).toBe(s.cash); // hiring itself is free
+    expect(getDailyWages(staffed)).toBe(3);
+    expect(P.hireWorker(staffed, CP)).toEqual({ ok: false, reason: 'already-staffed' });
+    expect(getDailyWages(ok(P.letWorkerGo(staffed, CP)))).toBe(0);
+    expect(P.letWorkerGo(s, CP)).toEqual({ ok: false, reason: 'not-staffed' });
+  });
+
+  it('a manager is still a headcount with a $5 wage', () => {
+    const s = P.hireManager(createInitialState());
     expect(s.managers).toBe(1);
     expect(s.cash).toBe(30);
   });
@@ -121,18 +137,27 @@ describe('sales', () => {
 });
 
 describe('rent and day close', () => {
-  it('charges rent on leased and built plots, plus $3 for an acquired seller stand', () => {
-    const s = ok(P.signLease(tutorialStand(), 'broadway'));
-    expect(getDailyPlotRent(s)).toBe(2 + 4); // Central Park $2 + Broadway $4
-    expect(getDailyPlotRent({ ...s, dealStatus: 'won' })).toBe(9);
+  it('charges each leased or built plot its own rent (side $1 less, plaza $2 more)', () => {
+    let s = ok(P.signLease(tutorialStand(), 'broadway/corner'));
+    expect(getDailyPlotRent(s)).toBe(2 + 4); // Central Park corner $2 + Broadway corner $4
+    s = ok(P.signLease(s, 'broadway/side'));
+    s = ok(P.signLease(s, 'broadway/plaza'));
+    expect(getDailyPlotRent(s)).toBe(2 + 4 + 3 + 6);
+  });
+
+  it("the bought seller stand's rent steps from $3 to $5 four days after the purchase", () => {
+    const won = { ...createInitialState(), day: 3, plots: { ...createInitialState().plots, [SELLER_PLOT_ID]: 'built' as const }, sellerStandSince: 3 };
+    expect(getDailyPlotRent(won)).toBe(3);
+    expect(getDailyPlotRent({ ...won, day: 6 })).toBe(3);
+    expect(getDailyPlotRent({ ...won, day: 7 })).toBe(5);
   });
 
   it('closes a day of 4 sales with one worker', () => {
-    let s = P.hireWorker(tutorialStand());
+    let s = ok(P.hireWorker(tutorialStand(), CP));
     for (let i = 1; i <= 4; i++) s = applySale(s, 0.9, i);
     // revenue 12, cogs 2, rent 2 + wages 3 = 5 → NOPAT 5
-    // invested = inventory 3 + equipment 22 = 25 → hurdle 1.25 → value created 3.75
-    // ROIC = 5 / 25 = 20% → grade S
+    // money in business = cash 15 + inventory 3 + equipment 22 = 40 → hurdle 2.00
+    // value created = 5 − 2 = 3.00; return = 5 / 40 = 12.5% → grade A
     const closed = closeDay(s)!;
     expect(closed.record).toEqual({
       day: 1,
@@ -141,11 +166,12 @@ describe('rent and day close', () => {
       cogs: 2,
       rentAndWages: 5,
       nopat: 5,
-      hurdleCharge: 1.25,
-      valueCreated: 3.75,
-      cumulativeValue: 3.75,
-      roicPct: 20,
-      grade: 'S',
+      hurdleCharge: 2,
+      chargedOn: 40,
+      valueCreated: 3,
+      cumulativeValue: 3,
+      roicPct: 12.5,
+      grade: 'A',
     });
     expect(closed.state.cash).toBe(10); // 3 + 12 − 5; the hurdle is not paid in cash
     expect(closed.state.dayRevenue).toBe(0);
@@ -200,15 +226,21 @@ describe('clock', () => {
 describe('today vs the line (projectDay)', () => {
   it('is the same arithmetic the closing bell books', () => {
     let s = { ...createInitialState(), cupsInStock: 10, inventoryValue: 5, equipmentValue: 22 };
-    s = { ...s, plots: { ...s.plots, 'central-park': 'built' as const }, ownedStands: 1 };
+    s = { ...s, plots: { ...s.plots, [CP]: 'built' as const } };
     s = { ...s, dayRevenue: 9, dayCogs: 1.5 };
     const p = projectDay(s);
     expect(p.earned).toBe(7.5);
-    expect(p.rentAndWages).toBe(2); // Central Park rent
-    expect(p.hurdleCharge).toBe(1.35); // 5% of $27 tied up
-    expect(p.line).toBe(3.35);
-    expect(p.valueCreated).toBe(4.15);
+    expect(p.rentAndWages).toBe(2); // Central Park corner rent
+    expect(p.hurdleCharge).toBe(2.85); // 5% of $57 (cash 30 + stock 5 + gear 22)
+    expect(p.line).toBe(4.85);
+    expect(p.valueCreated).toBe(2.65);
     expect(closeDay(s)?.record.valueCreated).toBe(p.valueCreated);
+  });
+
+  it('idle cash is charged: buying gear with cash leaves the line unchanged', () => {
+    const s = createInitialState();
+    expect(getDailyHurdleCharge(s)).toBe(1.5); // 5% of $30 cash, before any purchase
+    expect(getDailyHurdleCharge(ok(P.buyPitcher(s)))).toBe(1.5); // $10 moved cash -> gear
   });
 
   it('beatTheLine: zero counts as beating it, a cent short does not', () => {
@@ -226,7 +258,12 @@ describe('sealed bid', () => {
     if (r.kind !== 'won') return;
     expect(r.state.cash).toBe(58);
     expect(r.state.equipmentValue).toBe(42);
-    expect(r.state.ownedStands).toBe(1);
+    expect(countOwnedStands(r.state)).toBe(1);
+    // The stand is the player's but comes without staff (the seller ran it unpaid),
+    // and its rent clock starts today.
+    expect(r.state.plots[SELLER_PLOT_ID]).toBe('built');
+    expect(r.state.staffedPlots).toEqual([]);
+    expect(r.state.sellerStandSince).toBe(1);
   });
 
   it('rejects a bid one cent under the minimum and closes the deal', () => {

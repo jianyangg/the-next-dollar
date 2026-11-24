@@ -1,25 +1,33 @@
-import { NEIGHBORHOODS } from './neighborhoods';
+import { getPlot, SELLER_PLOT_ID, SELLER_RENT_AFTER, SELLER_RENT_BEFORE, SELLER_RENT_STEP_DAYS } from './plots';
 import type { SliceState } from './sliceModel';
 
 /**
- * Daily rent the player owes: every leased or built plot in a business district,
- * plus $3/day for the seller's stand once the player has bought it.
+ * Daily rent the player owes: the rent of every plot they lease or have built on.
  *
- * This loop used to be copy-pasted in App.tsx (the live HUD estimate and the
- * end-of-day close). One function guarantees the HUD shows the same rent the day
- * close actually charges.
+ * Each plot has its own rent (core/plots.ts): corner = the district's rent, side
+ * street $1 less, plaza $2 more. The bought seller's stand is a plot too; its rent is
+ * $3 a day and steps up to $5 four days after the purchase. That step-up is one of the
+ * seller's off-book facts, so here it is a real cost the player discovers (or learned
+ * by asking the right question before bidding).
+ *
+ * One function, used by the live HUD meter, the Books and the day close, so all three
+ * always charge the same rent.
  */
-export const ACQUIRED_SELLER_STAND_RENT = 3;
-
-export function getDailyPlotRent(s: Pick<SliceState, 'plots' | 'dealStatus'>): number {
-  let total = 0;
-  for (const n of NEIGHBORHOODS) {
-    if (n.id !== 'market' && s.plots[n.id] !== 'empty') {
-      total += n.dailyRent;
-    }
+export function getPlotRent(
+  s: Pick<SliceState, 'day' | 'sellerStandSince'>,
+  plotId: string
+): number {
+  if (plotId === SELLER_PLOT_ID) {
+    const since = s.sellerStandSince;
+    return since !== null && s.day >= since + SELLER_RENT_STEP_DAYS ? SELLER_RENT_AFTER : SELLER_RENT_BEFORE;
   }
-  if (s.dealStatus === 'won') {
-    total += ACQUIRED_SELLER_STAND_RENT;
+  return getPlot(plotId).dailyRent;
+}
+
+export function getDailyPlotRent(s: Pick<SliceState, 'plots' | 'day' | 'sellerStandSince'>): number {
+  let total = 0;
+  for (const [id, status] of Object.entries(s.plots)) {
+    if (status !== 'empty') total += getPlotRent(s, id);
   }
   return +total.toFixed(2);
 }

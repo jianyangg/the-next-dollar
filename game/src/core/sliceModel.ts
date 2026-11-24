@@ -1,4 +1,4 @@
-import { NeighborhoodId } from './neighborhoods';
+import { type PlotId, PLOTS } from './plots';
 
 export type PlotStatus = 'empty' | 'leased' | 'built';
 
@@ -19,6 +19,8 @@ export interface DayRecord {
   rentAndWages: number;
   nopat: number;
   hurdleCharge: number;
+  /** All money in the business at the bell (cash + stock + gear): what the 5% was charged on. */
+  chargedOn: number;
   valueCreated: number;
   cumulativeValue: number;
   roicPct: number;
@@ -36,10 +38,19 @@ export interface SliceState {
   pitchers: number;
   pricePerCup: number;
   // Staffing (daily operating wages)
-  workers: number;
+  /**
+   * Stands with a hired worker (one worker per stand, $3/day each). A staffed stand
+   * keeps selling while the player is somewhere else (core/awaySales.ts).
+   */
+  staffedPlots: PlotId[];
   managers: number;
-  // Fixed sidewalk plots per district
-  plots: Record<NeighborhoodId, PlotStatus>;
+  /** Every plot in the city (core/plots.ts), keyed by plot id. */
+  plots: Record<PlotId, PlotStatus>;
+  /**
+   * The day the player bought the seller's stand, or null. Its lease steps up from $3 to
+   * $5 a day four days later (the seller's off-book fact), so rent needs this date.
+   */
+  sellerStandSince: number | null;
   // Daily income statement accumulators
   dayCupsSold: number;
   dayRevenue: number;
@@ -59,7 +70,6 @@ export interface SliceState {
   /** GDD: a deal is final for the whole career once won, rejected or walked away from. */
   dealStatus: 'open' | 'won' | 'rejected' | 'walked-away';
   dealBidPrice: number | null;
-  ownedStands: number;
 }
 
 export const HURDLE_RATE = 0.05;
@@ -79,17 +89,10 @@ export function createInitialState(): SliceState {
     stallKits: 0,
     pitchers: 0,
     pricePerCup: 3,
-    workers: 0,
+    staffedPlots: [],
     managers: 0,
-    plots: {
-      'central-park': 'empty',
-      columbia: 'empty',
-      broadway: 'empty',
-      market: 'empty',
-      'west-village': 'empty',
-      fidi: 'empty',
-      'fifth-ave': 'empty',
-    },
+    plots: Object.fromEntries(PLOTS.map((p) => [p.id, 'empty' as PlotStatus])),
+    sellerStandSince: null,
     dayCupsSold: 0,
     dayRevenue: 0,
     dayCogs: 0,
@@ -104,12 +107,16 @@ export function createInitialState(): SliceState {
     ratingAvg: 5.0,
     dealStatus: 'open',
     dealBidPrice: null,
-    ownedStands: 0,
   };
 }
 
-export function getDailyWages(s: SliceState): number {
-  return s.workers * WORKER_DAILY_WAGE + s.managers * MANAGER_DAILY_WAGE;
+export function getDailyWages(s: Pick<SliceState, 'staffedPlots' | 'managers'>): number {
+  return s.staffedPlots.length * WORKER_DAILY_WAGE + s.managers * MANAGER_DAILY_WAGE;
+}
+
+/** How many stands the player owns (built plots, including a bought seller stand). */
+export function countOwnedStands(s: Pick<SliceState, 'plots'>): number {
+  return Object.values(s.plots).filter((p) => p === 'built').length;
 }
 
 export function createReviewFromPatience(patienceRatio: number, id: number): CustomerReview {
@@ -137,8 +144,23 @@ export function appendCustomerReview(
   return { reviews, ratingAvg, review };
 }
 
+/** Money tied up in stock and equipment (what the stands are built from). */
 export function getInvestedCapital(s: SliceState): number {
   return s.inventoryValue + s.equipmentValue;
+}
+
+/**
+ * ALL the money in the business: cash + stock + equipment. This is what THE LINE
+ * charges 5% a day on.
+ *
+ * Owner decision (2026-11-24): idle cash is charged too. The game is about where the
+ * next dollar goes; if cash were free, the best play after a good week was to hold it
+ * and the line shrank to nothing. Charging every dollar makes the line grow as the
+ * player gets richer, so one stand stops being enough and the money must be put to
+ * work (or knowingly held). This reverses GDD 5.6's "cash is not charged".
+ */
+export function getMoneyInBusiness(s: SliceState): number {
+  return +(s.cash + s.inventoryValue + s.equipmentValue).toFixed(2);
 }
 
 export function getDayNopat(s: SliceState): number {
@@ -146,7 +168,7 @@ export function getDayNopat(s: SliceState): number {
 }
 
 export function getDailyHurdleCharge(s: SliceState): number {
-  return +(getInvestedCapital(s) * HURDLE_RATE).toFixed(2);
+  return +(getMoneyInBusiness(s) * HURDLE_RATE).toFixed(2);
 }
 
 export function getTotalEquity(s: SliceState): number {

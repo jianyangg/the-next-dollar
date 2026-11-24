@@ -1,5 +1,5 @@
 import { LEMON_CRATE_COST, PITCHER_COST } from './purchases';
-import { type SliceState, STALL_KIT_COST } from './sliceModel';
+import { countOwnedStands, type SliceState, STALL_KIT_COST } from './sliceModel';
 
 /**
  * TUTORIAL SPENDING GUARD (pure rules, no UI).
@@ -38,7 +38,7 @@ export const STARTER_NAME: Record<StarterItem, string> = {
 export function missingStarterItems(s: SliceState): StarterItem[] {
   const missing: StarterItem[] = [];
   // A stall kit is consumed when the stand is built, so an owned stand counts as "has kit".
-  if (s.stallKits < 1 && s.ownedStands < 1) missing.push('stall-kit');
+  if (s.stallKits < 1 && countOwnedStands(s) < 1) missing.push('stall-kit');
   if (s.pitchers < 1) missing.push('pitcher');
   if (s.cupsInStock < 1) missing.push('lemons');
   return missing;

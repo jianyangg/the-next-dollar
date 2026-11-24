@@ -32,7 +32,7 @@
  * slide" technique used in most 2D/3D action games.
  */
 import type { NeighborhoodId } from '../core/neighborhoods';
-import type { PlotStatus } from './CentralParkScene';
+import { getPlot, SELLER_PLOT_ID, type PlotView } from '../core/plots';
 
 export interface Vec2 {
   x: number;
@@ -71,13 +71,51 @@ export const PLAYER_SPEED = 4.6;
 
 // ---------------------------------------------------------------------------
 // Anchor positions. CentralParkScene derives its THREE.Vector3 copies from these,
-// so this file is the single source of truth for where the stands are.
+// so the visible stalls and their collision boxes cannot drift apart. Stand PLOT
+// positions are not here: they live in core/plots.ts (PLOTS), the one place that
+// says where every plot in the city is.
 // ---------------------------------------------------------------------------
-export const OWN_STAND_POS: Vec2 = { x: 5.6, z: -1.6 }; // CentralParkScene.ts:131
-export const SELLER_STAND_POS: Vec2 = { x: -5.8, z: -1.6 }; // CentralParkScene.ts:132
-export const MARKET_STALLS_POS: Vec2 = { x: -4.3, z: -1.3 }; // CentralParkScene.ts:134
-export const MARKET_PITCHERS_POS: Vec2 = { x: 0.0, z: -1.3 }; // CentralParkScene.ts:135
-export const MARKET_LEMONS_POS: Vec2 = { x: 4.3, z: -1.3 }; // CentralParkScene.ts:136
+export const MARKET_STALLS_POS: Vec2 = { x: -4.3, z: -1.3 };
+export const MARKET_PITCHERS_POS: Vec2 = { x: 0.0, z: -1.3 };
+export const MARKET_LEMONS_POS: Vec2 = { x: 4.3, z: -1.3 };
+
+/** Where the seller's "FOR SALE" stand stands: the seller plot from core/plots.ts. */
+export function sellerStandPos(): Vec2 {
+  const { x, z } = getPlot(SELLER_PLOT_ID);
+  return { x, z };
+}
+
+/**
+ * Is the seller's "FOR SALE" stand (and its broker) physically on THIS street?
+ *
+ * Two conditions, both required:
+ *   1. `sellerPresent` (from the store): the deal has not been won yet. Once it is won the
+ *      seller plot becomes the player's own built stand instead.
+ *   2. The player is in the seller plot's district (Central Park). The store's flag is a
+ *      fact about the CITY ("the seller is still in business"), not about the street the
+ *      player is looking at, so it stays true while the player is in FiDi; without this
+ *      check the FOR SALE stand would appear in every district, which was a real bug.
+ * Pure, so the scene, the collision boxes and the UI signs all share one rule.
+ */
+export function sellerStandShown(neighborhood: NeighborhoodId, sellerPresent: boolean): boolean {
+  return sellerPresent && getPlot(SELLER_PLOT_ID).district === neighborhood;
+}
+
+/**
+ * Which of a district's plots are drawn ON THE STREET as a plot (an empty pad, a leased
+ * pad or the player's built stand), as opposed to not at all.
+ *
+ * Ordinary plots (corner / side / plaza) always are. The seller's plot is special: while
+ * the seller is still there it is drawn as the seller's FOR SALE stand (a different thing,
+ * with its own sign and target), and it can never be leased (core/plots.ts isLeasable),
+ * so it only becomes "one of the player's plots" once the deal is won and it is built.
+ */
+export function plotsOnStreet<T extends Pick<PlotView, 'kind' | 'status'>>(
+  plots: readonly T[],
+  sellerPresent: boolean
+): T[] {
+  return plots.filter((p) => p.kind !== 'seller' || (!sellerPresent && p.status === 'built'));
+}
 
 /**
  * Neighborhoods where cars drive: ROAD_NEIGHBORHOODS (CentralParkScene.ts:164),
@@ -120,7 +158,17 @@ function boxAt(id: string, cx: number, cz: number, halfX: number, halfZ: number)
 
 export interface ColliderOptions {
   neighborhood: NeighborhoodId;
-  plotStatus: PlotStatus;
+  /**
+   * Where the player's BUILT stands are on this street (one entry per built plot, taken
+   * from core/plots.ts). Empty and leased plots are only paint on the ground, so they
+   * never block; only a built stand has a counter you can bump into.
+   */
+  builtPlots: readonly Vec2[];
+  /**
+   * The seller's FOR SALE stand is still in business (store: selectSellerPresent). It is
+   * only solid in the seller plot's own district; see `sellerStandShown`.
+   */
+  sellerPresent: boolean;
   /**
    * Also treat street furniture (lamps, hydrant, bins, sign pole, subway
    * entrance) as solid. Whether these should block is an open product decision
@@ -130,26 +178,41 @@ export interface ColliderOptions {
 }
 
 /**
- * Stand / stall boxes, exactly as the current animate() loop (CentralParkScene.ts:3022-3038):
- *  - market: three stalls, each |dx| < 1.25 and |dz| < 0.5 around its position (:3024-3025).
- *  - elsewhere: the player's own stand (only once the plot is 'built', :3032) with
- *    |dx| < 1.3 around OWN_STAND_POS.x + 0.1 and |dz| < 0.5 (:3033-3034), and the
- *    seller stand |dx| < 1.35 around SELLER_STAND_POS.x - 0.1 and |dz| < 0.54 (:3036).
- *    (Note the own stand is shifted +0.1 in x while the seller stand is shifted -0.1.)
+ * Footprint of a stand counter, relative to the stand's position. The counter mesh is
+ * 2.04 wide; the own stand's box is nudged +0.1 in x (the lemon crates sit on its right)
+ * and the seller's -0.1 (its crates sit on the left), matching where the props really are.
  */
-function standColliders(neighborhood: NeighborhoodId, plotStatus: PlotStatus): Box[] {
-  if (neighborhood === 'market') {
+const OWN_STAND_BOX = { dx: 0.1, halfX: 1.3, halfZ: 0.5 } as const;
+const SELLER_STAND_BOX = { dx: -0.1, halfX: 1.35, halfZ: 0.54 } as const;
+
+/** The solid box of the player's built stand standing at `pos`. Exported for tests. */
+export function ownStandBox(pos: Vec2, id = 'own-stand'): Box {
+  return boxAt(id, pos.x + OWN_STAND_BOX.dx, pos.z, OWN_STAND_BOX.halfX, OWN_STAND_BOX.halfZ);
+}
+
+/**
+ * Stand / stall boxes:
+ *  - market: three stalls, each |dx| < 1.25 and |dz| < 0.5 around its position.
+ *  - elsewhere: one box per BUILT plot (|dx| < 1.3 around plot.x + 0.1, |dz| < 0.5), plus
+ *    the seller stand (|dx| < 1.35 around its x - 0.1, |dz| < 0.54) only while it is
+ *    shown on this street.
+ * Built-stand ids are 'own-stand-0', 'own-stand-1', ... in the order given.
+ */
+function standColliders(opts: ColliderOptions): Box[] {
+  if (opts.neighborhood === 'market') {
     return [
       boxAt('market-stalls', MARKET_STALLS_POS.x, MARKET_STALLS_POS.z, 1.25, 0.5),
       boxAt('market-pitchers', MARKET_PITCHERS_POS.x, MARKET_PITCHERS_POS.z, 1.25, 0.5),
       boxAt('market-lemons', MARKET_LEMONS_POS.x, MARKET_LEMONS_POS.z, 1.25, 0.5),
     ];
   }
-  const boxes: Box[] = [];
-  if (plotStatus === 'built') {
-    boxes.push(boxAt('own-stand', OWN_STAND_POS.x + 0.1, OWN_STAND_POS.z, 1.3, 0.5));
+  const boxes: Box[] = opts.builtPlots.map((p, i) => ownStandBox(p, `own-stand-${i}`));
+  if (sellerStandShown(opts.neighborhood, opts.sellerPresent)) {
+    const seller = sellerStandPos();
+    boxes.push(
+      boxAt('seller-stand', seller.x + SELLER_STAND_BOX.dx, seller.z, SELLER_STAND_BOX.halfX, SELLER_STAND_BOX.halfZ)
+    );
   }
-  boxes.push(boxAt('seller-stand', SELLER_STAND_POS.x - 0.1, SELLER_STAND_POS.z, 1.35, 0.54));
   return boxes;
 }
 
@@ -230,11 +293,11 @@ function propColliders(neighborhood: NeighborhoodId): Box[] {
 
 /**
  * All obstacles for a neighborhood. Pure: same inputs give the same boxes.
- * Callers should cache the result and recompute only when the neighborhood or
- * the plot status changes.
+ * Callers should cache the result and recompute only when the neighborhood, the
+ * set of built plots or the seller's presence changes.
  */
 export function getColliders(opts: ColliderOptions): Box[] {
-  const boxes = standColliders(opts.neighborhood, opts.plotStatus);
+  const boxes = standColliders(opts);
   if (opts.includeProps === true) {
     boxes.push(...propColliders(opts.neighborhood));
   }
@@ -272,7 +335,7 @@ function clamp(v: number, lo: number, hi: number): number {
  * and costs at most three box tests. For rotated or round obstacles you would
  * project the delta onto the surface normal instead.
  *
- * Known limitation (same as today): a player who is already inside a box (e.g. the
+ * Known limitation (same as today): a player who is already inside a box (e.g. a
  * plot just became 'built' under their feet) cannot move at all, because every
  * candidate step is also inside the box.
  */

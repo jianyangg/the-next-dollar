@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { getPlot, plotsIn } from '../core/plots';
 import { getColliders, isBlocked, type Box, type Vec2 } from './collision';
 import { CELL_SIZE, GRID_COLS, GRID_ROWS, buildGrid, findPath, rawPathLength, type NavGrid } from './pathfinding';
 
-const builtPark = () => getColliders({ neighborhood: 'central-park', plotStatus: 'built' });
+/** Central Park with its corner stand built and the seller still in business (the original layout). */
+const builtPark = () =>
+  getColliders({
+    neighborhood: 'central-park',
+    builtPlots: [getPlot('central-park/corner')],
+    sellerPresent: true,
+  });
 
 /** Walk a waypoint list from `from`, sampling densely; returns every sampled point. */
 function sampleRoute(from: Vec2, waypoints: Vec2[]): Vec2[] {
@@ -65,7 +72,7 @@ describe('findPath around the own stand', () => {
     // Nearest open cell is within a few cells of the click (the stand is only 1.0 deep + 0.3 margin).
     expect(Math.hypot(end.x - click.x, end.z - click.z)).toBeLessThan(1.2);
     // And it's on the front side, closest to where the click was relative to the nearest face.
-    const own = colliders.find((b) => b.id === 'own-stand')!;
+    const own = colliders.find((b) => b.id === 'own-stand-0')!;
     const inside = end.x > own.minX && end.x < own.maxX && end.z > own.minZ && end.z < own.maxZ;
     expect(inside).toBe(false);
   });
@@ -189,7 +196,13 @@ describe('smoothing', () => {
 
 describe('performance', () => {
   it('builds the grid and finds one cross-map path in under 20 ms', () => {
-    const colliders = getColliders({ neighborhood: 'fidi', plotStatus: 'built', includeProps: true });
+    // Worst case: every FiDi plot built.
+    const colliders = getColliders({
+      neighborhood: 'fidi',
+      builtPlots: plotsIn('fidi'),
+      sellerPresent: false,
+      includeProps: true,
+    });
     // Warm up the JIT once so we time steady state, not V8's first-run compilation
     // (measured cold: roughly 5 ms build + 8-12 ms first path; warm: about 1 ms + 2.5 ms).
     findPath({ x: -10, z: -2 }, { x: 10, z: 7 }, buildGrid(colliders, { hasTraffic: true }));

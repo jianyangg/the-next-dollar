@@ -46,7 +46,7 @@ The game is the existing single-player Career mode, refined into a **fixed 30-da
 
 Pillars are the few priorities used to choose between designs when they conflict.
 
-1. **Capital allocation.** Every dollar has a best use: build a stand, bid on one or hold the cash, and choose where. The score charges 5% a day for money tied up in stock and equipment, and the fixed 30-day clock gives idle cash a real opportunity cost—so both blind growth and timid hoarding lose.
+1. **Capital allocation.** Every dollar has a best use: build a stand, bid on one or hold the cash, and choose where. The score charges 5% a day on every dollar in the business, idle cash included (owner decision 2026-11-24, see 5.6), so both blind growth and timid hoarding lose.
 2. **No undo within a run.** Every purchase and bid in a 30-day career is final. A bad deal stays on your books for the rest of the career, which makes diligence matter—while starting a fresh 30-day career lets players apply what they learned without getting permanently soft-locked.
 3. **Neither the books nor the seller ever lie—but the books don't tell the whole story.** Every number a player sees is true and comes from the engine. Sellers never fabricate figures, and they answer truthfully when asked directly, but they volunteer nothing negative. Good investors read the books *and* ask the right questions.
 
@@ -159,7 +159,9 @@ After a bought stand has run for a while, Books points to the on-book line or of
 
 ### 5.6 Scoring, Fixed 30-Day Career and Ranking (scoring Implemented; 30-day career & ranking Planned, student decided)
 
-**Value created** is profit after a 5% daily charge on the money tied up in stock and equipment. Cash is not charged directly (`VALUE_POLICY.hurdle = 0.05` in `web/src/domain/value.ts`). A stand that earns less each day than 5% of what it cost lowers your score, even if it makes a profit.
+**Value created** is profit after a 5% daily charge on all the money in the business: cash, stock and equipment (`HURDLE_RATE = 0.05` and `getMoneyInBusiness` in `game/src/core/sliceModel.ts`). A stand that earns less each day than 5% of what it cost lowers your score, even if it makes a profit.
+
+> **Owner decision, 2026-11-24: idle cash is charged too.** This replaces the earlier rule "Cash is not charged directly" (`VALUE_POLICY.hurdle` in `web/src/domain/value.ts`). Reason: with free cash, the best play after a good week was to stop investing and hold the money, and the line shrank as the player got richer. Charging every dollar makes the line grow with the player's wealth, so holding cash is a choice with a visible cost and one stand stops being enough. A purchase that only moves money between cash, stock and gear leaves the line unchanged; only money entering or leaving the business (sales, rent, wages, a loss on a resale) moves it.
 
 **Fixed 30-day career (student decided):** Each career lasts **30 days** (replacing the earlier unbounded permanent-business design). Every action and accepted bid inside a 30-day career is final—there is no undo within a run. When a career ends at day 30, the final score posts to the leaderboard, and the player may start a new 30-day career to apply what they learned.
 

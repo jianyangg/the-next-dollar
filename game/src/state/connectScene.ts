@@ -1,9 +1,17 @@
 import { cosmeticRandom, gameplayRandom } from '../core/runRandom';
 import { getConversionProb } from '../core/demand';
 import { getNeighborhood } from '../core/neighborhoods';
+import { trafficMultiplier } from '../core/plots';
 import { CentralParkScene } from '../world/CentralParkScene';
 import { publishAnchors } from './anchorStore';
-import { selectCurrentPlotStatus, selectStandOpen, useGameStore } from './gameStore';
+import {
+  selectDistrictPlots,
+  selectDistrictPlotsKey,
+  selectLivePlotId,
+  selectSellerPresent,
+  selectStandOpen,
+  useGameStore,
+} from './gameStore';
 import { INPUT_PRIORITY, onInputLayerPushed, pushInputLayer } from './input';
 import { registerScene } from './sceneBridge';
 
@@ -36,7 +44,8 @@ export function connectScene(container: HTMLElement): () => void {
       onCustomerWalkout: () => useGameStore.getState().actions.customerWalkout(),
       onTaxiHit: () => useGameStore.getState().actions.taxiHit(),
       onAnchorsUpdate: publishAnchors,
-      onInteract: (target) => useGameStore.getState().actions.interact(target),
+      // `plotId` names which plot for 'own-stand' / 'plot-lease' (a district has several).
+      onInteract: (target, plotId) => useGameStore.getState().actions.interact(target, plotId),
     },
     { gameplay: gameplayRandom, cosmetic: cosmeticRandom }
   );
@@ -59,22 +68,45 @@ export function connectScene(container: HTMLElement): () => void {
       fireImmediately: true,
     }),
 
-    // Not fired immediately on purpose: `setWorkingAtStand(false)` teleports the
-    // player to the stand's front door, but a new scene should start at its own
-    // spawn point. The scene starts with "not working", which matches the store.
-    useGameStore.subscribe((s) => s.workingAtStand, (v) => scene.setWorkingAtStand(v)),
-
+    // ORDER MATTERS in this block. Zustand calls listeners in the order they subscribed,
+    // and one store update (say, a subway ride or "enter stand at the side plot") can
+    // change several of these at once. Each step relies on the one before it:
+    //   1. the district (the scene drops the old street's plots),
+    //   2. that district's plots (what is drawn, what blocks, what you can press E on),
+    //   3. the live plot (needs 2: it must be one of this street's built plots),
+    //   4. the seller,
+    //   5. working at the stand (needs 3: the player sits behind the LIVE counter).
     useGameStore.subscribe((s) => s.neighborhoodId, (v) => scene.setNeighborhood(v), {
       fireImmediately: true,
     }),
 
-    // Tuple of [district, plot status]: re-applied on a district change even if
-    // the status is unchanged (same behaviour as before).
+    // The plot list is a fresh array on every read, so we subscribe to its KEY (a string
+    // that changes only when something visible changed) and read the list itself then.
+    // Re-applied on a district change even if the key happened to match.
     useGameStore.subscribe(
-      (s) => [s.neighborhoodId, selectCurrentPlotStatus(s)] as const,
-      ([, status]) => scene.setPlotState(status),
+      (s) => [s.neighborhoodId, selectDistrictPlotsKey(s)] as const,
+      () => scene.setDistrictPlots(selectDistrictPlots(useGameStore.getState())),
       { equalityFn: sameTuple, fireImmediately: true }
     ),
+
+    // The live plot, and its foot traffic: a busier plot sends customers more often
+    // (core/plots.ts trafficMultiplier). With no live plot there is no queue, so the
+    // multiplier is neutral (1) rather than a number from some other plot.
+    useGameStore.subscribe(
+      (s) => [s.neighborhoodId, selectLivePlotId(s)] as const,
+      ([, id]) => {
+        scene.setLivePlot(id);
+        scene.setFootTraffic(id === null ? 1 : trafficMultiplier(id));
+      },
+      { equalityFn: sameTuple, fireImmediately: true }
+    ),
+
+    useGameStore.subscribe(selectSellerPresent, (v) => scene.setSellerPresent(v), { fireImmediately: true }),
+
+    // Not fired immediately on purpose: `setWorkingAtStand(false)` steps the player out
+    // in front of the counter, but a new scene should start at its own spawn point. The
+    // scene starts with "not working", which matches the store.
+    useGameStore.subscribe((s) => s.workingAtStand, (v) => scene.setWorkingAtStand(v)),
 
     useGameStore.subscribe(
       (s) => [s.economy.pitchers, selectStandOpen(s)] as const,

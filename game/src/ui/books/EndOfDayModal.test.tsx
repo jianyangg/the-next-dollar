@@ -21,6 +21,7 @@ const record: DayRecord = {
   rentAndWages: 2,
   nopat: 18,
   hurdleCharge: 1.15,
+  chargedOn: 23,
   valueCreated: 16.85,
   cumulativeValue: 41.2,
   roicPct: 78.3,
@@ -34,7 +35,7 @@ beforeAll(() => initRunRandom(1));
 beforeEach(() => {
   vi.useFakeTimers();
   resetGameStore();
-  useGameStore.setState({ eodRecord: record, economy: { ...createInitialState(), day: 4, inventoryValue: 3, equipmentValue: 20, plots: { ...createInitialState().plots, 'central-park': 'leased' } } });
+  useGameStore.setState({ eodRecord: record, economy: { ...createInitialState(), day: 4, inventoryValue: 3, equipmentValue: 20, plots: { ...createInitialState().plots, 'central-park/corner': 'leased' } } });
 });
 afterEach(() => {
   cleanup();
@@ -89,7 +90,7 @@ describe('EndOfDayModal', () => {
     for (const needle of ['8 cups × $3.00', '+$24.00', '-$4.00', '-$2.00', '+$18.00', '-$1.15', '$23.00 × 5%', '78.3%', '+$41.20', 'Day 4 of 30']) {
       expect(text).toContain(needle);
     }
-    expect(text).toContain('Money tied up');
+    expect(text).toContain('Money in business');
     expect(text).not.toMatch(/NOPAT|EVA|ROIC/);
     // The verdict leads: this record's +$16.85 beat the line.
     expect(text).toContain('BEAT THE LINE');

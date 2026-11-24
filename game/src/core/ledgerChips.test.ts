@@ -12,21 +12,22 @@ function mustBuy(rule: (s: SliceState) => ReturnType<typeof buyPitcher>, s: Slic
 }
 
 describe('ledgerChips', () => {
-  it('a pitcher purchase moves cash into gear, shows PROFIT $0 and a higher daily 5% charge', () => {
+  it('a pitcher purchase moves cash into gear: PROFIT $0 and the line unchanged', () => {
+    // Every dollar is charged 5%, cash included, so moving $10 from cash to gear does
+    // not change the daily charge (no line chip).
     const before = createInitialState();
     const after = mustBuy(buyPitcher, before);
     expect(ledgerChips(before, after)).toEqual([
       { kind: 'cash', delta: -10 },
       { kind: 'gear', delta: 10 },
       { kind: 'profit', delta: 0 },
-      { kind: 'line', delta: 0.5 },
     ]);
   });
 
   it('a lemon crate moves cash into stock', () => {
     const before = createInitialState();
     const after = mustBuy(buyLemons, before);
-    expect(ledgerChips(before, after).map((c) => c.kind)).toEqual(['cash', 'stock', 'profit', 'line']);
+    expect(ledgerChips(before, after).map((c) => c.kind)).toEqual(['cash', 'stock', 'profit']);
     expect(ledgerChips(before, after)[0]).toEqual({ kind: 'cash', delta: -5 });
   });
 
@@ -37,7 +38,8 @@ describe('ledgerChips', () => {
     expect(chips.find((c) => c.kind === 'cash')?.delta).toBe(7);
     expect(chips.find((c) => c.kind === 'gear')?.delta).toBe(-10);
     expect(chips.find((c) => c.kind === 'profit')?.delta).toBe(-3);
-    expect(chips.find((c) => c.kind === 'line')?.delta).toBe(-0.5);
+    // $3 left the business (the resale loss): 5% of $3 = $0.15 less to beat each day.
+    expect(chips.find((c) => c.kind === 'line')?.delta).toBe(-0.15);
   });
 
   it('a sale shows cash in, stock out and profit up', () => {

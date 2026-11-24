@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createActor, fromPromise, waitFor } from 'xstate';
 import type { PublicDealView } from '../core/deal';
 import { CENTRAL_PARK_DEAL, resolveSealedBid, toPublicView } from '../core/deal';
-import { createInitialState, type SliceState } from '../core/sliceModel';
+import { countOwnedStands, createInitialState, type SliceState } from '../core/sliceModel';
 import { canAsk, dealMachine, type BidVerdict, type QaEntry, MAX_QUESTION_CHARS, questionsLeft } from './dealMachine';
 import type { PitchResponse, QuestionResponse } from '../../shared/sellerReply';
 import { SellerApiError } from './sellerClient';
@@ -167,7 +167,7 @@ describe('sealed bid (resolveSealedBid, reservation 42, ask 60)', () => {
     expect(h.actor.getSnapshot().context.outcome).toBe('won');
     expect(h.actor.getSnapshot().output).toEqual({ outcome: 'won', bid: 50 });
     expect(h.game().cash).toBe(50);
-    expect(h.game().ownedStands).toBe(createInitialState().ownedStands + 1);
+    expect(countOwnedStands(h.game())).toBe(countOwnedStands(createInitialState()) + 1);
   });
   it('bid equal to reservation wins', async () => {
     const { actor } = await ready();

@@ -4,7 +4,7 @@ import { type ReactNode, useMemo, useState } from 'react';
 import {
   getDailyHurdleCharge,
   getDailyWages,
-  getInvestedCapital,
+  getMoneyInBusiness,
   getTotalEquity,
   HURDLE_RATE,
   STALL_KIT_COST,
@@ -13,7 +13,7 @@ import { projectDay } from '../core/dayEnd';
 import { PITCHER_COST, STAND_DIVEST_PROCEEDS, USED_PITCHER_RESALE } from '../core/purchases';
 import { getDailyPlotRent } from '../core/rent';
 import { getNeighborhood } from '../core/neighborhoods';
-import { selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
+import { selectLivePlotId, useGameStore } from '../state/gameStore';
 import { INPUT_PRIORITY } from '../state/input';
 import { BOOKS_TABS, type BooksTab, meterShape } from './books/ledger';
 import { fmtSignedMoney } from './format';
@@ -84,7 +84,8 @@ function BooksDrawerBody() {
   const actions = useGameStore((s) => s.actions);
   const state = useGameStore((s) => s.economy);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
-  const currentPlotStatus = useGameStore(selectCurrentPlotStatus);
+  // The stand Divest sells: the one being run in this district (null = none here).
+  const livePlotId = useGameStore(selectLivePlotId);
   const neighborhood = getNeighborhood(neighborhoodId);
   const [tab, setTab] = useState<BooksTab>('income');
 
@@ -93,7 +94,7 @@ function BooksDrawerBody() {
   const dailyWages = getDailyWages(state);
 
   // Derived financial metrics (all from the engine's own functions)
-  const investedCap = getInvestedCapital(state);
+  const moneyIn = getMoneyInBusiness(state);
   const dailyHurdle = getDailyHurdleCharge(state);
   // Same formula as the HUD meter and the closing bell (core/dayEnd.ts projectDay).
   const today = projectDay(state);
@@ -157,7 +158,7 @@ function BooksDrawerBody() {
               {dailyWages > 0 && (
                 <Row
                   label="Wages"
-                  formal={`${state.workers}W · ${state.managers}M`}
+                  formal={`${state.staffedPlots.length}W · ${state.managers}M`}
                   value={`-$${dailyWages.toFixed(2)}`}
                   tone="cost"
                 />
@@ -196,7 +197,7 @@ function BooksDrawerBody() {
         {tab === 'value' && (
           <section aria-label="Value">
             <Ledger>
-              <Row label="Money tied up" formal="invested capital" value={`$${investedCap.toFixed(2)}`} />
+              <Row label="Money in business" formal="cash + stock + gear" value={`$${moneyIn.toFixed(2)}`} />
               <Row
                 label={`${(HURDLE_RATE * 100).toFixed(0)}% every day`}
                 formal="hurdle charge"
@@ -246,24 +247,24 @@ function BooksDrawerBody() {
             </Ledger>
             <ValueTrajectoryStrip />
 
-            {(state.pitchers >= 1 || (currentPlotStatus === 'built' && state.ownedStands >= 1)) && (
+            {(state.pitchers >= 1 || livePlotId !== null) && (
               <div className="books-sell">
                 {state.pitchers >= 1 && (
                   <button
                     type="button"
                     className="pt-btn is-ghost"
                     onClick={actions.sellUsedPitcher}
-                    title={`Cash +${money(USED_PITCHER_RESALE)}, equipment -${money(PITCHER_COST)}, 5% charge -${money(PITCHER_COST * HURDLE_RATE)}/day`}
+                    title={`Cash +${money(USED_PITCHER_RESALE)}, equipment -${money(PITCHER_COST)}, 5% charge -${money((PITCHER_COST - USED_PITCHER_RESALE) * HURDLE_RATE)}/day`}
                   >
                     Sell Pitcher (+{money(USED_PITCHER_RESALE)})
                   </button>
                 )}
-                {currentPlotStatus === 'built' && state.ownedStands >= 1 && (
+                {livePlotId !== null && (
                   <button
                     type="button"
                     className="pt-btn is-ghost"
                     onClick={actions.divestCurrentStand}
-                    title={`Cash +${money(STAND_DIVEST_PROCEEDS)}, equipment -${money(STALL_KIT_COST)}, 5% charge -${money(STALL_KIT_COST * HURDLE_RATE)}/day`}
+                    title={`Cash +${money(STAND_DIVEST_PROCEEDS)}, equipment -${money(STALL_KIT_COST)}, 5% charge -${money((STALL_KIT_COST - STAND_DIVEST_PROCEEDS) * HURDLE_RATE)}/day`}
                   >
                     Divest Stand (+{money(STAND_DIVEST_PROCEEDS)})
                   </button>

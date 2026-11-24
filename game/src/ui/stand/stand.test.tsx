@@ -19,6 +19,7 @@ import { getNeighborhood } from '../../core/neighborhoods';
 import { getConversionProb } from '../../core/demand';
 import { StandWorkbench } from '../StandWorkbench';
 import { litCustomers } from './PriceCustomers';
+import { countOwnedStands } from '../../core/sliceModel';
 
 const press = (key: string) =>
   act(() => dispatchKeyDown({ key, target: document.body, preventDefault: () => {} } as unknown as KeyboardEvent));
@@ -112,10 +113,10 @@ describe('stand menu keys', () => {
   it('Sell stand asks first: one E opens Keep/Sell with Keep under the cursor', () => {
     renderStand();
     openRow('Sell stand');
-    const owned = useGameStore.getState().economy.ownedStands;
+    const owned = countOwnedStands(useGameStore.getState().economy);
     expect(screen.getByRole('menu', { name: 'Sell stand?' }).querySelector('.is-cursor')?.textContent).toBe('Keep');
     press('e');
-    expect(useGameStore.getState().economy.ownedStands).toBe(owned);
+    expect(countOwnedStands(useGameStore.getState().economy)).toBe(owned);
     expect(screen.queryByRole('menu', { name: 'Sell stand?' })).toBeNull();
   });
 

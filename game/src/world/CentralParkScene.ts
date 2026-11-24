@@ -7,14 +7,17 @@ import {
   MARKET_LEMONS_POS as MARKET_LEMONS_XZ,
   MARKET_PITCHERS_POS as MARKET_PITCHERS_XZ,
   MARKET_STALLS_POS as MARKET_STALLS_XZ,
-  OWN_STAND_POS as OWN_STAND_XZ,
-  SELLER_STAND_POS as SELLER_STAND_XZ,
   getColliders,
   hasTraffic,
   PLAYER_SPEED,
   moveWithSliding,
+  plotsOnStreet,
+  sellerStandPos,
+  sellerStandShown,
   type Box,
+  type Vec2,
 } from './collision';
+import { PLOTS, type PlotId, type PlotView } from '../core/plots';
 import { buildGrid, findPath, type NavGrid } from './pathfinding';
 import { followRoute, replaceWaypoints, routeGoal, startRoute, type RouteState } from './routeFollower';
 import { type FxQuality, resolveFxQuality } from './postfxQuality';
@@ -69,8 +72,6 @@ export type NearbyTarget =
   | 'subway'
   | null;
 
-export type PlotStatus = 'empty' | 'leased' | 'built';
-
 export interface QueuedCustomerAnchor {
   id: number;
   x: number;
@@ -80,10 +81,26 @@ export interface QueuedCustomerAnchor {
 }
 
 export interface ProjectedAnchors {
+  /**
+   * Where stand toasts float: the LIVE plot (the one whose queue runs), else the first
+   * plot drawn on this street, else (a street with no plots: the market) the player.
+   */
   ownStand: { x: number; y: number };
+  /** The seller's FOR SALE stand (the UI only draws its sign while the seller is shown). */
   sellerStand: { x: number; y: number };
+  /**
+   * Sign position of every plot drawn on the current street, keyed by plot id (e.g.
+   * 'fidi/corner'). Only plots that are really on this street are listed, so the UI never
+   * places a sign for a plot the scene has not drawn.
+   */
+  plots: Record<PlotId, { x: number; y: number }>;
   player: { x: number; y: number };
   nearby: NearbyTarget;
+  /**
+   * When `nearby` is 'own-stand' or 'plot-lease': WHICH plot the player is next to (a
+   * district has several). null for every other target and when nothing is near.
+   */
+  nearbyPlotId: PlotId | null;
   queue: QueuedCustomerAnchor[];
   marketAnchors: {
     stalls: { x: number; y: number };
@@ -191,13 +208,51 @@ export interface SceneCallbacks {
   onCustomerWalkout?: () => void;
   onTaxiHit?: () => void;
   onAnchorsUpdate: (anchors: ProjectedAnchors) => void;
-  onInteract: (target: NearbyTarget) => void;
+  /**
+   * The player pressed E (or Space) next to `target`. `plotId` says which plot for the
+   * plot targets ('own-stand' / 'plot-lease'); it is null for every other target.
+   */
+  onInteract: (target: NearbyTarget, plotId: PlotId | null) => void;
 }
 
-// Rendering copies (THREE.Vector3, y = 0) of the anchors. The x/z values come
-// from collision.ts so the visible stands and their collision boxes cannot drift apart.
-const OWN_STAND_POS = new THREE.Vector3(OWN_STAND_XZ.x, 0, OWN_STAND_XZ.z);
-const SELLER_STAND_POS = new THREE.Vector3(SELLER_STAND_XZ.x, 0, SELLER_STAND_XZ.z);
+/**
+ * One spot on the street where a plot can be, with everything that can be drawn there,
+ * built ONCE and reused by every district.
+ *
+ * WHY A POOL OF SPOTS INSTEAD OF BUILDING PER DISTRICT
+ *   Every district puts its plots on the same few spots (core/plots.ts: corner, side,
+ *   plaza), so there are only a handful of distinct positions in the whole city. Building
+ *   one set of meshes per spot at start-up and just toggling `visible` on a district
+ *   change means: no meshes, textures or shader programs are created or freed while
+ *   playing (no frame hitch on travel, no GPU memory churn), and dispose() frees them all
+ *   once through the scene graph like everything else. The spots are DERIVED from PLOTS,
+ *   so a new plot position added there gets its own slot automatically.
+ */
+interface PlotSlot {
+  /** `${x},${z}`: identifies the spot (see `slotKey`). */
+  key: string;
+  pos: THREE.Vector3;
+  /** Yellow "FOR LEASE" pad with corner flags (pulses; see animate step 1d). */
+  emptyGroup: THREE.Group;
+  emptyPadMat: THREE.MeshBasicMaterial;
+  /** Green "LEASED / BUILD STAND" pad. */
+  leasedGroup: THREE.Group;
+  /** The player's lemonade stand. */
+  standGroup: THREE.Group;
+  /** The hired worker behind the counter (sprite + shadow). */
+  workerGroup: THREE.Group;
+  /** The 3 pitcher sprites on this stand's counter (see applyPlotVisuals). */
+  pitchers: THREE.Sprite[];
+}
+
+const slotKey = (p: { x: number; z: number }): string => `${p.x},${p.z}`;
+
+/** How close (world units) the player must be to a plot for E to work on it. */
+export const PLOT_INTERACT_RADIUS = 2.65;
+/** The seller's stand is a touch wider, so its reach is a touch larger. */
+export const SELLER_INTERACT_RADIUS = 2.75;
+/** Reach of each Union Square market stall. */
+export const MARKET_INTERACT_RADIUS = 2.25;
 
 const MARKET_STALLS_POS = new THREE.Vector3(MARKET_STALLS_XZ.x, 0, MARKET_STALLS_XZ.z);
 const MARKET_PITCHERS_POS = new THREE.Vector3(MARKET_PITCHERS_XZ.x, 0, MARKET_PITCHERS_XZ.z);
@@ -241,28 +296,117 @@ export interface NearbyCandidate {
   target: Exclude<NearbyTarget, null>;
   dist: number;
   radius: number;
+  /** Which plot, for the plot targets ('own-stand' / 'plot-lease'); absent for the rest. */
+  plotId?: PlotId;
 }
 
 /**
- * Of all candidates whose radius contains the player, the CLOSEST wins. Needed now that a
- * subway entrance can sit within reach of a stand: without a tie-break the first one in
- * the list would always win even when the player is right next to the other.
+ * Of all candidates whose radius contains the player, the CLOSEST wins. Needed because
+ * several interactables can be in reach at once (a subway entrance next to a stand, two
+ * neighbouring plots): without a tie-break the first one in the list would always win
+ * even when the player is right next to another.
  */
-export function pickNearbyTarget(candidates: readonly NearbyCandidate[]): NearbyTarget {
+export function pickNearbyCandidate(candidates: readonly NearbyCandidate[]): NearbyCandidate | null {
   let best: NearbyCandidate | null = null;
   for (const c of candidates) {
     if (c.dist < c.radius && (best === null || c.dist < best.dist)) best = c;
   }
-  return best ? best.target : null;
+  return best;
+}
+
+/** Just the target of `pickNearbyCandidate` (null when nothing is in reach). */
+export function pickNearbyTarget(candidates: readonly NearbyCandidate[]): NearbyTarget {
+  return pickNearbyCandidate(candidates)?.target ?? null;
+}
+
+/**
+ * Everything on the current street the player could interact with, with its distance
+ * from the player. Pure (no three.js objects), so the "which plot am I next to?" rule is
+ * unit-tested directly.
+ *   - the subway entrance (every district has one);
+ *   - in the market: the three stalls;
+ *   - elsewhere: every plot drawn on the street ('own-stand' when built, 'plot-lease'
+ *     when empty or leased, each carrying its plot id), and the seller's stand only
+ *     while it is shown on this street (see collision.ts sellerStandShown).
+ */
+export function streetCandidates(
+  player: Vec2,
+  neighborhood: NeighborhoodId,
+  plots: readonly PlotView[],
+  sellerPresent: boolean
+): NearbyCandidate[] {
+  // Flat (x, z) distance: the player and every anchor stand on the ground plane (y = 0).
+  const dist = (q: Vec2): number => Math.hypot(player.x - q.x, player.z - q.z);
+  const candidates: NearbyCandidate[] = [
+    { target: 'subway', dist: dist(SUBWAY_ENTRANCE_XZ), radius: SUBWAY_INTERACT_RADIUS },
+  ];
+  if (neighborhood === 'market') {
+    candidates.push(
+      { target: 'market-stalls', dist: dist(MARKET_STALLS_XZ), radius: MARKET_INTERACT_RADIUS },
+      { target: 'market-pitchers', dist: dist(MARKET_PITCHERS_XZ), radius: MARKET_INTERACT_RADIUS },
+      { target: 'market-lemons', dist: dist(MARKET_LEMONS_XZ), radius: MARKET_INTERACT_RADIUS }
+    );
+    return candidates;
+  }
+  for (const plot of plotsOnStreet(plots, sellerPresent)) {
+    candidates.push({
+      target: plot.status === 'built' ? 'own-stand' : 'plot-lease',
+      dist: dist(plot),
+      radius: PLOT_INTERACT_RADIUS,
+      plotId: plot.id,
+    });
+  }
+  if (sellerStandShown(neighborhood, sellerPresent)) {
+    candidates.push({ target: 'seller-stand', dist: dist(sellerStandPos()), radius: SELLER_INTERACT_RADIUS });
+  }
+  return candidates;
 }
 
 const QUEUE_MAX_PATIENCE = 16;
-const QUEUE_SLOTS: Array<{ x: number; z: number }> = [
-  { x: OWN_STAND_POS.x, z: OWN_STAND_POS.z + 1.05 },
-  { x: OWN_STAND_POS.x + 0.88, z: OWN_STAND_POS.z + 1.35 },
-  { x: OWN_STAND_POS.x + 1.76, z: OWN_STAND_POS.z + 1.62 },
-  { x: OWN_STAND_POS.x + 2.64, z: OWN_STAND_POS.z + 1.85 },
+/**
+ * Where customers line up, as offsets from the LIVE stand's position: the first spot is
+ * right in front of the counter (+z is toward the camera), and the line then trails off
+ * to the right and slightly forward so every customer stays visible.
+ */
+const QUEUE_SLOT_OFFSETS: readonly Vec2[] = [
+  { x: 0, z: 1.05 },
+  { x: 0.88, z: 1.35 },
+  { x: 1.76, z: 1.62 },
+  { x: 2.64, z: 1.85 },
 ];
+/** The most customers that can wait at once (one per slot). */
+export const QUEUE_CAPACITY = QUEUE_SLOT_OFFSETS.length;
+
+/** The queue spots in front of a stand at `stand` (world x/z). Pure; unit-tested. */
+export function queueSlotsAt(stand: Vec2): Vec2[] {
+  return QUEUE_SLOT_OFFSETS.map((o) => ({ x: stand.x + o.x, z: stand.z + o.z }));
+}
+
+/** A walker considers joining the line only while within this many units (in x) of the live stand. */
+export const QUEUE_REACH_X = 2.6;
+
+/** True when a strolling walker at `walkerX` is level with the live stand at `standX`. */
+export function isWithinQueueReach(walkerX: number, standX: number): boolean {
+  return Math.abs(walkerX - standX) < QUEUE_REACH_X;
+}
+
+/**
+ * Foot traffic: how much busier the live plot is than the Central Park corner the game
+ * was tuned on (core/plots.ts trafficMultiplier). Clamped so a data mistake can neither
+ * stop customers completely nor flood the line every frame.
+ */
+export const FOOT_TRAFFIC_MIN = 0.4;
+export const FOOT_TRAFFIC_MAX = 3;
+
+/**
+ * Seconds until the next walker may join the line. The tuned gap is 2.6..4.8 s (`roll` is
+ * one 0..1 gameplay random draw); a plot with twice the foot traffic halves it, so twice
+ * as many customers arrive. Pure; unit-tested.
+ */
+export function queueJoinCooldownSeconds(roll: number, footTraffic: number): number {
+  const traffic = THREE.MathUtils.clamp(footTraffic, FOOT_TRAFFIC_MIN, FOOT_TRAFFIC_MAX);
+  return (2.6 + roll * 2.2) / traffic;
+}
 
 // 32x40 Growtopia-style human chibi characters (0.80 aspect ratio)
 const PLAYER_SPRITE_H = 1.44;
@@ -335,7 +479,7 @@ export class CentralParkScene {
   private playerPos = new THREE.Vector3(3.6, 0, 0.8);
   /** Click-to-walk route (null = not following one). Waypoints come from findPath. */
   private route: RouteState | null = null;
-  /** Solid boxes for the current neighborhood + plot status (props included). Rebuilt by rebuildNavigation. */
+  /** Solid boxes for the current neighborhood + built plots + seller (props included). Rebuilt by rebuildNavigation. */
   private colliders: Box[] = [];
   /** A* grid over `colliders`; cached because building it is much costlier than querying it. */
   private navGrid: NavGrid | null = null;
@@ -343,7 +487,36 @@ export class CentralParkScene {
   private playerSpecies: FounderSpecies = 'squirrel';
   private workingAtStand = false;
   private currentNeighborhood: NeighborhoodId = 'central-park';
-  private plotStatus: PlotStatus = 'empty';
+  /**
+   * The current district's plots with what the player has done with each (pushed in by
+   * connectScene from the store). Empty until the store says otherwise: the scene never
+   * guesses which plots exist or what state they are in.
+   */
+  private districtPlots: PlotView[] = [];
+  /** The plot whose live customer queue runs (store: selectLivePlotId); null = no live queue. */
+  private livePlotId: PlotId | null = null;
+  /**
+   * World position of the live plot's stand, or null when there is no live queue on this
+   * street. Derived from livePlotId + districtPlots by refreshLivePlot(); everything that
+   * used to be "relative to the one stand" (queue spots, walker reach, sparkles, the
+   * player's spot behind the counter) is relative to this.
+   */
+  private livePos: THREE.Vector3 | null = null;
+  /** Queue spots in front of `livePos` (empty when there is no live plot). */
+  private queueSlots: Vec2[] = [];
+  /** The seller is still in business (store: selectSellerPresent). Drawn only in its own district. */
+  private sellerPresent = false;
+  /** Live plot's crowd vs the tuned Central Park corner; divides the customer arrival gap. */
+  private footTraffic = 1;
+  /**
+   * The counter the player is standing behind while working (null when not working).
+   * Remembered separately from `livePos` so that when the live plot disappears mid-shift
+   * (district change, stand lost) the player still steps out in front of the counter they
+   * were actually at.
+   */
+  private counterPos: THREE.Vector3 | null = null;
+  /** Inputs the current nav grid was built from (see rebuildNavigation); skips no-op rebuilds. */
+  private navKey = '';
   private playerSprite!: THREE.Sprite;
   private playerShadow!: THREE.Mesh;
   private playerFrames!: Record<'down' | 'up' | 'left' | 'right', THREE.CanvasTexture[]>;
@@ -355,8 +528,6 @@ export class CentralParkScene {
   private idleActors: IdleActor[] = [];
   /** One shared texture per queue mood (three tiny canvases for every customer to reuse). */
   private moodTextures!: Record<QueueMood, THREE.CanvasTexture>;
-  /** The "for lease" pad material; pulses while the plot is unleased. */
-  private emptyPlotPadMat: THREE.MeshBasicMaterial | null = null;
   private soulSprite!: THREE.Sprite;
   private koTimer = 0;
   private invulnTimer = 0;
@@ -364,10 +535,12 @@ export class CentralParkScene {
   private stepSoundCooldown = 0;
 
   private neighborhoodGroups = new Map<NeighborhoodId, THREE.Group>();
+  /** Parent of every plot slot and the seller's stand; hidden in the market. */
   private businessStandsGroup = new THREE.Group();
-  private ownStandGroup = new THREE.Group();
-  private emptyPlotGroup = new THREE.Group();
-  private leasedPlotGroup = new THREE.Group();
+  /** One slot per distinct plot position in the city (see PlotSlot). */
+  private plotSlots = new Map<string, PlotSlot>();
+  /** The seller's FOR SALE stand and its broker (Central Park only, while the seller is present). */
+  private sellerStandGroup = new THREE.Group();
   private marketStandsGroup = new THREE.Group();
   private streetSignAMat!: THREE.MeshStandardMaterial;
   private streetSignBMat!: THREE.MeshStandardMaterial;
@@ -389,6 +562,7 @@ export class CentralParkScene {
   private taxiGroup!: THREE.Group;
   private vehicles: TrafficVehicle[] = [];
   private pitcherSprites: THREE.Sprite[] = [];
+  private pitcherCount = 1;
   private standOpen = true;
   /**
    * Chance (0..1) that a walker reaching the stand buys at today's price in this
@@ -486,21 +660,19 @@ export class CentralParkScene {
     this.buildAllNeighborhoods();
 
     this.scene.add(this.businessStandsGroup);
-    this.businessStandsGroup.add(this.ownStandGroup);
-    this.businessStandsGroup.add(this.emptyPlotGroup);
-    this.businessStandsGroup.add(this.leasedPlotGroup);
+    this.businessStandsGroup.add(this.sellerStandGroup);
     this.marketStandsGroup.visible = false;
     this.scene.add(this.marketStandsGroup);
 
-    this.buildPlotMarkings();
-    this.buildOwnStand();
+    this.buildPlotSlots();
     this.buildSellerStand();
     this.buildMarketStands();
     this.buildTaxi();
     this.buildPlayer();
     this.buildPedestrians();
 
-    this.setPlotState('empty');
+    // Plots, the live plot and the seller arrive from the store (connectScene) right after
+    // construction; until then nothing plot-related is drawn.
     this.setNeighborhood('central-park');
 
     // ResizeObserver catches container-only changes (HUD layout, split panes)
@@ -519,11 +691,15 @@ export class CentralParkScene {
     this.animate();
   }
 
+  /**
+   * How many pitchers the player owns. Pitchers are ONE shared pool used at the stand the
+   * player runs, so they are drawn on the live stand only (1 to 3 sprites); other stands
+   * show none. (They used to be one list across every plot spot, so the count only ever
+   * appeared on the corner spot, whichever stand the player was running.)
+   */
   public setPitcherCount(count: number): void {
-    const visible = Math.max(1, Math.min(3, count));
-    this.pitcherSprites.forEach((sp, i) => {
-      sp.visible = i < visible;
-    });
+    this.pitcherCount = count;
+    this.applyPlotVisuals();
   }
 
   public setStandOpen(open: boolean): void {
@@ -535,22 +711,96 @@ export class CentralParkScene {
     this.buyChance = THREE.MathUtils.clamp(chance, 0, 1);
   }
 
-  public setPlotState(status: PlotStatus): void {
-    this.plotStatus = status;
+  /**
+   * The current district's plots and their state (empty / leased / built, staffed or not).
+   * Call AFTER setNeighborhood for the same district: plots of any other district are
+   * ignored (they cannot be on this street).
+   */
+  public setDistrictPlots(plots: readonly PlotView[]): void {
+    this.districtPlots = plots.filter((p) => p.district === this.currentNeighborhood);
     this.rebuildNavigation();
-    this.emptyPlotGroup.visible = status === 'empty';
-    this.leasedPlotGroup.visible = status === 'leased';
-    this.ownStandGroup.visible = status === 'built';
+    this.refreshLivePlot();
+    this.applyPlotVisuals();
+  }
 
-    if (status !== 'built') {
-      if (this.workingAtStand) {
-        this.setWorkingAtStand(false);
-      }
-      this.clearQueuePeacefully();
+  /** Which plot runs the live customer queue (null: none on this street). */
+  public setLivePlot(id: PlotId | null): void {
+    this.livePlotId = id;
+    this.refreshLivePlot();
+    this.applyPlotVisuals();
+  }
+
+  /**
+   * How busy the live plot is compared with the tuned Central Park corner
+   * (core/plots.ts trafficMultiplier). Takes effect from the next customer who joins.
+   */
+  public setFootTraffic(multiplier: number): void {
+    this.footTraffic = THREE.MathUtils.clamp(multiplier, FOOT_TRAFFIC_MIN, FOOT_TRAFFIC_MAX);
+  }
+
+  /** Whether the seller is still in business (its stand is drawn only in its own district). */
+  public setSellerPresent(present: boolean): void {
+    this.sellerPresent = present;
+    this.rebuildNavigation();
+    this.applyPlotVisuals();
+  }
+
+  /**
+   * Recompute `livePos` (and the queue spots in front of it) from the live plot id and
+   * the district's plots. A live queue needs a plot that is on this street AND built; the
+   * store promises that, and checking it here keeps a half-applied update (e.g. the
+   * district already switched, the live id not yet) from opening a queue in mid-air.
+   *
+   * When the live stand moves or disappears, customers waiting at the old counter leave
+   * peacefully, and a player working behind it is moved (or sent out front).
+   */
+  private refreshLivePlot(): void {
+    const plot = this.livePlotId ? this.districtPlots.find((p) => p.id === this.livePlotId) : undefined;
+    const next = plot && plot.status === 'built' ? new THREE.Vector3(plot.x, 0, plot.z) : null;
+    const prev = this.livePos;
+    const same = prev === null ? next === null : next !== null && prev.equals(next);
+    if (same) return;
+
+    this.livePos = next;
+    this.queueSlots = next ? queueSlotsAt(next) : [];
+    this.clearQueuePeacefully();
+    if (this.workingAtStand) {
+      // Re-seat behind the new live counter, or step out when there is none.
+      this.setWorkingAtStand(next !== null);
     }
   }
 
+  /**
+   * Show the right thing on every plot spot: for each spot, find the plot of this district
+   * that sits there (if any) and show its pad or stand; hide everything else. Also places
+   * the seller's stand and the workers. Cheap (a handful of `visible` flags), so it simply
+   * runs after every change instead of tracking what changed.
+   */
+  private applyPlotVisuals(): void {
+    const byKey = new Map(plotsOnStreet(this.districtPlots, this.sellerPresent).map((p) => [slotKey(p), p]));
+    for (const slot of this.plotSlots.values()) {
+      const plot = byKey.get(slot.key);
+      const status = plot?.status ?? null;
+      slot.emptyGroup.visible = status === 'empty';
+      slot.leasedGroup.visible = status === 'leased';
+      slot.standGroup.visible = status === 'built';
+      // A worker stands behind every staffed built stand, except the one the player is
+      // working at right now (the player is behind that counter themselves).
+      const playerIsHere = this.workingAtStand && plot !== undefined && plot.id === this.livePlotId;
+      slot.workerGroup.visible = plot?.status === 'built' && plot.staffed && !playerIsHere;
+      const isLive = plot !== undefined && plot.status === 'built' && plot.id === this.livePlotId;
+      const shown = isLive ? Math.max(1, Math.min(slot.pitchers.length, this.pitcherCount)) : 0;
+      slot.pitchers.forEach((sp, i) => {
+        sp.visible = i < shown;
+      });
+    }
+    this.sellerStandGroup.visible = sellerStandShown(this.currentNeighborhood, this.sellerPresent);
+  }
+
   public burstSaleSparkles(combo = 1): void {
+    // Sales happen at the live stand; with no live stand there is nothing to celebrate.
+    const at = this.livePos;
+    if (!at) return;
     const count = Math.min(18, 6 + Math.max(1, combo) * 2);
     const palette = ['#ffd740', '#fff176', '#ffb74d', '#ffffff'];
     for (let i = 0; i < count; i++) {
@@ -563,9 +813,9 @@ export class CentralParkScene {
       const angle = (i / count) * Math.PI * 2 + (this.rng.cosmetic() - 0.5) * 0.45;
       const spread = 1.1 + this.rng.cosmetic() * 1.4;
       mesh.position.set(
-        OWN_STAND_POS.x + (this.rng.cosmetic() - 0.5) * 0.7,
+        at.x + (this.rng.cosmetic() - 0.5) * 0.7,
         1.2 + this.rng.cosmetic() * 0.35,
-        OWN_STAND_POS.z + (this.rng.cosmetic() - 0.5) * 0.4
+        at.z + (this.rng.cosmetic() - 0.5) * 0.4
       );
       this.scene.add(mesh);
 
@@ -611,15 +861,27 @@ export class CentralParkScene {
   }
 
   /**
-   * Recompute colliders + nav grid. Called whenever the neighborhood or plot
-   * status changes, the only inputs that alter what blocks the player. Any route
-   * planned against the old obstacles is dropped (it may now cross a wall).
+   * Recompute colliders + nav grid. Called whenever the neighborhood, the district's plots
+   * or the seller's presence changes: the only inputs that alter what blocks the player.
+   * The grid is rebuilt only when those inputs really changed (building it is the costly
+   * part, and a mere "a worker was hired" update must not cancel the player's click-walk).
+   * When it IS rebuilt, any route planned against the old obstacles is dropped (it may now
+   * cross a wall).
    */
   private rebuildNavigation(): void {
+    const builtPlots: Vec2[] = plotsOnStreet(this.districtPlots, this.sellerPresent)
+      .filter((p) => p.status === 'built')
+      .map((p) => ({ x: p.x, z: p.z }));
+    const sellerShown = sellerStandShown(this.currentNeighborhood, this.sellerPresent);
+    const key = `${this.currentNeighborhood}|${builtPlots.map(slotKey).join(';')}|${sellerShown}`;
+    if (key === this.navKey) return;
+    this.navKey = key;
+
     this.colliders = withSubwayCollider(
       getColliders({
         neighborhood: this.currentNeighborhood,
-        plotStatus: this.plotStatus,
+        builtPlots,
+        sellerPresent: this.sellerPresent,
         includeProps: true,
       })
     );
@@ -627,18 +889,33 @@ export class CentralParkScene {
     this.route = null;
   }
 
+  /**
+   * Put the player behind the live stand's counter (working) or out in front of the
+   * counter they were working at (not working).
+   *
+   * Working needs a live stand. The store only lets the player work at a built live plot,
+   * so a request without one is a broken contract: it is reported loudly and ignored
+   * rather than seating the player behind an invented counter.
+   */
   public setWorkingAtStand(working: boolean): void {
+    if (working && !this.livePos) {
+      console.error('setWorkingAtStand(true) with no live plot on this street; ignored.');
+      working = false;
+    }
     this.workingAtStand = working;
     this.route = null;
     this.keys.clear();
 
-    if (working) {
+    if (working && this.livePos) {
       // Positioned directly behind the open-top counter so full face & body are 100% visible
-      this.playerPos.set(OWN_STAND_POS.x, 0, OWN_STAND_POS.z - 0.62);
+      this.counterPos = this.livePos.clone();
+      this.playerPos.set(this.counterPos.x, 0, this.counterPos.z - 0.62);
       this.playerFacing = 'down';
-    } else {
-      this.playerPos.set(OWN_STAND_POS.x, 0, OWN_STAND_POS.z + 1.12);
+    } else if (this.counterPos) {
+      // Step out to the front of the counter we were working at.
+      this.playerPos.set(this.counterPos.x, 0, this.counterPos.z + 1.12);
       this.playerFacing = 'down';
+      this.counterPos = null;
     }
 
     if (this.playerSprite) {
@@ -653,11 +930,19 @@ export class CentralParkScene {
       const shadowY = working ? 0.25 : 0.022;
       this.playerShadow.position.set(this.playerPos.x, shadowY, this.playerPos.z + 0.04);
     }
+    // The worker at this stand steps aside while the player works it (and back after).
+    this.applyPlotVisuals();
   }
 
   public setNeighborhood(id: NeighborhoodId): void {
     this.currentNeighborhood = id;
+    // Plots belong to a district: the previous street's plots are not on this one. The
+    // store sends this district's plots right after (connectScene orders it so).
+    this.districtPlots = this.districtPlots.filter((p) => p.district === id);
     this.rebuildNavigation();
+    // Also ends a live queue / shift that belonged to the previous street.
+    this.refreshLivePlot();
+    this.applyPlotVisuals();
     const isMarket = id === 'market';
 
     // Toggle distinct 3D neighborhood geometry groups
@@ -669,12 +954,6 @@ export class CentralParkScene {
     this.marketStandsGroup.visible = isMarket;
     if (this.taxiGroup) {
       this.taxiGroup.visible = ROAD_NEIGHBORHOODS.has(id);
-    }
-    if (isMarket && this.workingAtStand) {
-      this.setWorkingAtStand(false);
-    }
-    if (isMarket) {
-      this.clearQueuePeacefully();
     }
 
     const cfg = getNeighborhood(id);
@@ -2703,7 +2982,6 @@ export class CentralParkScene {
         group.add(sp);
         this.pitcherSprites.push(sp);
       }
-      this.setPitcherCount(1);
     } else if (isSeller) {
       const pTex = createPitcherTexture();
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: pTex, transparent: true }));
@@ -2724,105 +3002,146 @@ export class CentralParkScene {
     parentGroup.add(group);
   }
 
-  private buildPlotMarkings(): void {
-    const buildPaintedPlot = (
-      target: THREE.Group,
-      borderHex: string,
-      fillHex: string,
-      signTop: string,
-      signSub: string
-    ): THREE.MeshBasicMaterial => {
-      target.position.copy(OWN_STAND_POS);
-
-      // Opacity was 0.22, which vanished against the pavement. The unleased pad also
-      // pulses (see animate step 1d) so a free plot is the loudest thing on the street.
-      const padMat = new THREE.MeshBasicMaterial({
-        color: fillHex,
-        transparent: true,
-        opacity: PLOT_PAD_OPACITY,
-        depthWrite: false,
+  /**
+   * Build one PlotSlot per distinct plot position in PLOTS (core/plots.ts): the two
+   * painted pads, the player's stand and a hired worker, all hidden until
+   * applyPlotVisuals() shows the ones the current district needs.
+   */
+  private buildPlotSlots(): void {
+    for (const plot of PLOTS) {
+      const key = slotKey(plot);
+      if (this.plotSlots.has(key)) continue;
+      const pos = new THREE.Vector3(plot.x, 0, plot.z);
+      const emptyGroup = new THREE.Group();
+      const emptyPadMat = this.buildPaintedPlot(emptyGroup, pos, '#f0b829', '#ffe885', 'FOR LEASE', 'PRESS [E]');
+      const slot: PlotSlot = {
+        key,
+        pos,
+        emptyGroup,
+        emptyPadMat,
+        leasedGroup: new THREE.Group(),
+        standGroup: new THREE.Group(),
+        workerGroup: new THREE.Group(),
+        pitchers: [],
+      };
+      const firstPitcher = this.pitcherSprites.length;
+      this.buildPaintedPlot(slot.leasedGroup, pos, '#2fb862', '#7ef2a6', 'LEASED', 'BUILD STAND');
+      this.buildStandStructure(pos, {
+        accentHex: '#e0a512',
+        secondaryHex: '#fff9e6',
+        label: 'LEMONADE',
+        signTopText: 'LEMONADE',
+        signSubText: 'FRESH SQUEEZED',
+        includePitchers: true,
+        parentGroup: slot.standGroup,
       });
-      const pad = new THREE.Mesh(new THREE.PlaneGeometry(2.55, 1.45), padMat);
-      pad.rotation.x = -Math.PI / 2;
-      pad.position.set(0, 0.024, -0.05);
-      target.add(pad);
+      slot.pitchers = this.pitcherSprites.slice(firstPitcher);
+      // Each worker gets its own blink/breath timing (seed) from its slot's index, so two
+      // staffed stands side by side do not blink in unison.
+      this.addShopkeeper('helper', pos, slot.workerGroup, 0.27 + this.plotSlots.size * 0.31);
 
-      const dashMat = new THREE.MeshBasicMaterial({ color: borderHex, depthWrite: false });
-      // Front & back dashed edges
-      for (const ez of [-0.76, 0.66]) {
-        for (let dx = -1.08; dx <= 1.09; dx += 0.36) {
-          const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.13), dashMat);
-          dash.rotation.x = -Math.PI / 2;
-          dash.position.set(dx, 0.028, ez);
-          target.add(dash);
-        }
+      for (const g of [slot.emptyGroup, slot.leasedGroup, slot.standGroup, slot.workerGroup]) {
+        g.visible = false;
+        this.businessStandsGroup.add(g);
       }
-      // Left & right dashed edges
-      for (const ex of [-1.26, 1.26]) {
-        for (let dz = -0.58; dz <= 0.5; dz += 0.36) {
-          const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.24), dashMat);
-          dash.rotation.x = -Math.PI / 2;
-          dash.position.set(ex, 0.028, dz);
-          target.add(dash);
-        }
-      }
-
-      // Small side sign stake
-      const woodMat = new THREE.MeshStandardMaterial({ color: '#61391c', roughness: 0.9 });
-
-      // Four little corner flags in the border colour: tall enough to read from the far
-      // side of the street, thin enough not to hide the stand.
-      const flagMat = new THREE.MeshBasicMaterial({ color: borderHex, side: THREE.DoubleSide });
-      for (const fx of [-1.26, 1.26]) {
-        for (const fz of [-0.76, 0.66]) {
-          const pole = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.5, 0.04), woodMat);
-          pole.position.set(fx, 0.25, fz);
-          target.add(pole);
-          const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.14), flagMat);
-          // Flags point outward from the plot so the two on each side mirror each other.
-          cloth.position.set(fx + Math.sign(fx) * 0.11, 0.43, fz);
-          target.add(cloth);
-        }
-      }
-      const stake = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.12, 0.07), woodMat);
-      stake.position.set(1.42, 0.56, 0.14);
-      stake.castShadow = true;
-      target.add(stake);
-
-      const plaqueTex = this.createStandPlaqueTexture(signTop, signSub, borderHex, '#fffaf0');
-      const plaqueFace = new THREE.MeshStandardMaterial({ map: plaqueTex, roughness: 0.55 });
-      const plaque = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.38, 0.045), [
-        woodMat,
-        woodMat,
-        woodMat,
-        woodMat,
-        plaqueFace,
-        plaqueFace,
-      ]);
-      plaque.position.set(1.42, 1.08, 0.14);
-      plaque.castShadow = true;
-      target.add(plaque);
-      return padMat;
-    };
-
-    this.emptyPlotPadMat = buildPaintedPlot(this.emptyPlotGroup, '#f0b829', '#ffe885', 'FOR LEASE', 'PRESS [E]');
-    buildPaintedPlot(this.leasedPlotGroup, '#2fb862', '#7ef2a6', 'LEASED', 'BUILD STAND');
+      this.plotSlots.set(key, slot);
+    }
   }
 
-  private buildOwnStand(): void {
-    this.buildStandStructure(OWN_STAND_POS, {
-      accentHex: '#e0a512',
-      secondaryHex: '#fff9e6',
-      label: 'LEMONADE',
-      signTopText: 'LEMONADE',
-      signSubText: 'FRESH SQUEEZED',
-      includePitchers: true,
-      parentGroup: this.ownStandGroup,
+  /**
+   * A painted plot on the pavement at `pos`: a translucent pad, a dashed border, four
+   * corner flags and a sign on a stake. Returns the pad material (the empty pad pulses).
+   */
+  private buildPaintedPlot(
+    target: THREE.Group,
+    pos: THREE.Vector3,
+    borderHex: string,
+    fillHex: string,
+    signTop: string,
+    signSub: string
+  ): THREE.MeshBasicMaterial {
+    target.position.copy(pos);
+
+    // Opacity was 0.22, which vanished against the pavement. The unleased pad also
+    // pulses (see animate step 1d) so a free plot is the loudest thing on the street.
+    const padMat = new THREE.MeshBasicMaterial({
+      color: fillHex,
+      transparent: true,
+      opacity: PLOT_PAD_OPACITY,
+      depthWrite: false,
     });
+    const pad = new THREE.Mesh(new THREE.PlaneGeometry(2.55, 1.45), padMat);
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(0, 0.024, -0.05);
+    target.add(pad);
+
+    const dashMat = new THREE.MeshBasicMaterial({ color: borderHex, depthWrite: false });
+    // Front & back dashed edges
+    for (const ez of [-0.76, 0.66]) {
+      for (let dx = -1.08; dx <= 1.09; dx += 0.36) {
+        const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.13), dashMat);
+        dash.rotation.x = -Math.PI / 2;
+        dash.position.set(dx, 0.028, ez);
+        target.add(dash);
+      }
+    }
+    // Left & right dashed edges
+    for (const ex of [-1.26, 1.26]) {
+      for (let dz = -0.58; dz <= 0.5; dz += 0.36) {
+        const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.24), dashMat);
+        dash.rotation.x = -Math.PI / 2;
+        dash.position.set(ex, 0.028, dz);
+        target.add(dash);
+      }
+    }
+
+    // Small side sign stake
+    const woodMat = new THREE.MeshStandardMaterial({ color: '#61391c', roughness: 0.9 });
+
+    // Four little corner flags in the border colour: tall enough to read from the far
+    // side of the street, thin enough not to hide the stand.
+    const flagMat = new THREE.MeshBasicMaterial({ color: borderHex, side: THREE.DoubleSide });
+    for (const fx of [-1.26, 1.26]) {
+      for (const fz of [-0.76, 0.66]) {
+        const pole = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.5, 0.04), woodMat);
+        pole.position.set(fx, 0.25, fz);
+        target.add(pole);
+        const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.14), flagMat);
+        // Flags point outward from the plot so the two on each side mirror each other.
+        cloth.position.set(fx + Math.sign(fx) * 0.11, 0.43, fz);
+        target.add(cloth);
+      }
+    }
+    const stake = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.12, 0.07), woodMat);
+    stake.position.set(1.42, 0.56, 0.14);
+    stake.castShadow = true;
+    target.add(stake);
+
+    const plaqueTex = this.createStandPlaqueTexture(signTop, signSub, borderHex, '#fffaf0');
+    const plaqueFace = new THREE.MeshStandardMaterial({ map: plaqueTex, roughness: 0.55 });
+    const plaque = new THREE.Mesh(new THREE.BoxGeometry(0.76, 0.38, 0.045), [
+      woodMat,
+      woodMat,
+      woodMat,
+      woodMat,
+      plaqueFace,
+      plaqueFace,
+    ]);
+    plaque.position.set(1.42, 1.08, 0.14);
+    plaque.castShadow = true;
+    target.add(plaque);
+    return padMat;
   }
 
+  /**
+   * The seller's FOR SALE stand and its broker, at the seller plot (core/plots.ts). Lives
+   * in its own group because it is shown only in Central Park and only until the deal is
+   * won (applyPlotVisuals); it used to sit in every district, which was wrong.
+   */
   private buildSellerStand(): void {
-    this.buildStandStructure(SELLER_STAND_POS, {
+    const sellerPos = sellerStandPos();
+    const pos = new THREE.Vector3(sellerPos.x, 0, sellerPos.z);
+    this.buildStandStructure(pos, {
       accentHex: '#257d72',
       secondaryHex: '#f6eedc',
       label: 'FOR SALE',
@@ -2830,10 +3149,11 @@ export class CentralParkScene {
       signSubText: 'INQUIRE WITHIN',
       includePitchers: false,
       isSeller: true,
-      parentGroup: this.businessStandsGroup,
+      parentGroup: this.sellerStandGroup,
     });
 
-    this.addShopkeeper('broker', SELLER_STAND_POS, this.businessStandsGroup, 0.15);
+    this.addShopkeeper('broker', pos, this.sellerStandGroup, 0.15);
+    this.sellerStandGroup.visible = false;
   }
 
   /**
@@ -3321,9 +3641,9 @@ export class CentralParkScene {
       // window's "Leave" (or since the last interaction) repeats; swallow the repeats so
       // the window you just left does not pop straight back open.
       if (e.repeat) return true;
-      const nearby = this.getNearbyTarget();
+      const nearby = this.getNearby();
       if (nearby) {
-        this.callbacks.onInteract(nearby);
+        this.callbacks.onInteract(nearby.target, nearby.plotId ?? null);
         return true;
       }
     }
@@ -3362,26 +3682,11 @@ export class CentralParkScene {
     if (result.kind === 'path') this.route = startRoute(this.playerPos, result.waypoints);
   }
 
-  private getNearbyTarget(): NearbyTarget {
-    const p = this.playerPos;
-    // Flat (x, z) distance: the player and every anchor stand on the ground plane (y = 0).
-    const dist = (q: { x: number; z: number }): number => Math.hypot(p.x - q.x, p.z - q.z);
-    const candidates: NearbyCandidate[] = [
-      { target: 'subway', dist: dist(SUBWAY_ENTRANCE_XZ), radius: SUBWAY_INTERACT_RADIUS },
-    ];
-    if (this.currentNeighborhood === 'market') {
-      candidates.push(
-        { target: 'market-stalls', dist: dist(MARKET_STALLS_POS), radius: 2.25 },
-        { target: 'market-pitchers', dist: dist(MARKET_PITCHERS_POS), radius: 2.25 },
-        { target: 'market-lemons', dist: dist(MARKET_LEMONS_POS), radius: 2.25 }
-      );
-    } else {
-      candidates.push(
-        { target: this.plotStatus === 'built' ? 'own-stand' : 'plot-lease', dist: dist(OWN_STAND_POS), radius: 2.65 },
-        { target: 'seller-stand', dist: dist(SELLER_STAND_POS), radius: 2.75 }
-      );
-    }
-    return pickNearbyTarget(candidates);
+  /** What the player is standing next to right now (closest in reach), or null. */
+  private getNearby(): NearbyCandidate | null {
+    return pickNearbyCandidate(
+      streetCandidates(this.playerPos, this.currentNeighborhood, this.districtPlots, this.sellerPresent)
+    );
   }
 
   private projectToScreen(pos: THREE.Vector3, yOffset = 2.1): { x: number; y: number } {
@@ -3434,20 +3739,22 @@ export class CentralParkScene {
         this.playerShadow.position.set(this.playerPos.x, 0.022, this.playerPos.z + 0.04);
         this.invulnTimer = 2.0;
       }
-    } else if (this.workingAtStand) {
+    } else if (this.workingAtStand && this.counterPos) {
+      // Behind the live stand's counter (counterPos is set whenever workingAtStand is true).
+      const counter = this.counterPos;
       this.playerAnimTimer += dt * 4.2;
       const workBob = Math.abs(Math.sin(this.playerAnimTimer * Math.PI)) * 0.05;
       const workFrame = Math.floor(this.playerAnimTimer) % 2 === 0 ? 0 : 1;
       playerMat.map = this.playerFrames.down[workFrame];
       playerMat.opacity = 1;
       this.playerSprite.position.set(
-        OWN_STAND_POS.x,
+        counter.x,
         PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT + workBob,
-        OWN_STAND_POS.z - 0.62
+        counter.z - 0.62
       );
       const sScale = 1 - workBob * 1.1;
       this.playerShadow.scale.set(sScale, sScale, 1);
-      this.playerShadow.position.set(OWN_STAND_POS.x, 0.265, OWN_STAND_POS.z - 0.58);
+      this.playerShadow.position.set(counter.x, 0.265, counter.z - 0.58);
     } else {
       if (this.invulnTimer > 0) {
         this.invulnTimer = Math.max(0, this.invulnTimer - dt);
@@ -3559,9 +3866,11 @@ export class CentralParkScene {
       }
     }
 
-    // 1d. "For lease" pad: a slow pulse while the plot is still unleased.
-    if (this.emptyPlotPadMat && this.plotStatus === 'empty') {
-      this.emptyPlotPadMat.opacity = PLOT_PAD_OPACITY + Math.sin(this.elapsedTime * 2.4) * 0.11;
+    // 1d. "For lease" pads: a slow pulse on every plot that is still unleased. All pads
+    // pulse in step on purpose: together they read as "these are all available".
+    const padOpacity = PLOT_PAD_OPACITY + Math.sin(this.elapsedTime * 2.4) * 0.11;
+    for (const slot of this.plotSlots.values()) {
+      if (slot.emptyGroup.visible) slot.emptyPadMat.opacity = padOpacity;
     }
 
     // 2. Smooth HD-2D camera follow (straight-on 3/4)
@@ -3636,7 +3945,7 @@ export class CentralParkScene {
       }
     }
 
-    // 5. Pedestrians strolling, queuing in front of OWN_STAND_POS, and waiting with patience timers
+    // 5. Pedestrians strolling, queuing in front of the LIVE stand (livePos), and waiting with patience timers
     if (this.queueJoinCooldown > 0) this.queueJoinCooldown -= dt;
 
     let walkedOut = false;
@@ -3674,7 +3983,7 @@ export class CentralParkScene {
       }
 
       if (ped.state === 'walking-to-slot' && ped.queueSlot >= 0) {
-        const slot = QUEUE_SLOTS[ped.queueSlot];
+        const slot = this.queueSlots[ped.queueSlot];
         const dx = slot.x - ped.x;
         const dz = slot.z - ped.z;
         const dist = Math.hypot(dx, dz);
@@ -3777,18 +4086,20 @@ export class CentralParkScene {
         continue;
       }
 
-      // Join queue in front of stand ONLY when stand is built & open (NO auto-selling!)
+      // Join the queue in front of the LIVE stand, only while it exists and is open (NO
+      // auto-selling!). Other built stands on the street sell through their workers
+      // (core/awaySales.ts), not through walkers in this scene.
+      const live = this.livePos;
       if (
+        live !== null &&
         ped.state === 'strolling' &&
-        this.currentNeighborhood !== 'market' &&
-        this.plotStatus === 'built' &&
         this.standOpen &&
         ped.canBuy &&
         !ped.decidedAtStand &&
         ped.boughtCooldown <= 0 &&
-        this.queue.length < QUEUE_SLOTS.length &&
+        this.queue.length < QUEUE_CAPACITY &&
         this.queueJoinCooldown <= 0 &&
-        Math.abs(ped.x - OWN_STAND_POS.x) < 2.6
+        isWithinQueueReach(ped.x, live.x)
       ) {
         // PRICE DECIDES: one roll per pass against the buy chance for today's price.
         // Rolled only when there is room in line, so a full line never counts as a
@@ -3804,7 +4115,8 @@ export class CentralParkScene {
         ped.patience = QUEUE_MAX_PATIENCE;
         ped.maxPatience = QUEUE_MAX_PATIENCE;
         this.queue.push(ped);
-        this.queueJoinCooldown = 2.6 + this.rng.gameplay() * 2.2;
+        // A busier plot (more walkers per day) sends the next customer sooner.
+        this.queueJoinCooldown = queueJoinCooldownSeconds(this.rng.gameplay(), this.footTraffic);
         continue;
       }
 
@@ -3866,11 +4178,30 @@ export class CentralParkScene {
       };
     });
 
+    // Every plot drawn on this street gets a sign anchor at the same height the single
+    // stand used (2.05 units up, just above the stand's roof sign).
+    const onStreet = plotsOnStreet(this.districtPlots, this.sellerPresent);
+    const plotAnchors: Record<PlotId, { x: number; y: number }> = {};
+    for (const plot of onStreet) {
+      plotAnchors[plot.id] = this.projectToScreen(new THREE.Vector3(plot.x, 0, plot.z), 2.05);
+    }
+    // Toasts about "your stand" float over the live stand; with none, over the first plot
+    // on this street; on a street without plots (the market), over the player.
+    const toastAnchor = this.livePos
+      ? this.projectToScreen(this.livePos, 2.05)
+      : onStreet.length > 0
+        ? plotAnchors[onStreet[0].id]
+        : this.projectToScreen(this.playerPos, 1.8);
+    const seller = sellerStandPos();
+    const nearby = this.getNearby();
+
     this.callbacks.onAnchorsUpdate({
-      ownStand: this.projectToScreen(OWN_STAND_POS, 2.05),
-      sellerStand: this.projectToScreen(SELLER_STAND_POS, 2.05),
+      ownStand: toastAnchor,
+      sellerStand: this.projectToScreen(new THREE.Vector3(seller.x, 0, seller.z), 2.05),
+      plots: plotAnchors,
       player: this.projectToScreen(this.playerPos, 1.8),
-      nearby: this.getNearbyTarget(),
+      nearby: nearby?.target ?? null,
+      nearbyPlotId: nearby?.plotId ?? null,
       queue: queueAnchors,
       subway: this.projectToScreen(new THREE.Vector3(SUBWAY_ENTRANCE_XZ.x, 0, SUBWAY_ENTRANCE_XZ.z), 2.5),
       marketAnchors: {

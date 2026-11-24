@@ -5,7 +5,7 @@ import {
   DayRecord,
   getDailyHurdleCharge,
   getDailyWages,
-  getInvestedCapital,
+  getMoneyInBusiness,
   SliceState,
 } from './sliceModel';
 
@@ -13,8 +13,8 @@ import {
  * TODAY VS THE LINE: what the day would score if the bell rang right now.
  *
  * The player's opponent each day is "the line": everything today must cover before
- * any value is created = rent + wages (paid in cash) + the 5% charge on money tied up
- * (an opportunity cost, never paid). `earned` is the gross profit from cups sold so far.
+ * any value is created = rent + wages (paid in cash) + the 5% charge on ALL the money in
+ * the business, idle cash included (an opportunity cost, never paid). `earned` is the gross profit from cups sold so far.
  * Value created today = earned - line. Positive = the day beats the line.
  *
  * This is the ONE formula for that number. The live HUD meter, the Books tab and the
@@ -25,7 +25,7 @@ export interface DayProjection {
   /** Revenue minus cost of the cups sold so far today. */
   earned: number;
   rentAndWages: number;
-  /** 5% of money tied up in stock and equipment right now. */
+  /** 5% of all money in the business (cash + stock + gear) right now. */
   hurdleCharge: number;
   /** rentAndWages + hurdleCharge: what `earned` has to beat. */
   line: number;
@@ -58,9 +58,10 @@ export const beatTheLine = (r: Pick<DayRecord, 'valueCreated'>): boolean => r.va
  *
  * Economic-value accounting in one place:
  *   NOPAT          = revenue − cost of goods sold − (rent + wages)
- *   hurdle charge  = 5% of invested capital (inventory + equipment)
+ *   hurdle charge  = 5% of all money in the business (cash + inventory + equipment)
  *   value created  = NOPAT − hurdle charge   (positive means the money beat its 5% cost)
- *   ROIC           = NOPAT / invested capital (floored at $1 so day 1 doesn't divide by 0)
+ *   return         = NOPAT / money in the business (floored at $1 so it never divides by 0),
+ *                    so "return >= 5%" and "value created >= 0" are the same test.
  *
  * Only rent and wages leave the cash box; the hurdle charge is an opportunity cost
  * that lowers value created but is not paid to anyone. (Moved unchanged from App.tsx.)
@@ -70,8 +71,9 @@ export function closeDay(cur: SliceState): { state: SliceState; record: DayRecor
 
   const { rentAndWages, hurdleCharge, nopat, valueCreated } = projectDay(cur);
   const cumulativeValue = cents(cur.totalValueCreated + valueCreated);
-  const invested = getInvestedCapital(cur);
-  const roicPct = +((nopat / Math.max(1, invested)) * 100).toFixed(1);
+  // Read BEFORE rent and wages leave the cash box: this is the base the 5% was charged on.
+  const chargedOn = getMoneyInBusiness(cur);
+  const roicPct = +((nopat / Math.max(1, chargedOn)) * 100).toFixed(1);
 
   const record: DayRecord = {
     day: cur.day,
@@ -81,6 +83,7 @@ export function closeDay(cur: SliceState): { state: SliceState; record: DayRecor
     rentAndWages,
     nopat,
     hurdleCharge,
+    chargedOn,
     valueCreated,
     cumulativeValue,
     roicPct,

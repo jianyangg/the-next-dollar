@@ -13,7 +13,6 @@ describe('previewPurchase', () => {
       { kind: 'cash', delta: -10 },
       { kind: 'gear', delta: 10 },
       { kind: 'profit', delta: 0 },
-      { kind: 'line', delta: 0.5 },
     ]);
     expect(economy.cash).toBe(30); // the preview never writes anything
   });
@@ -24,8 +23,8 @@ describe('previewPurchase', () => {
   });
 
   it('asks for a kit when the build rule refuses for lack of one', () => {
-    const leased = { ...createInitialState(), plots: { ...createInitialState().plots, broadway: 'leased' as const } };
-    expect(previewPurchase(leased, (s) => buildStand(s, 'broadway'), STALL_KIT_COST)).toEqual({
+    const leased = { ...createInitialState(), plots: { ...createInitialState().plots, 'broadway/corner': 'leased' as const } };
+    expect(previewPurchase(leased, (s) => buildStand(s, 'broadway/corner'), STALL_KIT_COST)).toEqual({
       kind: 'need',
       cost: STALL_KIT_COST,
       needs: 'kit',

@@ -9,7 +9,9 @@ import {
   resetAnchorStore,
   selectOwnStand,
   useAnchorPoint,
+  useNearbyPlotId,
   useNearbyTarget,
+  usePlotAnchorKnown,
   useQueueIds,
 } from './anchorStore';
 
@@ -65,6 +67,40 @@ describe('useAnchorPoint', () => {
 });
 
 describe('discrete-value hooks', () => {
+  it('useNearbyPlotId re-renders only when the player reaches a different plot', () => {
+    let renders = 0;
+    function Probe() {
+      renders += 1;
+      return <span data-testid="plot">{String(useNearbyPlotId())}</span>;
+    }
+    const { getByTestId } = render(<Probe />);
+    expect(getByTestId('plot').textContent).toBe('null');
+    act(() => publishAnchors(snapshot({ nearby: 'plot-lease', nearbyPlotId: 'fidi/side' })));
+    expect(getByTestId('plot').textContent).toBe('fidi/side');
+    const after = renders;
+    act(() => {
+      for (let i = 0; i < 50; i++) publishAnchors(snapshot({ player: { x: i, y: i } }));
+    });
+    expect(renders).toBe(after);
+  });
+
+  it('usePlotAnchorKnown flips when the scene first publishes a plot, not as it moves', () => {
+    let renders = 0;
+    function Probe() {
+      renders += 1;
+      return <span data-testid="known">{String(usePlotAnchorKnown('fidi/corner'))}</span>;
+    }
+    const { getByTestId } = render(<Probe />);
+    expect(getByTestId('known').textContent).toBe('false');
+    act(() => publishAnchors(snapshot({ plots: { 'fidi/corner': { x: 1, y: 2 } } })));
+    expect(getByTestId('known').textContent).toBe('true');
+    const after = renders;
+    act(() => {
+      for (let i = 0; i < 50; i++) publishAnchors(snapshot({ plots: { 'fidi/corner': { x: i, y: 2 } } }));
+    });
+    expect(renders).toBe(after);
+  });
+
   it('useNearbyTarget re-renders only when the target changes, not on position updates', () => {
     let renders = 0;
     function Probe() {

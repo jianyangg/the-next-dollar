@@ -1,7 +1,8 @@
 import { cents } from '../core/money';
+import { plotsIn } from '../core/plots';
 import * as Purchases from '../core/purchases';
 import { getRunSeed } from '../core/runRandom';
-import { STALL_KIT_COST, type SliceState } from '../core/sliceModel';
+import { countOwnedStands, STALL_KIT_COST, type SliceState } from '../core/sliceModel';
 import { selectClockPaused, useGameStore } from '../state/gameStore';
 
 /**
@@ -236,19 +237,22 @@ export function resetSellerDeal(): DevResult {
  */
 export function buildStandHere(): DevResult {
   const district = store().neighborhoodId;
+  // The district's corner plot (the market has none): the one a new player builds first.
+  const plotId = plotsIn(district).find((p) => p.kind === 'corner')?.id;
+  if (!plotId) return refuse('buildStandHere', 'no-plot-here');
   let s = store().economy;
-  if (s.plots[district] === 'built') return refuse('buildStandHere', 'already-built');
+  if (s.plots[plotId] === 'built') return refuse('buildStandHere', 'already-built');
 
-  if (s.plots[district] === 'empty') {
-    const leased = Purchases.signLease(s, district);
+  if (s.plots[plotId] === 'empty') {
+    const leased = Purchases.signLease(s, plotId);
     if (!leased.ok) return refuse('buildStandHere', leased.reason);
     s = leased.state;
   }
   if (s.stallKits < 1) s = fundedPurchase(s, STALL_KIT_COST, Purchases.buyStallKit);
-  const built = Purchases.buildStand(s, district);
+  const built = Purchases.buildStand(s, plotId);
   if (!built.ok) return refuse('buildStandHere', built.reason);
   commitEconomy('buildStandHere', built.state);
-  console.info('[dev]', 'buildStandHere', { district, ownedStands: built.state.ownedStands });
+  console.info('[dev]', 'buildStandHere', { plotId, ownedStands: countOwnedStands(built.state) });
   return OK;
 }
 

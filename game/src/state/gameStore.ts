@@ -8,6 +8,9 @@ import { CENTRAL_PARK_DEAL, CENTRAL_PARK_DEAL_ID, resolveSealedBid, toPublicView
 import { type BrewGameState, initGame, pressGame, pressStirKey, stepGame } from '../core/minigames';
 import { getNeighborhood, type NeighborhoodId } from '../core/neighborhoods';
 import * as Purchases from '../core/purchases';
+import { stepAwaySales } from '../core/awaySales';
+import { getPlot, type PlotId, plotsIn, type PlotView, SELLER_PLOT_ID } from '../core/plots';
+import { getPlotRent } from '../core/rent';
 import { ledgerChips, type MoneyChip } from '../core/ledgerChips';
 import { STARTER_NAME, type StarterItem, starterShortfall } from '../core/tutorial';
 import { gameplayRandom } from '../core/runRandom';
@@ -16,6 +19,7 @@ import { dealMachine } from '../deal/dealMachine';
 import { type DealView, toDealView } from '../deal/dealView';
 import { createSellerClient, getRunId, type SellerClient } from '../deal/sellerClient';
 import {
+  countOwnedStands,
   createInitialState,
   type DayRecord,
   MANAGER_DAILY_WAGE,
@@ -143,6 +147,17 @@ export interface GameData {
   // --- meta ---
   founderSpecies: FounderSpecies;
   neighborhoodId: NeighborhoodId;
+  /**
+   * The plot the player last walked up to in this district (to lease, build, staff or
+   * run it). Null until they pick one; cleared on every subway ride. The lease window
+   * and the stand counter act on this plot.
+   */
+  activePlotId: PlotId | null;
+  /**
+   * Fractional cups each staffed stand has "earned" toward its next away sale
+   * (core/awaySales.ts). Kept between clock ticks; cleared at the day close.
+   */
+  awayCarry: Record<PlotId, number>;
   /** Last non-market district, so "Back to <district>" knows where to return. */
   lastBusinessNeighborhood: NeighborhoodId;
   muted: boolean;
@@ -203,10 +218,12 @@ export interface GameActions {
   // scene events
   customerWalkout: () => void;
   taxiHit: () => void;
-  interact: (target: NearbyTarget) => void;
+  /** E / click on something in the world. `plotId` names the plot for stand and lease targets. */
+  interact: (target: NearbyTarget, plotId?: PlotId | null) => void;
 
   // movement
-  enterStand: () => void;
+  /** Step behind the counter of a built stand (the active plot, or `plotId`). */
+  enterStand: (plotId?: PlotId) => void;
   exitStand: () => void;
   selectNeighborhood: (id: NeighborhoodId) => void;
 
@@ -218,7 +235,10 @@ export interface GameActions {
   divestCurrentStand: () => void;
   signLease: () => void;
   buildStandOnPlot: () => void;
+  /** Put a worker on the active plot's stand. */
   hireWorker: () => void;
+  /** Let the active plot's worker go. */
+  letWorkerGo: () => void;
   hireManager: () => void;
   setPrice: (price: number) => void;
 
@@ -296,6 +316,8 @@ export function createInitialGameData(): GameData {
     tutorialActive: true,
     founderSpecies: 'squirrel',
     neighborhoodId: 'central-park',
+    activePlotId: null,
+    awayCarry: {},
     lastBusinessNeighborhood: 'central-park',
     muted: soundEngine.isMuted(),
     toasts: [],
@@ -307,15 +329,72 @@ export function createInitialGameData(): GameData {
   };
 }
 
-/** The plot status of the district the player is standing in. */
-export const selectCurrentPlotStatus = (s: GameData) => s.economy.plots[s.neighborhoodId] ?? 'empty';
+/**
+ * The plots of the district the player is in, with what the player has done with each
+ * (empty / leased / built, staffed or not). The 3D scene draws these and the UI labels
+ * them. A new array each call: subscribe through `selectDistrictPlotsKey` (a string
+ * that only changes when something visible changed), then read this.
+ */
+export const selectDistrictPlots = (s: GameData): PlotView[] =>
+  plotsIn(s.neighborhoodId).map((p) => ({
+    ...p,
+    // The seller's stand is shown at its real rent (it steps up after 4 days).
+    dailyRent: getPlotRent(s.economy, p.id),
+    status: s.economy.plots[p.id] ?? 'empty',
+    staffed: s.economy.staffedPlots.includes(p.id),
+  }));
 
-/** The scene should let customers queue only for a built, stocked, open stand. */
-export const selectStandOpen = (s: GameData): boolean =>
-  selectCurrentPlotStatus(s) === 'built' &&
-  s.economy.cupsInStock > 0 &&
-  s.economy.day <= s.economy.maxDays &&
-  s.eodRecord === null;
+/** Changes exactly when `selectDistrictPlots` would draw something different. */
+export const selectDistrictPlotsKey = (s: GameData): string =>
+  selectDistrictPlots(s)
+    .map((p) => `${p.id}:${p.status}:${p.staffed ? 1 : 0}:${p.dailyRent}`)
+    .join('|');
+
+/**
+ * THE LIVE PLOT: the one stand in this district where the 3D scene's customers queue
+ * and the player serves in person. It is the plot the player last walked up to, if
+ * built; otherwise the district's first built plot (corner, side, plaza order); null
+ * when the district has no built stand.
+ */
+export const selectLivePlotId = (s: GameData): PlotId | null => {
+  const built = plotsIn(s.neighborhoodId).filter((p) => s.economy.plots[p.id] === 'built');
+  if (built.length === 0) return null;
+  const active = built.find((p) => p.id === s.activePlotId);
+  return (active ?? built[0]).id;
+};
+
+/** The plot the lease window and stand menus act on (null = none picked). */
+export const selectActivePlot = (s: GameData): PlotView | null =>
+  selectDistrictPlots(s).find((p) => p.id === s.activePlotId) ?? null;
+
+/** The seller still runs their stand (Central Park only, until the player buys it). */
+export const selectSellerPresent = (s: GameData): boolean =>
+  s.neighborhoodId === 'central-park' && s.economy.plots[SELLER_PLOT_ID] !== 'built';
+
+/**
+ * The scene lets customers queue at the live plot only when it is built, stocked and
+ * open, and only when someone will serve them: the player (or the manager) at the
+ * counter, or no worker there. A staffed stand the player is not running sells through
+ * core/awaySales instead; letting the scene's walkers queue there too would count its
+ * customers twice (and they would walk out angry while the worker "served" them).
+ */
+export const selectStandOpen = (s: GameData): boolean => {
+  const live = selectLivePlotId(s);
+  if (live === null) return false;
+  const staffedAndAway = s.economy.staffedPlots.includes(live) && !s.workingAtStand && s.economy.managers === 0;
+  return (
+    !staffedAndAway && s.economy.cupsInStock > 0 && s.economy.day <= s.economy.maxDays && s.eodRecord === null
+  );
+};
+
+/**
+ * Workers helping at the stand the player is running (0 or 1): a worker at THIS stand
+ * widens the brew sweet spots (core/brewing.ts). Workers at other stands do not.
+ */
+export const selectWorkersHere = (s: GameData): number => {
+  const live = selectLivePlotId(s);
+  return live !== null && s.economy.staffedPlots.includes(live) ? 1 : 0;
+};
 
 /** True while the day clock must stand still (a panel is open, day 1 has no stand yet...). */
 export const selectClockPaused = (s: GameData): boolean =>
@@ -331,13 +410,13 @@ export const selectClockPaused = (s: GameData): boolean =>
       s.runOver,
     day: s.economy.day,
     maxDays: s.economy.maxDays,
-    ownedStands: s.economy.ownedStands,
+    ownedStands: countOwnedStands(s.economy),
   });
 
 /** Interval (ms) of the hired manager's auto-serve beat, or null when it must not run. */
 export const selectManagerIntervalMs = (s: GameData): number | null => {
   const { managers, day, maxDays } = s.economy;
-  if (managers <= 0 || selectCurrentPlotStatus(s) !== 'built' || day > maxDays || s.eodRecord !== null) {
+  if (managers <= 0 || selectLivePlotId(s) === null || day > maxDays || s.eodRecord !== null) {
     return null;
   }
   return Math.max(900, 1850 - (managers - 1) * 350);
@@ -425,6 +504,32 @@ export const useGameStore = create<GameState>()(
       ): void => {
         const brewed = extra.brewedCups ?? get().brewedCups;
         patch({ ...extra, economy: next, brewedCups: Math.min(brewed, next.cupsInStock) }, name);
+      };
+
+      /**
+       * Staffed stands sell while the player is elsewhere (core/awaySales.ts). Called on
+       * every clock tick with the share of the day that tick covered. The stand the
+       * player is serving at in person is skipped: its sales come from the 3D scene.
+       */
+      const runAwaySales = (dayFraction: number): void => {
+        const s = get();
+        if (s.economy.staffedPlots.length === 0 || s.economy.day > s.economy.maxDays) return;
+        const result = stepAwaySales({
+          state: s.economy,
+          livePlotId: s.workingAtStand ? selectLivePlotId(s) : null,
+          reservedCups: s.brewedCups,
+          dayFraction,
+          carry: s.awayCarry,
+          nextReviewId: s.nextReviewId,
+        });
+        if (result.sold > 0) {
+          // A tick is a fraction of a second, so this is at most a cup or two at a time.
+          commitEconomy(result.state, 'awaySales', { awayCarry: result.carry, nextReviewId: result.nextReviewId });
+          soundEngine.playCoin(1);
+        } else {
+          patch({ awayCarry: result.carry }, 'awayCarry');
+        }
+        if (result.missed > 0) pushToast('Out of lemons', 'negative', 'own-stand');
       };
 
       /**
@@ -703,18 +808,22 @@ export const useGameStore = create<GameState>()(
           pushToast('Honk!', 'negative', 'own-stand');
         },
 
-        interact: (target) => {
+        interact: (target, plotId = null) => {
           if (!target) return;
-          if (target === 'own-stand') actions.enterStand();
+          if (plotId) patch({ activePlotId: plotId }, 'pickPlot');
+          if (target === 'own-stand') actions.enterStand(plotId ?? undefined);
           else if (target === 'subway') actions.toggleMap({ click: true });
           else patch({ activeModal: target }, 'interact');
         },
 
         // ===== movement =====
-        enterStand: () => {
+        enterStand: (plotId) => {
+          const id = plotId ?? get().activePlotId ?? selectLivePlotId(get());
+          if (!id || get().economy.plots[id] !== 'built') return;
           soundEngine.playClick();
-          // The scene is told through the store subscription in connectScene.ts.
-          patch({ activeModal: null, workingAtStand: true }, 'enterStand');
+          // Running a stand in person makes it the live plot: the scene moves the queue
+          // there (store subscription in connectScene.ts).
+          patch({ activeModal: null, workingAtStand: true, activePlotId: id }, 'enterStand');
         },
 
         exitStand: () => {
@@ -744,6 +853,7 @@ export const useGameStore = create<GameState>()(
               {
                 lastBusinessNeighborhood: id !== 'market' ? id : get().lastBusinessNeighborhood,
                 neighborhoodId: id,
+                activePlotId: null,
                 travel: { to: id, phase: 'reveal' },
               },
               'travelArrive'
@@ -804,9 +914,9 @@ export const useGameStore = create<GameState>()(
         },
 
         divestCurrentStand: () => {
-          const district = get().neighborhoodId;
+          const plotId = get().activePlotId ?? selectLivePlotId(get());
           const before = get().economy;
-          if (!runPurchase((s) => Purchases.divestStand(s, district), 'divestStand').ok) {
+          if (!plotId || !runPurchase((s) => Purchases.divestStand(s, plotId), 'divestStand').ok) {
             soundEngine.playReject();
             pushToast('No stand here', 'negative', 'own-stand');
             return;
@@ -819,16 +929,16 @@ export const useGameStore = create<GameState>()(
         },
 
         signLease: () => {
-          const district = get().neighborhoodId;
-          if (!runPurchase((s) => Purchases.signLease(s, district), 'signLease').ok) return;
-          const hood = getNeighborhood(district);
+          const plotId = get().activePlotId;
+          if (!plotId || !runPurchase((s) => Purchases.signLease(s, plotId), 'signLease').ok) return;
           soundEngine.playBuy();
-          pushToast(`Leased · rent $${hood.dailyRent}/day`, 'positive', 'own-stand');
+          pushToast(`Leased · rent $${getPlot(plotId).dailyRent}/day`, 'positive', 'own-stand');
         },
 
         buildStandOnPlot: () => {
-          const district = get().neighborhoodId;
-          const result = runPurchase((s) => Purchases.buildStand(s, district), 'buildStand');
+          const plotId = get().activePlotId;
+          if (!plotId) return;
+          const result = runPurchase((s) => Purchases.buildStand(s, plotId), 'buildStand');
           if (!result.ok) {
             if (result.reason === 'no-stall-kit') {
               soundEngine.playReject();
@@ -842,9 +952,20 @@ export const useGameStore = create<GameState>()(
         },
 
         hireWorker: () => {
-          commitEconomy(Purchases.hireWorker(get().economy), 'hireWorker');
+          const plotId = get().activePlotId ?? selectLivePlotId(get());
+          if (!plotId || !runPurchase((s) => Purchases.hireWorker(s, plotId), 'hireWorker').ok) {
+            soundEngine.playReject();
+            return;
+          }
           soundEngine.playBuy();
           pushToast(`Worker · $${WORKER_DAILY_WAGE}/day`, 'positive', 'own-stand');
+        },
+
+        letWorkerGo: () => {
+          const plotId = get().activePlotId ?? selectLivePlotId(get());
+          if (!plotId || !runPurchase((s) => Purchases.letWorkerGo(s, plotId), 'letWorkerGo').ok) return;
+          soundEngine.playClick();
+          pushToast('Worker gone', 'neutral', 'own-stand');
         },
 
         hireManager: () => {
@@ -894,7 +1015,7 @@ export const useGameStore = create<GameState>()(
             const { economy: latest, spaceHeld } = get();
             const result = stepGame(game, dt, {
               pitchers: latest.pitchers,
-              workers: latest.workers,
+              workers: selectWorkersHere(get()),
               spaceHeld,
             });
             patch({ brewGame: result.state }, 'brewFrame');
@@ -918,8 +1039,7 @@ export const useGameStore = create<GameState>()(
             return;
           }
 
-          const { pitchers, workers } = get().economy;
-          const result = pressGame(game, { pitchers, workers });
+          const result = pressGame(game, { pitchers: get().economy.pitchers, workers: selectWorkersHere(get()) });
 
           if (game.kind === 'keep-in-tube') {
             // Tapping or clicking boosts the lemon drop rightward inside the tube
@@ -1016,6 +1136,7 @@ export const useGameStore = create<GameState>()(
           const { timeProgress, clockSpeed } = get();
           const next = advanceClock(timeProgress, realDtSeconds, clockSpeed);
           patch({ timeProgress: next }, 'tickClock');
+          runAwaySales(Math.min(1, next) - timeProgress);
           if (next >= 1) actions.closeDay();
         },
 
@@ -1036,6 +1157,7 @@ export const useGameStore = create<GameState>()(
             spaceHeld: false,
             workingAtStand: false,
             brewedCups: 0,
+            awayCarry: {},
             eodRecord: closed.record,
           });
           // A won day and a lost day must not sound the same.

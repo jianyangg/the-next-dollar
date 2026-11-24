@@ -14,8 +14,8 @@ describe('sliceModel', () => {
     expect(getDailyWages(createInitialState())).toBe(0);
   });
 
-  it('charges no hurdle with no invested capital', () => {
-    expect(getDailyHurdleCharge(createInitialState())).toBe(0);
+  it('charges 5% on idle cash too: $30 to start costs $1.50 a day', () => {
+    expect(getDailyHurdleCharge(createInitialState())).toBe(1.5);
   });
 
   it('grades return on invested capital at the documented cut-offs', () => {

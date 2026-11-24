@@ -1,5 +1,6 @@
 import { PUBLIC_DEALS, type PublicDealView } from '../../shared/deals/index';
 import { cents } from './money';
+import { SELLER_PLOT_ID } from './plots';
 import { SliceState } from './sliceModel';
 
 /**
@@ -67,7 +68,11 @@ export function resolveSealedBid(s: SliceState, deal: Deal, bid: number): BidRes
         ...s,
         cash: cents(s.cash - bid),
         equipmentValue: cents(s.equipmentValue + bid),
-        ownedStands: s.ownedStands + 1,
+        // The seller's stand becomes one of the player's plots. It comes WITHOUT staff:
+        // the seller ran it personally (off-book fact: manager pay was $0 on the books),
+        // so it sells nothing while the player is away until they hire a worker.
+        plots: { ...s.plots, [SELLER_PLOT_ID]: 'built' },
+        sellerStandSince: s.day,
         dealStatus: 'won',
         dealBidPrice: bid,
       },

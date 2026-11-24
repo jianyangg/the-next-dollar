@@ -28,8 +28,6 @@ export interface ReceiptRow {
 
 export interface ReceiptInput {
   record: DayRecord;
-  /** Money tied up at close (stock + equipment): the base the 5% is charged on. */
-  investedCapital: number;
   dailyRent: number;
   dailyWages: number;
 }
@@ -60,7 +58,7 @@ export function cupsNote(cups: number, revenue: number): string {
   return Math.abs(price * cups - revenue) < 0.005 ? `${label} × $${price.toFixed(2)}` : label;
 }
 
-export function buildReceipt({ record, investedCapital, dailyRent, dailyWages }: ReceiptInput): ReceiptRow[] {
+export function buildReceipt({ record, dailyRent, dailyWages }: ReceiptInput): ReceiptRow[] {
   const splitAddsUp = Math.abs(cents(dailyRent + dailyWages) - record.rentAndWages) < 0.005;
   const rows: ReceiptRow[] = [
     {
@@ -86,8 +84,10 @@ export function buildReceipt({ record, investedCapital, dailyRent, dailyWages }:
       text: fmtSignedMoney(record.nopat),
       tone: toneOf(record.nopat),
     },
-    // THE LINE row: the 5% daily cost of the money tied up in stock and equipment.
-    costRow('line', 'Money tied up', record.hurdleCharge, `$${investedCapital.toFixed(2)} × ${(HURDLE_RATE * 100).toFixed(0)}%`),
+    // THE LINE row: the 5% daily cost of all the money in the business, idle cash
+    // included. The base is the one recorded at the bell, so the receipt's arithmetic
+    // always multiplies out to the charge next to it.
+    costRow('line', 'Money in business', record.hurdleCharge, `$${record.chargedOn.toFixed(2)} × ${(HURDLE_RATE * 100).toFixed(0)}%`),
     {
       kind: 'final',
       label: 'Value created',

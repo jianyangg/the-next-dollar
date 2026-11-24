@@ -6,7 +6,8 @@ vi.mock('../audio/soundEngine', () => ({ playStep: () => {} }));
 import { NEIGHBORHOODS } from '../core/neighborhoods';
 
 const NEIGHBORHOOD_IDS = NEIGHBORHOODS.map((n) => n.id);
-import { OWN_STAND_POS, WALK_BOUNDS, getColliders, isBlocked, type Box } from './collision';
+import { plotsIn } from '../core/plots';
+import { WALK_BOUNDS, getColliders, isBlocked, type Box, type ColliderOptions } from './collision';
 import {
   SUBWAY_ENTRANCE_XZ,
   SUBWAY_INTERACT_RADIUS,
@@ -99,21 +100,29 @@ describe('pickNearbyTarget', () => {
 });
 
 describe('subway entrance in every neighborhood', () => {
-  const plotStatuses = ['empty', 'leased', 'built'] as const;
+  /** Two street layouts per district: nothing built yet, and every plot built (seller still there). */
+  const layouts = ['none built', 'all built'] as const;
+  const colliderOpts = (
+    neighborhood: (typeof NEIGHBORHOOD_IDS)[number],
+    layout: (typeof layouts)[number]
+  ): ColliderOptions => ({
+    neighborhood,
+    builtPlots: layout === 'all built' ? plotsIn(neighborhood) : [],
+    sellerPresent: true,
+    includeProps: true,
+  });
   const subway = subwayCollider();
 
   it('adds the box once, and never duplicates the one collision.ts already has for FiDi', () => {
-    const fidi = getColliders({ neighborhood: 'fidi', plotStatus: 'empty', includeProps: true });
+    const fidi = getColliders(colliderOpts('fidi', 'none built'));
     expect(withSubwayCollider(fidi).filter((b) => b.id === 'subway-entrance')).toHaveLength(1);
-    const park = getColliders({ neighborhood: 'central-park', plotStatus: 'empty', includeProps: true });
+    const park = getColliders(colliderOpts('central-park', 'none built'));
     expect(park.some((b) => b.id === 'subway-entrance')).toBe(false);
     expect(withSubwayCollider(park).filter((b) => b.id === 'subway-entrance')).toHaveLength(1);
   });
 
   it('uses the exact footprint collision.ts has for FiDi (one source of truth)', () => {
-    const fidiBox = getColliders({ neighborhood: 'fidi', plotStatus: 'empty', includeProps: true }).find(
-      (b) => b.id === 'subway-entrance'
-    )!;
+    const fidiBox = getColliders(colliderOpts('fidi', 'none built')).find((b) => b.id === 'subway-entrance')!;
     expect(fidiBox.minX).toBeCloseTo(subway.minX, 9);
     expect(fidiBox.maxX).toBeCloseTo(subway.maxX, 9);
     expect(fidiBox.minZ).toBeCloseTo(subway.minZ, 9);
@@ -121,27 +130,27 @@ describe('subway entrance in every neighborhood', () => {
   });
 
   for (const neighborhood of NEIGHBORHOOD_IDS) {
-    for (const plotStatus of plotStatuses) {
-      it(`${neighborhood} / ${plotStatus}: overlaps no stand, plot pad or street prop`, () => {
-        const others = getColliders({ neighborhood, plotStatus, includeProps: true }).filter(
-          (b) => b.id !== 'subway-entrance'
-        );
+    for (const layout of layouts) {
+      it(`${neighborhood} / ${layout}: overlaps no stand, plot pad or street prop`, () => {
+        const others = getColliders(colliderOpts(neighborhood, layout)).filter((b) => b.id !== 'subway-entrance');
         for (const b of others) expect(overlaps(subway, b), `${b.id} overlaps the subway`).toBe(false);
 
-        // The painted plot pad (2.55 x 1.45, centred on the own-stand spot) is not solid but
-        // must stay clear of the stairs so the two never look like one object.
-        const pad: Box = {
-          id: 'plot-pad',
-          minX: OWN_STAND_POS.x - 1.3,
-          maxX: OWN_STAND_POS.x + 1.3,
-          minZ: OWN_STAND_POS.z - 0.8,
-          maxZ: OWN_STAND_POS.z + 0.7,
-        };
-        expect(overlaps(subway, pad)).toBe(false);
+        // Each painted plot pad (2.55 x 1.45, centred on its plot) is not solid but must
+        // stay clear of the stairs so the two never look like one object.
+        for (const plot of plotsIn(neighborhood)) {
+          const pad: Box = {
+            id: `pad:${plot.id}`,
+            minX: plot.x - 1.3,
+            maxX: plot.x + 1.3,
+            minZ: plot.z - 0.8,
+            maxZ: plot.z + 0.7,
+          };
+          expect(overlaps(subway, pad), `${plot.id} pad overlaps the subway`).toBe(false);
+        }
       });
 
-      it(`${neighborhood} / ${plotStatus}: the player can walk up to it and press E`, () => {
-        const boxes = withSubwayCollider(getColliders({ neighborhood, plotStatus, includeProps: true }));
+      it(`${neighborhood} / ${layout}: the player can walk up to it and press E`, () => {
+        const boxes = withSubwayCollider(getColliders(colliderOpts(neighborhood, layout)));
         const grid = buildGrid(boxes, { hasTraffic: hasTraffic(neighborhood) });
         // Stand just in front (camera side) of the stairs, inside the interaction radius.
         const goal = { x: SUBWAY_ENTRANCE_XZ.x, z: subway.maxZ + 0.35 };

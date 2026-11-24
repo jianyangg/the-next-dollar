@@ -38,7 +38,8 @@ describe('tutorial spending guard', () => {
   });
 
   it('an owned stand counts as having the kit', () => {
-    const s = { ...createInitialState(), ownedStands: 1 };
+    const init = createInitialState();
+    const s = { ...init, plots: { ...init.plots, 'central-park/corner': 'built' as const } };
     expect(missingStarterItems(s)).toEqual(['pitcher', 'lemons']);
   });
 });

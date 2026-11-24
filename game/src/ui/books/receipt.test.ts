@@ -10,6 +10,7 @@ const record = (over: Partial<DayRecord> = {}): DayRecord => ({
   rentAndWages: 2,
   nopat: 18,
   hurdleCharge: 1.15,
+  chargedOn: 23,
   valueCreated: 16.85,
   cumulativeValue: 41.2,
   roicPct: 78.3,
@@ -19,14 +20,14 @@ const record = (over: Partial<DayRecord> = {}): DayRecord => ({
 
 describe('buildReceipt', () => {
   it('lists rows top to bottom in plain words, with signed amounts', () => {
-    const rows = buildReceipt({ record: record(), investedCapital: 23, dailyRent: 2, dailyWages: 0 });
+    const rows = buildReceipt({ record: record(), dailyRent: 2, dailyWages: 0 });
     expect(rows.map((r) => r.label)).toEqual([
       'Sales',
       'Lemons used',
       'Rent',
       'Wages',
       'Profit',
-      'Money tied up',
+      'Money in business',
       'Value created',
     ]);
     expect(rows.map((r) => r.text)).toEqual(['+$24.00', '-$4.00', '-$2.00', '$0.00', '+$18.00', '-$1.15', '+$16.85']);
@@ -35,13 +36,13 @@ describe('buildReceipt', () => {
   });
 
   it('never shows a formal term on the receipt', () => {
-    const rows = buildReceipt({ record: record(), investedCapital: 23, dailyRent: 2, dailyWages: 0 });
+    const rows = buildReceipt({ record: record(), dailyRent: 2, dailyWages: 0 });
     const text = rows.map((r) => `${r.label} ${r.how ?? ''}`).join(' ');
     expect(text).not.toMatch(/NOPAT|EVA|ROIC/);
   });
 
   it('shows one combined row when rent + wages do not add up to the record', () => {
-    const rows = buildReceipt({ record: record({ rentAndWages: 5 }), investedCapital: 23, dailyRent: 2, dailyWages: 0 });
+    const rows = buildReceipt({ record: record({ rentAndWages: 5 }), dailyRent: 2, dailyWages: 0 });
     expect(rows.map((r) => r.kind)).toContain('rentWages');
     expect(rows.map((r) => r.kind)).not.toContain('rent');
     expect(rows.find((r) => r.kind === 'rentWages')?.text).toBe('-$5.00');
@@ -50,7 +51,6 @@ describe('buildReceipt', () => {
   it('colours a losing day as cost', () => {
     const rows = buildReceipt({
       record: record({ nopat: -2, valueCreated: -3, hurdleCharge: 1 }),
-      investedCapital: 20,
       dailyRent: 2,
       dailyWages: 0,
     });

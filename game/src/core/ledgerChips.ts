@@ -18,9 +18,10 @@ import { getDailyHurdleCharge, getDayNopat, type SliceState } from './sliceModel
  *   - Buying stock or equipment moves money from CASH into STOCK or GEAR; PROFIT does
  *     not move. Showing "PROFIT $0" right next to "CASH −$10" is the whole point:
  *     spending is not the same as losing money.
- *   - But money tied up in stock and gear costs 5% a day (THE LINE). The last chip shows
- *     how that daily charge changed, so every purchase visibly raises the bar the stand
- *     must clear.
+ *   - Every dollar in the business (cash, stock and gear) costs 5% a day (THE LINE), so
+ *     a purchase that only moves money between them leaves the line unchanged; the line
+ *     chip appears when money actually enters or leaves the business (a loss on a
+ *     resale, for example).
  */
 
 export type ChipKind = 'cash' | 'stock' | 'gear' | 'profit' | 'line';
@@ -44,7 +45,7 @@ const ORDER: ChipKind[] = ['cash', 'stock', 'gear', 'profit', 'line'];
  *   - cash / stock / gear appear only when they changed.
  *   - profit appears whenever any balance moved, INCLUDING when it is $0 (that zero is
  *     the lesson), and also on its own when only profit changed.
- *   - line appears only when the money tied up changed.
+ *   - line appears only when the daily 5% charge changed.
  * An action that changed none of these returns [] (callers show no chip strip).
  */
 export function ledgerChips(before: SliceState, after: SliceState): MoneyChip[] {

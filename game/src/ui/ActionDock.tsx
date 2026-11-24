@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { getNeighborhood } from '../core/neighborhoods';
-import { useNearbyTarget } from '../state/anchorStore';
-import { selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
+import { useNearbyPlotId, useNearbyTarget } from '../state/anchorStore';
+import { useGameStore } from '../state/gameStore';
 import { Key } from './kit/Money';
 import { StockTag } from './stand/StockTag';
 import { useTutorialStep } from './TutorialBar';
@@ -29,8 +29,11 @@ export function ActionDock() {
   const stallKits = useGameStore((s) => s.economy.stallKits);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
   const lastBusinessNeighborhood = useGameStore((s) => s.lastBusinessNeighborhood);
-  const currentPlotStatus = useGameStore(selectCurrentPlotStatus);
   const nearby = useNearbyTarget();
+  // Which plot the player is next to (a district has 2-3), so the verb matches THAT plot.
+  const nearbyPlotId = useNearbyPlotId();
+  const nearbyPlotStatus = useGameStore((s) => (nearbyPlotId ? s.economy.plots[nearbyPlotId] : undefined));
+  const act = (): void => actions.interact(nearby, nearbyPlotId);
   const tutorialStep = useTutorialStep();
 
   const lastBusinessDistrict = getNeighborhood(lastBusinessNeighborhood);
@@ -47,21 +50,17 @@ export function ActionDock() {
       {(nearby || backToBusiness || showKeysHint) && (
         <div className="pt-sign dock-plate">
           {nearby === 'plot-lease' && (
-            <ActButton onClick={() => actions.openModal('plot-lease')}>
-              {currentPlotStatus === 'leased' ? (stallKits >= 1 ? 'Build' : 'Buy kit') : 'Lease'}
+            <ActButton onClick={act}>
+              {nearbyPlotStatus === 'leased' ? (stallKits >= 1 ? 'Build' : 'Buy kit') : 'Lease'}
             </ActButton>
           )}
 
-          {nearby === 'own-stand' && <ActButton onClick={actions.enterStand}>Open stand</ActButton>}
+          {nearby === 'own-stand' && <ActButton onClick={act}>Open stand</ActButton>}
 
-          {nearby === 'seller-stand' && <ActButton onClick={() => actions.openModal('seller-stand')}>Talk</ActButton>}
+          {nearby === 'seller-stand' && <ActButton onClick={act}>Talk</ActButton>}
 
-          {nearby === 'market-stalls' && <ActButton onClick={() => actions.openModal('market-stalls')}>Shop</ActButton>}
-
-          {nearby === 'market-lemons' && <ActButton onClick={() => actions.openModal('market-lemons')}>Shop</ActButton>}
-
-          {nearby === 'market-pitchers' && (
-            <ActButton onClick={() => actions.openModal('market-pitchers')}>Shop</ActButton>
+          {(nearby === 'market-stalls' || nearby === 'market-lemons' || nearby === 'market-pitchers') && (
+            <ActButton onClick={act}>Shop</ActButton>
           )}
 
           {backToBusiness && (

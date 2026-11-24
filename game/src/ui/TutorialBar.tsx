@@ -1,3 +1,4 @@
+import { countOwnedStands } from '../core/sliceModel';
 import { useMemo } from 'react';
 import { CLOSING_TIME_SHORT } from '../core/clock';
 import { getNeighborhood } from '../core/neighborhoods';
@@ -16,7 +17,8 @@ import './styles/world.css';
  */
 export const selectTutorialStepNum = (s: GameData): number | null => {
   if (!s.tutorialActive) return null;
-  const { plots, stallKits, ownedStands, pitchers, cupsInStock, totalRevenue } = s.economy;
+  const { plots, stallKits, pitchers, cupsInStock, totalRevenue } = s.economy;
+  const ownedStands = countOwnedStands(s.economy);
   const hasLeasedOrBuilt = Object.values(plots).some((p) => p !== 'empty');
   const hasSupplies = (stallKits >= 1 || ownedStands >= 1) && pitchers >= 1 && cupsInStock >= 1;
   if (!hasLeasedOrBuilt) return 1;

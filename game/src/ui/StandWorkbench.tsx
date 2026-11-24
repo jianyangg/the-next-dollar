@@ -5,7 +5,7 @@ import { getDailyWages, MANAGER_DAILY_WAGE, WORKER_DAILY_WAGE } from '../core/sl
 import { STAND_DIVEST_PROCEEDS } from '../core/purchases';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useQueueLength } from '../state/anchorStore';
-import { type GameState, useGameStore } from '../state/gameStore';
+import { type GameState, selectWorkersHere, useGameStore } from '../state/gameStore';
 import { BrewStep } from './BrewMinigame';
 import { getConversionProb } from '../core/demand';
 import { type CursorMenuItem, CursorMenu } from './kit/CursorMenu';
@@ -70,7 +70,8 @@ function StandMenu() {
   const cupsInStock = useGameStore((s) => s.economy.cupsInStock);
   const pitchers = useGameStore((s) => s.economy.pitchers);
   const pricePerCup = useGameStore((s) => s.economy.pricePerCup);
-  const workers = useGameStore((s) => s.economy.workers);
+  // One worker per stand: is THIS stand (the one being run) staffed?
+  const staffedHere = useGameStore((s) => selectWorkersHere(s) > 0);
   const managers = useGameStore((s) => s.economy.managers);
   const dailyWages = useGameStore((s) => getDailyWages(s.economy));
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
@@ -137,12 +138,10 @@ function StandMenu() {
   ];
 
   const staffItems: CursorMenuItem[] = [
-    {
-      id: 'worker',
-      label: workers > 0 ? `Worker ×${workers}` : 'Worker',
-      value: `$${WORKER_DAILY_WAGE}/d`,
-      onSelect: actions.hireWorker,
-    },
+    // A worker keeps this stand selling while you are away (and helps you brew here).
+    staffedHere
+      ? { id: 'worker', label: 'Let worker go', value: `-$${WORKER_DAILY_WAGE}/d`, onSelect: actions.letWorkerGo }
+      : { id: 'worker', label: 'Hire worker', value: `$${WORKER_DAILY_WAGE}/d`, onSelect: actions.hireWorker },
     {
       id: 'manager',
       label: managers > 0 ? `Manager ×${managers}` : 'Manager',

@@ -4,7 +4,7 @@ import * as m from 'motion/react-m';
 import { useShallow } from 'zustand/react/shallow';
 import { type StirKey, sweetSpots } from '../core/brewing';
 import type { BrewGameState } from '../core/minigames';
-import { type GameState, useGameStore } from '../state/gameStore';
+import { type GameState, selectWorkersHere, useGameStore } from '../state/gameStore';
 import { Key } from './kit/Money';
 import { useStoreMotionValue, useStorePercent } from './useStoreMotionValue';
 import './styles/stand.css';
@@ -70,8 +70,8 @@ const selectDiscrete = (s: GameState): BrewDiscrete | null => {
 /** Triple Squeeze: three target zones, one needle sweeping across. */
 function TripleSqueezeGauge({ targets, step }: { targets: readonly number[]; step: number }) {
   const pitchers = useGameStore((s) => s.economy.pitchers);
-  const workers = useGameStore((s) => s.economy.workers);
-  const tHalf = Math.min(0.11, 0.068 + Math.max(0, pitchers - 1) * 0.012 + workers * 0.015);
+  const workers = useGameStore(selectWorkersHere);
+  const tHalf = sweetSpots({ pitchers, workers }).tripleTargetHalf;
   const needleLeft = useStorePercent(selectNeedle);
   return (
     <div className="stand-bar" aria-label="Triple Squeeze timing gauge">
@@ -94,7 +94,7 @@ function TripleSqueezeGauge({ targets, step }: { targets: readonly number[]; ste
 /** Keep in Tube: a drifting tube and a lemon drop you must keep inside it. */
 function TubeGauge() {
   const pitchers = useGameStore((s) => s.economy.pitchers);
-  const workers = useGameStore((s) => s.economy.workers);
+  const workers = useGameStore(selectWorkersHere);
   const { tubeWidth } = sweetSpots({ pitchers, workers });
   const tubeLeft = useStorePercent(selectTubeCenter);
   const dropLeft = useStorePercent(selectTubeDrop);
@@ -119,8 +119,8 @@ function StirFuse() {
 /** Counter-Moving Bullseye: the target slides while you time the needle. */
 function BullseyeGauge() {
   const pitchers = useGameStore((s) => s.economy.pitchers);
-  const workers = useGameStore((s) => s.economy.workers);
-  // Sweet-spot widths widen with pitchers and hired workers (core/brewing.ts)
+  const workers = useGameStore(selectWorkersHere);
+  // Sweet-spot widths widen with pitchers and a worker at this stand (core/brewing.ts)
   const { perfectHalf, goodHalf } = sweetSpots({ pitchers, workers });
   const bullseyeLeft = useStorePercent(selectBullseye);
   const needleLeft = useStorePercent(selectNeedle);

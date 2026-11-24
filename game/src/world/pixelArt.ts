@@ -1135,8 +1135,14 @@ const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
 // plus a different hat for each trade (visor, flat cap, bandana, straw hat).
 // ============================================================================
 
-/** The four shopkeeper looks. Each id names the trade, not a person. */
-export type VendorKind = 'broker' | 'carpenter' | 'glazier' | 'grower';
+/**
+ * The shopkeeper looks. Each id names the trade, not a person.
+ *   - 'broker', 'carpenter', 'glazier', 'grower': the seller and the three market vendors.
+ *   - 'helper': a worker the PLAYER hired to staff one of their own stands. Dressed in the
+ *     player's control blue (the same blue as the "this is you" chevron, MARKER_BLUE), so
+ *     at a glance it reads "works for you" rather than "another business".
+ */
+export type VendorKind = 'broker' | 'carpenter' | 'glazier' | 'grower' | 'helper';
 
 type VendorHat = 'visor' | 'flatcap' | 'bandana' | 'straw';
 
@@ -1247,6 +1253,31 @@ const VENDOR_STYLES: Record<VendorKind, VendorStyle> = {
     apron: '#f2c230',
     apronShade: '#c79a14',
     apronTrim: '#58a55c',
+  },
+  // The player's hired worker: blue flat cap and blue apron (the player's control blue,
+  // #5aa9e6) over a plain white tee, so every staffed stand visibly belongs to the player.
+  helper: {
+    outline: '#2b2118',
+    skin: '#e8b48f',
+    skinShade: '#cc946d',
+    skinLight: '#f6cba9',
+    hair: '#5a3a24',
+    hairShade: '#3f2818',
+    hairLight: '#7a5236',
+    shirt: '#f7f4ec',
+    shirtShade: '#dcd6c6',
+    shirtLight: '#ffffff',
+    shirtAccent: '#ffffff',
+    pants: '#3a4250',
+    shoe: '#2f2a28',
+    cheek: '#eea08a',
+    hat: 'flatcap',
+    hatMain: '#5aa9e6',
+    hatLight: '#8cc6f0',
+    hatDark: '#3a7fb8',
+    apron: '#5aa9e6',
+    apronShade: '#3a7fb8',
+    apronTrim: '#ffffff',
   },
 };
 
