@@ -11,7 +11,22 @@ import { sunArcPosition } from '../core/clock';
  *
  * `pct` is a whole percent (0..100), not the raw clock: the parent subscribes to the
  * rounded value so this redraws ~100 times a day instead of 60 times a second.
+ *
+ * The marker is a picture of what is in the sky (the owner asked for it; a plain yellow
+ * dot did not say "sun"): an orange sun with eight short rays while it is up, and a pale
+ * crescent moon before sunrise and after sunset. Both ride the same path.
  */
+
+/** Eight rays around the sun, as short line segments from r=8.5 to r=12. */
+const RAYS = Array.from({ length: 8 }, (_, i) => {
+  const a = (i * Math.PI) / 4;
+  return { x1: Math.cos(a) * 8.5, y1: Math.sin(a) * 8.5, x2: Math.cos(a) * 12, y2: Math.sin(a) * 12 };
+});
+/**
+ * A crescent, centred on (0, 0): the outer arc of a radius-6 circle, closed by a smaller
+ * inner arc that bites out the right side.
+ */
+const CRESCENT = 'M 1.5 -5.8 A 6 6 0 1 0 1.5 5.8 A 4.6 4.6 0 1 1 1.5 -5.8 Z';
 const W = 132; // SVG user units; CSS sets the on-screen size
 const H = 48;
 const PAD = 8;
@@ -40,7 +55,18 @@ export function SunArc({ pct }: { pct: number }) {
       <polyline className="hud-sun-path" points={FULL_PATH} />
       <polyline className="hud-sun-done" points={done} />
       <line className="hud-sun-horizon" x1={2} x2={W - 2} y1={HORIZON_Y} y2={HORIZON_Y} />
-      <circle className={`hud-sun-disc ${up ? '' : 'is-down'}`} cx={sx} cy={sy} r={6} />
+      {up ? (
+        <g className="hud-sun-body" transform={`translate(${sx.toFixed(1)} ${sy.toFixed(1)})`}>
+          <g className="hud-sun-rays">
+            {RAYS.map((r, i) => (
+              <line key={i} x1={r.x1} y1={r.y1} x2={r.x2} y2={r.y2} />
+            ))}
+          </g>
+          <circle className="hud-sun-disc" r={6} />
+        </g>
+      ) : (
+        <path className="hud-moon" d={CRESCENT} transform={`translate(${sx.toFixed(1)} ${sy.toFixed(1)})`} />
+      )}
     </svg>
   );
 }

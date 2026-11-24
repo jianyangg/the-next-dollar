@@ -91,10 +91,14 @@
   gap: var(--s-1);
   white-space: nowrap;
 }
-/* Tone colours are the SIGN-surface money colours; specificity beats pt-outlined's colour. */
-.pt-outlined.world-note-text { font-size: var(--t-title); color: var(--sign-text); }
-.world-note.is-positive .world-note-text { color: var(--gain-sign); }
-.world-note.is-negative .world-note-text { color: var(--cost-sign); }
+/*
+ * Notes float over the 3D scene with a dark pixel outline, so the fill must be LIGHT.
+ * (It used to be the sign ink: the same colour as the outline, so the words
+ * vanished into a brown smudge.) Tone = light green / light red / cream.
+ */
+.pt-outlined.world-note-text { font-size: var(--t-title); color: var(--pop-fill); }
+.world-note.is-positive .world-note-text { color: var(--gain-pop); }
+.world-note.is-negative .world-note-text { color: var(--cost-pop); }
 
 .world-pop {
   display: inline-flex;

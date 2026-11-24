@@ -7,9 +7,10 @@ import type { PlotStatus } from './sliceModel';
  * the player can buy through the deal.
  *
  * Why plots differ: a plot is a trade-off between RENT and FOOT TRAFFIC. The corner
- * pays the district's rent and gets its normal crowd; the side street is $1 cheaper
- * but quieter; the plaza costs $2 more and is busier. The district sets the scale (a
- * Fifth Ave corner sees twice the walkers of a Central Park corner, and costs more).
+ * pays the district's rent and gets its normal crowd; the side street costs 70% of that
+ * rent for 60% of the crowd; the plaza costs 140% for 140%. The district sets the scale
+ * (a Fifth Ave corner sees about twice the walkers of a Central Park corner and costs
+ * ten times the rent; its shoppers pay $5 a cup where park walkers pay $3).
  *
  * `walkersPerDay` is used for STAFFED stands the player is not running in person
  * (core/awaySales.ts): how many passers-by reach that stand in a full day and decide
@@ -38,17 +39,37 @@ export interface PlotSpot {
   z: number;
 }
 
-/** Corner walkers per day = BASE + PER_RENT_DOLLAR x district rent (rent buys crowd). */
-const CORNER_BASE_WALKERS = 6;
-const CORNER_WALKERS_PER_RENT_DOLLAR = 2;
+/**
+ * How a side street and a plaza compare with their district's corner: the share of the
+ * corner's rent they cost and the share of its walkers they see. A side street is the
+ * cheap, quiet option; a plaza the dear, busy one.
+ */
+const SIDE_RENT_SHARE = 0.7;
+const SIDE_WALKER_SHARE = 0.6;
+const PLAZA_RENT_SHARE = 1.4;
+const PLAZA_WALKER_SHARE = 1.4;
 
-/** Where each kind of plot sits on the street (the corner is the original stand spot). */
+/**
+ * Where each kind of plot sits on the street. The street has two sidewalks, one on each
+ * side of the east-west cross street (z 2.9..7.5): the FAR one (z < 2.9) and the NEAR one
+ * (z > 7.5, toward the camera). Stands are spread over both so neither looks empty:
+ *   - corner: the original stand spot, far sidewalk, right of the avenue.
+ *   - side:   near sidewalk, left of the avenue (x -6.8). Its stand box (x -8.2..-5.6)
+ *             leaves the west crosswalk landing (x -5.1..-3.3) open, and its customer
+ *             line runs left (to x ~-9.4), staying on screen.
+ *   - plaza:  near sidewalk, right of the avenue (x 7.6). Its box (x 6.2..8.8) clears the
+ *             east crosswalk landing (x 3.3..5.1); its line runs left, toward the crossing.
+ * Near-side stands sit at z 10.2: the counter faces the street (world/collision.ts
+ * standFacing), so the customer line forms between it and the walker lane (z 7.75..8.2),
+ * at z 8.35..9.15. Both near spots are inside the player's walk area (its maxZ was raised
+ * to 11.4 for them) and within about 1.5 units of the camera's centre when the player
+ * stands at them (the camera follows at 0.78 x the player's x).
+ * The Central Park seller's stand keeps its own far-sidewalk spot (see districtPlots).
+ */
 const SPOT_XZ: Record<Exclude<PlotKind, 'seller'>, { x: number; z: number }> = {
   corner: { x: 5.6, z: -1.6 },
-  side: { x: -10.2, z: -1.6 },
-  // The plaza uses the spot where the "FOR SALE" stand stood in every district; the
-  // seller now lives in Central Park only, where the deal is.
-  plaza: { x: -5.8, z: -1.6 },
+  side: { x: -6.8, z: 10.2 },
+  plaza: { x: 7.6, z: 10.2 },
 };
 
 /** The Central Park seller's stand: its own spot, rent and crowd come from its books. */
@@ -64,8 +85,7 @@ export const SELLER_RENT_AFTER = 5;
 export const SELLER_RENT_STEP_DAYS = 4;
 
 function districtPlots(district: NeighborhoodId): PlotSpot[] {
-  const rent = getNeighborhood(district).dailyRent;
-  const cornerWalkers = CORNER_BASE_WALKERS + CORNER_WALKERS_PER_RENT_DOLLAR * rent;
+  const { dailyRent: rent, cornerWalkersPerDay: cornerWalkers } = getNeighborhood(district);
   const spot = (kind: Exclude<PlotKind, 'seller'>, label: string, dailyRent: number, walkers: number): PlotSpot => ({
     id: `${district}/${kind}`,
     district,
@@ -77,7 +97,7 @@ function districtPlots(district: NeighborhoodId): PlotSpot[] {
   });
   const plots = [
     spot('corner', 'Corner', rent, cornerWalkers),
-    spot('side', 'Side', Math.max(1, rent - 1), cornerWalkers * 0.6),
+    spot('side', 'Side', Math.max(1, Math.round(rent * SIDE_RENT_SHARE)), cornerWalkers * SIDE_WALKER_SHARE),
   ];
   if (district === 'central-park') {
     plots.push({
@@ -91,7 +111,7 @@ function districtPlots(district: NeighborhoodId): PlotSpot[] {
       z: -1.6,
     });
   } else {
-    plots.push(spot('plaza', 'Plaza', rent + 2, cornerWalkers * 1.4));
+    plots.push(spot('plaza', 'Plaza', Math.round(rent * PLAZA_RENT_SHARE), cornerWalkers * PLAZA_WALKER_SHARE));
   }
   return plots;
 }

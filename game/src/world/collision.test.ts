@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { NEIGHBORHOODS, type NeighborhoodId } from '../core/neighborhoods';
 import { getPlot, plotsIn, SELLER_PLOT_ID } from '../core/plots';
 import {
+  AVENUE_HALF_WIDTH,
+  CROSS_CROSSWALK_HALF_WIDTH,
+  CROSS_CROSSWALK_X,
+  CROSS_STREET_Z_MAX,
+  CROSS_STREET_Z_MIN,
   WALK_BOUNDS,
   getColliders,
   isBlocked,
@@ -10,6 +15,9 @@ import {
   plotsOnStreet,
   sellerStandPos,
   sellerStandShown,
+  sidewalkOf,
+  standFacing,
+  type Box,
   type Vec2,
 } from './collision';
 
@@ -93,8 +101,9 @@ describe('getColliders', () => {
     });
     expect(boxes.map((b) => b.id)).toEqual(fidi.map((_, i) => `own-stand-${i}`));
     fidi.forEach((plot, i) => {
-      // Same footprint rule as the original single stand: centred 0.1 right of the plot.
-      expect((boxes[i].minX + boxes[i].maxX) / 2).toBeCloseTo(plot.x + 0.1);
+      // Same footprint rule as the original single stand: centred 0.1 toward the crates,
+      // which sit on the stand's right (+x on the far sidewalk, -x once turned around on the near one).
+      expect((boxes[i].minX + boxes[i].maxX) / 2).toBeCloseTo(plot.x + 0.1 * standFacing(plot));
       expect((boxes[i].minZ + boxes[i].maxZ) / 2).toBeCloseTo(plot.z);
       expect(isBlocked({ x: plot.x, z: plot.z }, boxes)).toBe(true);
     });
@@ -190,6 +199,81 @@ describe('getColliders', () => {
         }
       }
     }
+  });
+});
+
+describe('plot placement on both sidewalks (every district)', () => {
+  const overlap = (a: Box, b: Box) => a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
+  /** The painted pad with its corner flags and sign stake, mirrored for a turned-around stand. */
+  const padBox = (p: Vec2): Box => {
+    const f = standFacing(p);
+    const zA = p.z + f * -0.8;
+    const zB = p.z + f * 0.7;
+    return { id: 'pad', minX: p.x - 1.5, maxX: p.x + 1.5, minZ: Math.min(zA, zB), maxZ: Math.max(zA, zB) };
+  };
+  const roads: Box[] = [
+    { id: 'avenue', minX: -AVENUE_HALF_WIDTH, maxX: AVENUE_HALF_WIDTH, minZ: -100, maxZ: 100 },
+    { id: 'cross-street', minX: -100, maxX: 100, minZ: CROSS_STREET_Z_MIN, maxZ: CROSS_STREET_Z_MAX },
+  ];
+  /** Where people step off each cross-street crosswalk onto the near and far sidewalks. */
+  const crosswalkLandings: Box[] = [-1, 1].flatMap((side) => [
+    {
+      id: `landing-far-${side}`,
+      minX: side * CROSS_CROSSWALK_X - CROSS_CROSSWALK_HALF_WIDTH,
+      maxX: side * CROSS_CROSSWALK_X + CROSS_CROSSWALK_HALF_WIDTH,
+      minZ: CROSS_STREET_Z_MIN - 1,
+      maxZ: CROSS_STREET_Z_MIN,
+    },
+    {
+      id: `landing-near-${side}`,
+      minX: side * CROSS_CROSSWALK_X - CROSS_CROSSWALK_HALF_WIDTH,
+      maxX: side * CROSS_CROSSWALK_X + CROSS_CROSSWALK_HALF_WIDTH,
+      minZ: CROSS_STREET_Z_MAX,
+      maxZ: CROSS_STREET_Z_MAX + 1,
+    },
+  ]);
+
+  for (const n of NEIGHBORHOODS.filter((d) => d.id !== 'market')) {
+    it(`${n.id}: stands and pads stay off roads, crosswalk landings, props and each other`, () => {
+      const plots = plotsIn(n.id);
+      const props = getColliders({ neighborhood: n.id, builtPlots: [], sellerPresent: true, includeProps: true });
+      const footprints = plots.map((p) => ({ plot: p, boxes: [ownStandBox(p, p.id), padBox(p)] }));
+      for (const { plot, boxes } of footprints) {
+        for (const box of boxes) {
+          for (const r of [...roads, ...crosswalkLandings, ...props]) {
+            if (plot.kind === 'seller' && r.id === 'seller-stand') continue; // the seller stand IS this plot
+            expect(overlap(box, r), `${plot.id} (${box.id}) overlaps ${r.id}`).toBe(false);
+          }
+          // Inside the area the player can walk (so its sign, queue and counter can be reached).
+          expect(box.minX).toBeGreaterThan(WALK_BOUNDS.minX);
+          expect(box.maxX).toBeLessThan(WALK_BOUNDS.maxX);
+          expect(box.maxZ).toBeLessThan(WALK_BOUNDS.maxZ);
+        }
+      }
+      for (let i = 0; i < footprints.length; i++) {
+        for (let j = i + 1; j < footprints.length; j++) {
+          for (const a of footprints[i].boxes) {
+            for (const b of footprints[j].boxes) {
+              expect(overlap(a, b), `${footprints[i].plot.id} vs ${footprints[j].plot.id}`).toBe(false);
+            }
+          }
+        }
+      }
+    });
+  }
+
+  it('puts the corner and the seller on the far sidewalk and side/plaza on the near one', () => {
+    for (const p of plotsIn('fidi').concat(plotsIn('central-park'))) {
+      const expected = p.kind === 'corner' || p.kind === 'seller' ? 'far' : 'near';
+      expect(sidewalkOf(p.z), p.id).toBe(expected);
+    }
+  });
+
+  it('nudges a near-side stand box the other way (its crates are on the other side once turned)', () => {
+    const near = getPlot('fidi/plaza');
+    const box = ownStandBox(near);
+    expect(standFacing(near)).toBe(-1);
+    expect((box.minX + box.maxX) / 2).toBeCloseTo(near.x - 0.1);
   });
 });
 

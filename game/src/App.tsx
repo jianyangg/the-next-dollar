@@ -15,6 +15,7 @@ import { PlotLeaseModal } from './ui/PlotLeaseModal';
 import { RunEndModal } from './ui/RunEndModal';
 import { SellerDealModal } from './ui/SellerDealModal';
 import { TravelTransition } from './ui/TravelTransition';
+import { ArrivalTitle } from './ui/ArrivalTitle';
 import { TutorialBar } from './ui/TutorialBar';
 import { WorldPrompts } from './ui/WorldPrompts';
 import { PatienceBars, SalePopLayer, ToastLayer } from './ui/WorldOverlays';
@@ -129,6 +130,7 @@ export function App() {
       <IntroStory />
 
       {/* Subway ride between districts: doors close, district swaps, doors open */}
+      <ArrivalTitle />
       <TravelTransition />
 
       {DevPanelHost && (

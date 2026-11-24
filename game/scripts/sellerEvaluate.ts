@@ -8,7 +8,7 @@
  *
  * How to run (after the student has approved the spend and the Vertex auth spike
  * has shown that the real model works):
- *   SELLER_EVAL_LIVE=1 GOOGLE_VERTEX_PROJECT=... GOOGLE_VERTEX_LOCATION=... npm run seller:evaluate
+ *   SELLER_EVAL_LIVE=1 OPENAI_API_KEY_2=... npm run seller:evaluate
  *
  * What it does: for each fixed question below it asks the real model for a pitch and
  * an answer on the Central Park deal, runs the same validator the server uses, and
@@ -21,7 +21,7 @@
 import { getPublicDeal } from '../shared/deals/index.ts';
 import { SellerService } from '../server/callSeller.ts';
 import { Budget, InMemorySpendStore } from '../server/budget.ts';
-import { VertexSellerModel } from '../server/gemini.ts';
+import { OpenAISellerModel } from '../server/openai.ts';
 import { SPEND_CAP_USD } from '../shared/limits.ts';
 
 /** Test prompts from CONFIGURATION.md A10 (direct diligence, injection, price pressure). */
@@ -40,10 +40,9 @@ async function main(): Promise<void> {
     console.error('Refusing to run: this script makes live, paid model calls. Set SELLER_EVAL_LIVE=1 to confirm.');
     process.exit(1);
   }
-  const project = process.env['GOOGLE_VERTEX_PROJECT'];
-  const location = process.env['GOOGLE_VERTEX_LOCATION'];
-  if (!project || !location) {
-    console.error('Set GOOGLE_VERTEX_PROJECT and GOOGLE_VERTEX_LOCATION.');
+  const apiKey = process.env['OPENAI_API_KEY_2'];
+  if (!apiKey) {
+    console.error('Set OPENAI_API_KEY_2.');
     process.exit(1);
   }
 
@@ -51,8 +50,7 @@ async function main(): Promise<void> {
   const entry = getPublicDeal('central-park-seller-1');
   if (!entry) throw new Error('central-park-seller-1 is missing from the deal registry');
   const { deal, persona } = entry;
-  const apiKey = process.env['GOOGLE_VERTEX_API_KEY'];
-  const model = new VertexSellerModel({ project, location, ...(apiKey ? { apiKey } : {}) });
+  const model = new OpenAISellerModel({ apiKey });
 
   // The run's own tally, separate from the Worker's; capped at the same $5.
   const budget = new Budget(new InMemorySpendStore(), SPEND_CAP_USD);

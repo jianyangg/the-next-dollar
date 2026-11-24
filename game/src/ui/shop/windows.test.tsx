@@ -15,6 +15,8 @@ vi.mock('../../world/pixelArt', () => ({
 }));
 vi.mock('../../audio/soundEngine', () => ({ soundEngine: new Proxy({}, { get: () => () => {} }) }));
 
+import { getPlot } from '../../core/plots';
+import { leaseFee } from '../../core/purchases';
 import { createInitialState } from '../../core/sliceModel';
 import { dispatchKeyDown, resetInputRouterForTests } from '../../state/input';
 import { resetGameStore, useGameStore } from '../../state/gameStore';
@@ -65,15 +67,27 @@ describe('pitcher shop', () => {
 
 describe('plot lease', () => {
   it('shows the picked plot: its rent and foot traffic, and signs ITS lease only', () => {
-    useGameStore.setState({ activeModal: 'plot-lease', neighborhoodId: 'broadway', activePlotId: 'broadway/plaza' });
+    // Broadway charges a city permit on signing (core/purchases.ts leaseFee), so the
+    // player is given enough cash to pay it; the test then checks the permit left cash.
+    const permit = leaseFee('broadway/plaza');
+    const cash = permit + 30;
+    useGameStore.setState({
+      activeModal: 'plot-lease',
+      neighborhoodId: 'broadway',
+      activePlotId: 'broadway/plaza',
+      economy: { ...createInitialState(), cash },
+    });
     render(wrap(<PlotLeaseModal />));
-    // Plaza = Broadway rent $4 + $2; corner walkers (6 + 2 x 4 = 14) x 1.4 = 20.
-    expect(screen.getByLabelText('RENT/DAY $6')).toBeTruthy();
-    expect(screen.getByLabelText('WALKERS/DAY 20')).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: new RegExp(`\\$${permit} permit`) })).toBeTruthy();
+    // The chips show the plot's own engine numbers (core/plots.ts), not typed-in copies.
+    const plaza = getPlot('broadway/plaza');
+    expect(screen.getByLabelText(`RENT/DAY $${plaza.dailyRent}`)).toBeTruthy();
+    expect(screen.getByLabelText(`WALKERS/DAY ${plaza.walkersPerDay}`)).toBeTruthy();
     press('Enter');
     const plots = useGameStore.getState().economy.plots;
     expect(plots['broadway/plaza']).toBe('leased');
     expect(plots['broadway/corner']).toBe('empty');
+    expect(useGameStore.getState().economy.cash).toBe(cash - permit);
   });
 
   it('stays closed when no plot has been picked', () => {
@@ -106,9 +120,15 @@ describe('opening story', () => {
     act(() =>
       dispatchKeyDown({ key: 'e', repeat: true, target: document.body, preventDefault: () => {} } as unknown as KeyboardEvent)
     );
-    press('e');
-    press('e');
-    expect(useGameStore.getState().introOpen).toBe(true); // 4th card still showing
+    // Back goes one card back, and never before the first card.
+    press('q');
+    expect(screen.getByLabelText('Card 1 of 8')).toBeTruthy();
+    press('q');
+    expect(screen.getByLabelText('Card 1 of 8')).toBeTruthy();
+    for (let i = 0; i < 7; i++) press('e');
+    // (The card text swaps after an exit animation, so progress is read from the pips.)
+    expect(screen.getByLabelText('Card 8 of 8')).toBeTruthy();
+    expect(useGameStore.getState().introOpen).toBe(true); // last card still showing
     press('e');
     expect(useGameStore.getState().introOpen).toBe(false);
     expect(localStorage.getItem('tnd.introSeen.v1')).toBe('1');

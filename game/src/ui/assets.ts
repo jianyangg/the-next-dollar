@@ -5,6 +5,7 @@ import {
   FOUNDER_CATALOG,
   type FounderSpecies,
   type UiIconKind,
+  type VendorKind,
 } from '../world/pixelArt';
 
 /**
@@ -18,7 +19,7 @@ import {
  * module out before the first call.
  */
 
-const UI_ICON_KINDS: UiIconKind[] = ['coin', 'lemon', 'pitcher', 'book', 'map', 'sun', 'hurdle', 'market'];
+const UI_ICON_KINDS: UiIconKind[] = ['coin', 'lemon', 'pitcher', 'cup', 'book', 'map', 'sun', 'hurdle', 'market'];
 
 let iconCache: Record<UiIconKind, string> | null = null;
 let portraitCache: Record<FounderSpecies, string> | null = null;
@@ -61,4 +62,30 @@ export function getStandingSprites(): Record<FounderSpecies, string> {
     spriteCache = map;
   }
   return spriteCache;
+}
+
+/** The three Union Square market vendors, by the trade id the scene uses for their sprite. */
+export type MarketVendorKind = Extract<VendorKind, 'grower' | 'carpenter' | 'glazier'>;
+
+let vendorPortraitCache: Record<MarketVendorKind, string> | null = null;
+
+/**
+ * 32x32 portraits of the market vendors: Rocco ('grower', lemons), June ('carpenter',
+ * stall kits) and Otis ('glazier', pitchers). The same art as their sprites at the stalls,
+ * so the face in the shop window is the person standing behind the counter.
+ */
+export function getVendorPortraits(): Record<MarketVendorKind, string> {
+  if (!vendorPortraitCache) {
+    vendorPortraitCache = {
+      grower: createMascotPortraitDataUrl('grower'),
+      carpenter: createMascotPortraitDataUrl('carpenter'),
+      glazier: createMascotPortraitDataUrl('glazier'),
+    };
+  }
+  return vendorPortraitCache;
+}
+
+/** 32x32 portrait of Dana Reyes, the stand seller (the 'broker' sprite in the world). */
+export function getSellerPortrait(): string {
+  return createMascotPortraitDataUrl('broker');
 }

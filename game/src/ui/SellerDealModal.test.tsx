@@ -12,7 +12,7 @@ vi.mock('../world/pixelArt', () => ({
 }));
 vi.mock('../audio/soundEngine', () => ({ soundEngine: new Proxy({}, { get: () => () => {} }) }));
 
-import { CENTRAL_PARK_DEAL } from '../core/deal';
+import { breakEvenDailyProfit, CENTRAL_PARK_DEAL } from '../core/deal';
 import type { DealView } from '../deal/dealView';
 import { dispatchKeyDown, resetInputRouterForTests } from '../state/input';
 import { resetGameStore, useGameStore } from '../state/gameStore';
@@ -86,8 +86,10 @@ describe('seller deal screen', () => {
     press('ArrowDown'); // -5
     const bid = CENTRAL_PARK_DEAL.askingPrice + 2 - 5;
     expect(screen.getByText(`$${bid}`)).toBeTruthy();
-    // THE LINE: the bid must earn 5% of itself a day to create value.
-    expect(screen.getByText(`$${(bid * 0.05).toFixed(2)}`)).toBeTruthy();
+    // THE LINE: the daily profit that repays this bid at Grandma's rate over the days
+    // left (the formula itself is pinned with hand-worked numbers in core/deal.test.ts).
+    const { day, maxDays } = useGameStore.getState().economy;
+    expect(screen.getByText(`$${breakEvenDailyProfit(bid, maxDays - day + 1).toFixed(2)}`)).toBeTruthy();
 
     press('E');
     expect(submitBid).toHaveBeenCalledWith(bid);

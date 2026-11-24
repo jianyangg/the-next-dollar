@@ -18,7 +18,13 @@ export interface Env {
    */
   RATE_LIMITER?: RateLimit;
 
-  // Vertex AI settings. OPEN QUESTION (CONFIGURATION.md open question 4): how a
+  /**
+   * Secret: the OpenAI key for the active seller model (MODEL_CONFIG.provider 'openai').
+   * Locally it comes from .dev.vars; deployed, from `wrangler secret put OPENAI_API_KEY_2`.
+   */
+  OPENAI_API_KEY_2?: string;
+
+  // Vertex AI settings (inactive while the seller runs on OpenAI). OPEN QUESTION (CONFIGURATION.md open question 4): how a
   // Worker authenticates to Vertex is unproven. See server/gemini.ts.
   GOOGLE_VERTEX_PROJECT?: string;
   GOOGLE_VERTEX_LOCATION?: string;

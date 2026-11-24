@@ -1,5 +1,6 @@
 import { cents } from './money';
 import { appendCustomerReview, SliceState } from './sliceModel';
+import { cupCost, type Tuning, TUNING } from './tuning';
 
 /**
  * One cup sold to the customer at the front of the queue.
@@ -9,21 +10,27 @@ import { appendCustomerReview, SliceState } from './sliceModel';
  * star review. Both the player's manual serve and the hired manager's auto-serve
  * call this, so the two can never drift apart (they were copy-pasted before).
  */
-export const LEMONADE_UNIT_COST = 0.5;
+export const LEMONADE_UNIT_COST = cupCost();
 
-export function applySale(prev: SliceState, patienceRatio: number, reviewId: number): SliceState {
+export function applySale(
+  prev: SliceState,
+  patienceRatio: number,
+  reviewId: number,
+  t: Tuning = TUNING
+): SliceState {
   if (prev.cupsInStock <= 0) return prev;
+  const unitCost = cupCost(t);
   const { reviews, ratingAvg } = appendCustomerReview(prev, patienceRatio, reviewId);
   return {
     ...prev,
     cash: cents(prev.cash + prev.pricePerCup),
     cupsInStock: prev.cupsInStock - 1,
-    inventoryValue: Math.max(0, cents(prev.inventoryValue - LEMONADE_UNIT_COST)),
+    inventoryValue: Math.max(0, cents(prev.inventoryValue - unitCost)),
     dayCupsSold: prev.dayCupsSold + 1,
     dayRevenue: cents(prev.dayRevenue + prev.pricePerCup),
-    dayCogs: cents(prev.dayCogs + LEMONADE_UNIT_COST),
+    dayCogs: cents(prev.dayCogs + unitCost),
     totalRevenue: cents(prev.totalRevenue + prev.pricePerCup),
-    totalCogs: cents(prev.totalCogs + LEMONADE_UNIT_COST),
+    totalCogs: cents(prev.totalCogs + unitCost),
     reviews,
     ratingAvg,
   };

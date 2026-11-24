@@ -1,6 +1,8 @@
 import { cents } from './money';
+import { getNeighborhood } from './neighborhoods';
 import { getPlot, isLeasable, type PlotId } from './plots';
-import { SliceState, STALL_KIT_COST } from './sliceModel';
+import { SliceState } from './sliceModel';
+import { type Tuning, TUNING } from './tuning';
 
 /**
  * Every buy, sell and hire the player can make, as pure "state in → result out" rules.
@@ -30,51 +32,52 @@ export type PurchaseRefusal =
   | 'already-staffed'
   | 'not-staffed';
 
-export const LEMON_CRATE_COST = 5;
-export const LEMON_CRATE_CUPS = 10;
-export const PITCHER_COST = 10;
-export const USED_PITCHER_RESALE = 7;
-export const STAND_DIVEST_PROCEEDS = 8.4;
+// Read from core/tuning.ts (the one place balance numbers live); exported for the UI.
+export const LEMON_CRATE_COST = TUNING.crateCost;
+export const LEMON_CRATE_CUPS = TUNING.crateCups;
+export const PITCHER_COST = TUNING.pitcherCost;
+export const USED_PITCHER_RESALE = TUNING.pitcherResale;
+export const STAND_DIVEST_PROCEEDS = TUNING.stallKitResale;
 
 const refuse = (reason: PurchaseRefusal): PurchaseResult => ({ ok: false, reason });
 
 /** $5 for a crate: cash turns into inventory (no profit or loss yet). */
-export function buyLemons(s: SliceState): PurchaseResult {
-  if (s.cash < LEMON_CRATE_COST) return refuse('insufficient-cash');
+export function buyLemons(s: SliceState, t: Tuning = TUNING): PurchaseResult {
+  if (s.cash < t.crateCost) return refuse('insufficient-cash');
   return {
     ok: true,
     state: {
       ...s,
-      cash: cents(s.cash - LEMON_CRATE_COST),
-      inventoryValue: cents(s.inventoryValue + LEMON_CRATE_COST),
-      cupsInStock: s.cupsInStock + LEMON_CRATE_CUPS,
+      cash: cents(s.cash - t.crateCost),
+      inventoryValue: cents(s.inventoryValue + t.crateCost),
+      cupsInStock: s.cupsInStock + t.crateCups,
     },
   };
 }
 
 /** $12 stall kit: cash turns into equipment. */
-export function buyStallKit(s: SliceState): PurchaseResult {
-  if (s.cash < STALL_KIT_COST) return refuse('insufficient-cash');
+export function buyStallKit(s: SliceState, t: Tuning = TUNING): PurchaseResult {
+  if (s.cash < t.stallKitCost) return refuse('insufficient-cash');
   return {
     ok: true,
     state: {
       ...s,
-      cash: cents(s.cash - STALL_KIT_COST),
-      equipmentValue: cents(s.equipmentValue + STALL_KIT_COST),
+      cash: cents(s.cash - t.stallKitCost),
+      equipmentValue: cents(s.equipmentValue + t.stallKitCost),
       stallKits: s.stallKits + 1,
     },
   };
 }
 
 /** $10 pitcher: cash turns into equipment; more pitchers widen the brew sweet spot. */
-export function buyPitcher(s: SliceState): PurchaseResult {
-  if (s.cash < PITCHER_COST) return refuse('insufficient-cash');
+export function buyPitcher(s: SliceState, t: Tuning = TUNING): PurchaseResult {
+  if (s.cash < t.pitcherCost) return refuse('insufficient-cash');
   return {
     ok: true,
     state: {
       ...s,
-      cash: cents(s.cash - PITCHER_COST),
-      equipmentValue: cents(s.equipmentValue + PITCHER_COST),
+      cash: cents(s.cash - t.pitcherCost),
+      equipmentValue: cents(s.equipmentValue + t.pitcherCost),
       pitchers: s.pitchers + 1,
     },
   };
@@ -103,13 +106,13 @@ export function sellUsedPitcher(s: SliceState): PurchaseResult {
  */
 export function divestStand(s: SliceState, plotId: PlotId): PurchaseResult {
   if (s.plots[plotId] !== 'built') return refuse('no-built-stand');
-  const loss = cents(STALL_KIT_COST - STAND_DIVEST_PROCEEDS);
+  const loss = cents(TUNING.stallKitCost - STAND_DIVEST_PROCEEDS);
   return {
     ok: true,
     state: {
       ...s,
       cash: cents(s.cash + STAND_DIVEST_PROCEEDS),
-      equipmentValue: Math.max(0, cents(s.equipmentValue - STALL_KIT_COST)),
+      equipmentValue: Math.max(0, cents(s.equipmentValue - TUNING.stallKitCost)),
       plots: { ...s.plots, [plotId]: 'empty' },
       staffedPlots: s.staffedPlots.filter((id) => id !== plotId),
       dayCogs: cents(s.dayCogs + loss),
@@ -118,11 +121,37 @@ export function divestStand(s: SliceState, plotId: PlotId): PurchaseResult {
   };
 }
 
-/** Lease an empty plot. Rent starts at the next day close. The seller's stand is not for lease. */
-export function signLease(s: SliceState, plotId: PlotId): PurchaseResult {
+/**
+ * The one-off city permit due when a lease is signed on `plotId`: its district's
+ * `permitFee` (core/neighborhoods.ts). $0 in Central Park, up to $150 on Fifth Avenue.
+ */
+export function leaseFee(plotId: PlotId, t: Tuning = TUNING): number {
+  return cents(getNeighborhood(getPlot(plotId).district).permitFee * t.permitScale);
+}
+
+/**
+ * Lease an empty plot. Rent starts at the next day close. The seller's stand is not for lease.
+ *
+ * Signing also pays the district's permit (`leaseFee`). On the books the permit is
+ * equipment (cash turns into something the business owns, so today's profit does not
+ * move), but it has NO resale value, so the player's worth (core/sliceModel.ts
+ * `getWorth`) drops by the whole fee at once. That drop is the point: an expensive
+ * district is a bet that has to be won back cup by cup.
+ */
+export function signLease(s: SliceState, plotId: PlotId, t: Tuning = TUNING): PurchaseResult {
   if (!isLeasable(getPlot(plotId))) return refuse('plot-not-leasable');
   if (s.plots[plotId] !== 'empty') return refuse('plot-not-empty');
-  return { ok: true, state: { ...s, plots: { ...s.plots, [plotId]: 'leased' } } };
+  const fee = leaseFee(plotId, t);
+  if (s.cash < fee) return refuse('insufficient-cash');
+  return {
+    ok: true,
+    state: {
+      ...s,
+      cash: cents(s.cash - fee),
+      equipmentValue: cents(s.equipmentValue + fee),
+      plots: { ...s.plots, [plotId]: 'leased' },
+    },
+  };
 }
 
 /** Use one stall kit to build on a leased plot. */
@@ -136,7 +165,7 @@ export function buildStand(s: SliceState, plotId: PlotId): PurchaseResult {
 }
 
 /**
- * Put a worker on a built stand ($3/day, charged at day close; hiring itself is free).
+ * Put a worker on a built stand ($10/day, charged at day close; hiring itself is free).
  * One worker per stand. A staffed stand sells on its own while the player is elsewhere.
  */
 export function hireWorker(s: SliceState, plotId: PlotId): PurchaseResult {

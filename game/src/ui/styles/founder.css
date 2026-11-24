@@ -35,8 +35,14 @@
   height: 100%;
   padding: var(--s-3) var(--s-2);
 }
-/* The ▶ sits above the sprite; transparent until the cursor is on this card. */
-.fpick-menu .pt-menu-item::before { transform: rotate(90deg); }
+/*
+ * The ▶ sits above the sprite. Unlike list menus (kit.css hides it on unselected rows),
+ * every card keeps it as an invisible spacer: the arrow stacks ABOVE the portrait here,
+ * so hiding it would make only the selected card's sprite jump down out of line.
+ */
+.fpick-menu .pt-menu-item::before { display: inline; color: transparent; transform: rotate(90deg); }
+.fpick-menu .pt-menu-item.is-cursor::before { color: var(--accent); }
+.pt-paper .fpick-menu .pt-menu-item.is-cursor::before { color: var(--ink); }
 
 .fpick-card {
   display: flex;

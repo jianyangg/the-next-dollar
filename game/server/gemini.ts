@@ -1,5 +1,14 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
-import { MODEL_CONFIG } from '../shared/limits.ts';
+/**
+ * Gemini settings, kept with the (currently unused) Vertex client so switching back is
+ * one change. NOT the active model: see MODEL_CONFIG in shared/limits.ts. If this is
+ * re-enabled, the A9 prices there must be switched back to Gemini's too.
+ */
+const GEMINI_MODEL_CONFIG = {
+  model: 'gemini-3.8-flash',
+  temperature: 1.0,
+  maxOutputTokens: 400,
+} as const;
 
 /**
  * The seam between our code and a language model. Everything else in server/ talks
@@ -44,7 +53,7 @@ export interface VertexConfig {
  *    (b) the SDK's node entry with `nodejs_compat`, (c) minting an OAuth token from
  *    a service-account key ourselves and calling the Vertex REST endpoint with
  *    fetch, bypassing the SDK.
- *  - The model id in MODEL_CONFIG is also unverified.
+ *  - The model id in GEMINI_MODEL_CONFIG is also unverified.
  *
  * This class was written to the typings and has NEVER made a live call.
  */
@@ -62,12 +71,12 @@ export class VertexSellerModel implements SellerModel {
 
   async generate(input: { system: string; user: string; signal: AbortSignal }) {
     const response = await this.client.models.generateContent({
-      model: MODEL_CONFIG.model,
+      model: GEMINI_MODEL_CONFIG.model,
       contents: input.user,
       config: {
         systemInstruction: input.system,
-        temperature: MODEL_CONFIG.temperature,
-        maxOutputTokens: MODEL_CONFIG.maxOutputTokens,
+        temperature: GEMINI_MODEL_CONFIG.temperature,
+        maxOutputTokens: GEMINI_MODEL_CONFIG.maxOutputTokens,
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
         // Ask for JSON; our validator still checks the shape because the model
         // can still return something unusable (refusal, truncation at the token cap).

@@ -1,9 +1,27 @@
+import type { NeighborhoodId } from '../core/neighborhoods';
+import type { Random } from '../core/rng';
 import { cosmeticRandom } from '../core/runRandom';
+import {
+  DEFAULT_MUSIC_THEME_ID,
+  MUSIC_THEMES,
+  VOICE_SHAPES,
+  eighthNoteSeconds,
+  voiceEnvelope,
+  loopLengthSteps,
+  type BassInstrument,
+  type CompInstrument,
+  type LeadInstrument,
+  type MusicTheme,
+  type VoiceShape,
+} from './musicThemes';
 
 /**
- * Zero-dependency Web Audio API sound effects & upbeat NYC Afternoon Jazz-Bossa
- * tycoon soundtrack engine (with automatic `/audio/nyc-theme.mp3` support).
+ * Zero-dependency Web Audio API sound effects and per-district procedural
+ * soundtrack engine (with automatic `/audio/nyc-theme.mp3` support).
  * Safe in headless/SSR environments and resilient to browser autoplay policies.
+ *
+ * The music itself is described as data in musicThemes.ts; this file only
+ * knows how to turn that data into oscillators on a clock.
  */
 
 export interface SoundEngine {
@@ -12,6 +30,22 @@ export interface SoundEngine {
   toggleMute(): boolean;
   startMusic(): void;
   stopMusic(): void;
+  /**
+   * Choose which district's soundtrack plays. Safe to call at any time:
+   * - music playing: the current theme ducks and the new one starts on the
+   *   next bar line (never two themes at once, never a click);
+   * - music paused, muted, not started yet, or the MP3 theme in use: the
+   *   choice is only remembered and used the next time procedural music runs;
+   * - the same theme again: no-op (it does not restart).
+   */
+  setMusicTheme(district: NeighborhoodId): void;
+  /**
+   * Hush the music for a screen where play has stopped (the day's receipt, the run
+   * ending). true fades the music out over about a second, so the won/lost sting is
+   * heard alone and the change of state is felt; false fades it back up. The
+   * soundtrack keeps its place underneath, so un-hushing never restarts it.
+   */
+  setMusicHushed(hushed: boolean): void;
   playCoin(combo?: number): void;
   playBrew(): void;
   playClick(): void;
@@ -23,7 +57,26 @@ export interface SoundEngine {
   playDayLost(): void;
   /** The moment today's earnings pass the line during play: a rising "level up" run. */
   playLineCrossed(): void;
+  /** Generic one-shot whoosh. Superseded for rides by playSubwayDepart/playSubwayArrive. */
   playTravel(): void;
+  /**
+   * Start of a subway ride: two-tone door chime, doors thud, then a train
+   * rumble with wheel clacks that runs about 1.1 s. Ducks the music for the ride.
+   */
+  playSubwayDepart(): void;
+  /**
+   * Doors open at `district`: air hiss, then the music swells back already
+   * switched to that district's theme (this calls the theme switch itself).
+   */
+  playSubwayArrive(district: NeighborhoodId): void;
+  /**
+   * Subway map cursor moved onto station `index` of `count` (0 = uptown end).
+   * A short chime whose pitch walks down the line. Throttled so fast hovering
+   * cannot stack into noise.
+   */
+  playMapStation(index: number, count: number): void;
+  /** Subway map station picked for inspection: soft two-note "ding-dong". */
+  playMapSelect(): void;
   playHonkKo(): void;
   playPerfect(): void;
   playStep(): void;
@@ -36,166 +89,161 @@ interface WindowWithWebkitAudio extends Window {
 }
 
 /** Convert MIDI note number to frequency in Hz. */
-function midiToFreq(midi: number): number {
+export function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12);
 }
 
-/**
- * 8-bar upbeat NYC Afternoon Jazz-Bossa / Tycoon Groove (106 BPM, subtle swing):
- * A-section: Cmaj9 | Am9 | Dm9 | G13
- * B-section: Fmaj9 | Em7 | Dm9 | G7
- */
-type MelodyHit = readonly [midi: number, velocity: number] | null;
+// ---------------------------------------------------------------------------
+// Pure decision helpers.
+//
+// These hold the "what should happen" logic with no Web Audio calls, so tests
+// can exercise them in Node without a real AudioContext. The engine class
+// below only does "make it happen".
+// ---------------------------------------------------------------------------
 
-interface BarPattern {
-  chord: readonly number[];
-  /** Syncopated Rhodes comping hits keyed by 8th-note step (0..7). */
-  compSteps: readonly number[];
-  /** Plucked upright bass notes keyed by 8th-note step (0..7). */
-  bass: readonly (number | null)[];
-  /** Cheerful marimba/vibraphone lead melody keyed by 8th-note step (0..7). */
-  melody: readonly MelodyHit[];
+/** What the theme slot looks like when setMusicTheme is called. */
+export interface ThemeSlotState {
+  /** Theme whose notes are being scheduled right now (or would be, if playing). */
+  readonly active: NeighborhoodId;
+  /** Theme queued to take over at the next bar line, if any. */
+  readonly pending: NeighborhoodId | null;
+  /** True while the procedural scheduler is running and audible. */
+  readonly playing: boolean;
 }
 
-const NYC_JAZZ_BOSSA_PROGRESSION: readonly BarPattern[] = [
-  // --- A Section: Cmaj9 -> Am9 -> Dm9 -> G13 ---
-  {
-    // Bar 0: Cmaj9 (E3 G3 B3 D4)
-    chord: [52, 55, 59, 62],
-    compSteps: [0, 3, 6],
-    bass: [36, null, null, 43, 43, null, 40, null], // C2 .. G2 G2 . E2 .
-    melody: [
-      [76, 0.9], // E5
-      null,
-      [79, 0.8], // G5
-      [76, 0.72], // E5
-      null,
-      [74, 0.85], // D5
-      [72, 0.78], // C5
-      null,
-    ],
-  },
-  {
-    // Bar 1: Am9 (E3 G3 B3 C4)
-    chord: [52, 55, 59, 60],
-    compSteps: [0, 2, 5],
-    bass: [45, null, null, 40, 40, null, 43, null], // A2 .. E2 E2 . G2 .
-    melody: [
-      [71, 0.82], // B4
-      null,
-      [72, 0.88], // C5
-      null,
-      [76, 0.92], // E5
-      null,
-      [74, 0.72], // D5
-      null,
-    ],
-  },
-  {
-    // Bar 2: Dm9 (F3 A3 C4 E4)
-    chord: [53, 57, 60, 64],
-    compSteps: [0, 3, 6],
-    bass: [38, null, null, 45, 45, null, 41, null], // D2 .. A2 A2 . F2 .
-    melody: [
-      [77, 0.9], // F5
-      null,
-      [76, 0.8], // E5
-      [74, 0.76], // D5
-      null,
-      [72, 0.84], // C5
-      [69, 0.78], // A4
-      null,
-    ],
-  },
-  {
-    // Bar 3: G13 (F3 A3 B3 E4)
-    chord: [53, 57, 59, 64],
-    compSteps: [0, 2, 5],
-    bass: [43, null, null, 38, 38, null, 40, null], // G2 .. D2 D2 . E2 .
-    melody: [
-      [74, 0.86], // D5
-      null,
-      [76, 0.9], // E5
-      null,
-      [74, 0.78], // D5
-      [71, 0.74], // B4
-      null,
-      [72, 0.68], // C5 pickup
-    ],
-  },
-  // --- B Section: Fmaj9 -> Em7 -> Dm9 -> G7 ---
-  {
-    // Bar 4: Fmaj9 (E3 A3 C4 G4)
-    chord: [52, 57, 60, 67],
-    compSteps: [0, 3, 6],
-    bass: [41, null, null, 48, 48, null, 45, null], // F2 .. C3 C3 . A2 .
-    melody: [
-      [79, 0.94], // G5
-      null,
-      [76, 0.82], // E5
-      [79, 0.86], // G5
-      null,
-      [81, 0.92], // A5
-      [79, 0.78], // G5
-      null,
-    ],
-  },
-  {
-    // Bar 5: Em7 (G3 B3 D4 G4)
-    chord: [55, 59, 62, 67],
-    compSteps: [0, 2, 5],
-    bass: [40, null, null, 47, 47, null, 43, null], // E2 .. B2 B2 . G2 .
-    melody: [
-      [76, 0.88], // E5
-      null,
-      [74, 0.76], // D5
-      null,
-      [71, 0.84], // B4
-      null,
-      [74, 0.78], // D5
-      null,
-    ],
-  },
-  {
-    // Bar 6: Dm9 (F3 A3 C4 E4)
-    chord: [53, 57, 60, 64],
-    compSteps: [0, 3, 6],
-    bass: [38, null, null, 45, 45, null, 41, null], // D2 .. A2 A2 . F2 .
-    melody: [
-      [76, 0.88], // E5
-      null,
-      [74, 0.82], // D5
-      [72, 0.78], // C5
-      null,
-      [74, 0.86], // D5
-      [76, 0.8], // E5
-      null,
-    ],
-  },
-  {
-    // Bar 7: G7 turnaround (F3 G3 B3 D4)
-    chord: [53, 55, 59, 62],
-    compSteps: [0, 2, 5],
-    bass: [43, null, null, 38, 43, null, 41, null], // G2 .. D2 G2 . F2 .
-    melody: [
-      [74, 0.86], // D5
-      null,
-      [71, 0.8], // B4
-      null,
-      [67, 0.78], // G4
-      null,
-      [74, 0.72], // D5 turnaround
-      null,
-    ],
-  },
-];
+/**
+ * - none:          already playing (or already queued) that theme; do nothing.
+ * - swap-now:      nothing is audible, so just replace the active theme.
+ * - queue:         music is audible; duck now, switch on the next bar line.
+ * - cancel-queue:  asked for the theme that is already playing while another
+ *                  was queued; drop the queued one and un-duck.
+ */
+export type ThemeChangeDecision = 'none' | 'swap-now' | 'queue' | 'cancel-queue';
 
-const MUSIC_BPM = 106;
-const EIGHTH_SEC = 60 / MUSIC_BPM / 2;
-const SWING_OFFSET_SEC = 0.022; // subtle ~54% jazz-bossa swing on offbeats
+export function decideThemeChange(
+  state: ThemeSlotState,
+  requested: NeighborhoodId
+): ThemeChangeDecision {
+  if (!state.playing) {
+    // Nothing audible: a queue would be pointless. Swap unless it is already exact.
+    return state.active === requested && state.pending === null ? 'none' : 'swap-now';
+  }
+  if (state.pending === requested) return 'none';
+  if (state.active === requested) {
+    return state.pending === null ? 'none' : 'cancel-queue';
+  }
+  return 'queue';
+}
+
+/**
+ * Major-pentatonic scale degrees in semitones. Pentatonic (5 notes per octave,
+ * no half steps) is used because any sequence of its notes sounds pleasant, so
+ * hovering stations in any order never sounds "wrong".
+ */
+const PENTATONIC_STEPS = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21] as const;
+/** Lowest station chime: G4. The highest (with 10 degrees) is E6. */
+const STATION_BASE_MIDI = 67;
+
+/**
+ * MIDI pitch for station `index` of `count` on the subway line. Index 0 is the
+ * uptown end and gets the HIGHEST pitch ("up" on the map is up in pitch), so
+ * walking downtown plays a descending scale.
+ *
+ * For lines with at most 10 stations every station gets its own scale degree
+ * (strictly descending). Longer lines are spread across the same range, so
+ * neighbours may share a pitch but the scale never turns back upward.
+ * Out-of-range input is clamped rather than thrown on: this is a hover sound.
+ */
+export function stationChimeMidi(index: number, count: number): number {
+  const safeCount = Number.isFinite(count) ? Math.max(1, Math.floor(count)) : 1;
+  const rawIndex = Number.isFinite(index) ? Math.floor(index) : 0;
+  const safeIndex = Math.min(safeCount - 1, Math.max(0, rawIndex));
+  const fromDowntown = safeCount - 1 - safeIndex; // 0 at the downtown end
+  const degrees = PENTATONIC_STEPS.length;
+  const degree =
+    safeCount <= degrees
+      ? fromDowntown
+      : Math.round((fromDowntown * (degrees - 1)) / (safeCount - 1));
+  return STATION_BASE_MIDI + PENTATONIC_STEPS[degree];
+}
+
+/**
+ * Throttle gate shared by rapid-fire sounds: allow a new play only if the
+ * previous one started at least `minGapMs` ago. `lastMs` null = never played.
+ */
+export function throttleAllows(lastMs: number | null, nowMs: number, minGapMs: number): boolean {
+  return lastMs === null || nowMs - lastMs >= minGapMs;
+}
+
+/**
+ * A frequency multiplier in [1 - spread, 1 + spread], e.g. spread 0.03 gives
+ * up to +-3% (about half a semitone). Small random detune is what keeps a
+ * sound heard 500 times a run from feeling like a stuck recording; real
+ * instruments never repeat a note exactly either. `random` is injected so the
+ * engine passes the seeded cosmetic stream and tests pass a fixed sequence.
+ */
+export function varyRatio(spread: number, random: Random): number {
+  return 1 + (random() * 2 - 1) * spread;
+}
+
+/** Pick one of `count` variants (0..count-1) using an injected random stream. */
+export function pickVariant(count: number, random: Random): number {
+  const safeCount = Math.max(1, Math.floor(count));
+  return Math.min(safeCount - 1, Math.floor(random() * safeCount));
+}
+
+/** How one subway ride's rumble will sound; generated fresh per ride. */
+export interface RumblePlan {
+  /** Low-pass cutoff of the rumble noise in Hz: lower = heavier, further-away train. */
+  readonly rumbleCutoffHz: number;
+  /** Frequency of the motor hum under the rumble in Hz. */
+  readonly humHz: number;
+  /** Seconds after rumble start at which each wheel clack fires (sorted). */
+  readonly clackTimes: readonly number[];
+}
+
+/**
+ * Plan a ride's rumble: wheels cross rail joints in pairs ("clack-clack", the
+ * front and rear trucks of one car), and the pairs speed up as the train
+ * accelerates. Every ride gets a slightly different cutoff, hum and clack
+ * spacing from `random`, so back-to-back rides do not sound copy-pasted.
+ * All clack times fall inside [0, durationSec).
+ */
+export function planRumble(durationSec: number, random: Random): RumblePlan {
+  const rumbleCutoffHz = 170 + random() * 90; // 170..260 Hz
+  const humHz = 52 + random() * 12; // 52..64 Hz
+  const clackTimes: number[] = [];
+  const pairGap = 0.075 + random() * 0.025; // gap inside one "clack-clack"
+  let t = 0.12 + random() * 0.08; // first joint
+  let spacing = 0.42 + random() * 0.08; // gap between pairs, shrinking as we speed up
+  while (t + pairGap < durationSec) {
+    clackTimes.push(t, t + pairGap);
+    t += spacing;
+    spacing = Math.max(0.24, spacing * (0.82 + random() * 0.08));
+  }
+  return { rumbleCutoffHz, humHz, clackTimes };
+}
+
 const LOOKAHEAD_MS = 100;
 const SCHEDULE_AHEAD_SEC = 0.26;
 const MUSIC_BUS_GAIN = 0.085;
+/** Music level while a queued theme waits for its bar line (25% of normal). */
+const THEME_SWITCH_DUCK = MUSIC_BUS_GAIN * 0.25;
+/** Music level during a subway ride (20% of normal): audible, clearly "underground". */
+const RIDE_DUCK = MUSIC_BUS_GAIN * 0.2;
+/**
+ * Music level on a stop-the-game screen. Effectively silent; not 0 because the
+ * glide is an exponential approach (setTargetAtTime) and must have a target above 0.
+ */
+const MUSIC_HUSHED = 0.0001;
+/**
+ * If a ride starts but the arrival call never comes (the travel flow was
+ * interrupted), restore the music after this long instead of leaving it quiet
+ * forever. A ride is about 1.2 s, so 4 s is never hit on the happy path.
+ */
+const RIDE_DUCK_FAILSAFE_MS = 4000;
+const RIDE_RUMBLE_SEC = 1.1;
+const MAP_STATION_MIN_GAP_MS = 40;
 const SFX_BUS_GAIN = 0.22;
 const CUSTOM_THEME_URL = '/audio/nyc-theme.mp3';
 const CUSTOM_THEME_VOLUME = 0.28;
@@ -218,8 +266,116 @@ class WebAudioSoundEngine implements SoundEngine {
   private musicPlaying = false;
   private schedulerId: ReturnType<typeof setInterval> | null = null;
   private nextStepTime = 0;
-  private currentStep = 0; // 0..63 (8 bars * 8 eighth-notes)
+  /** Tick within the active theme's loop: 0 .. progression.length * stepsPerBar - 1. */
+  private currentStep = 0;
   private lastStepMs = 0;
+  private lastMapStationMs: number | null = null;
+
+  /** District whose theme is being scheduled (or will be, once music runs). */
+  private activeThemeId: NeighborhoodId = DEFAULT_MUSIC_THEME_ID;
+  /** District queued to take over on the next bar line, while music is audible. */
+  private pendingThemeId: NeighborhoodId | null = null;
+  /** True between playSubwayDepart and playSubwayArrive: music held at RIDE_DUCK. */
+  private rideDucked = false;
+  /** True while a stop-the-game screen is up (see setMusicHushed). Wins over the ride duck. */
+  private hushed = false;
+  private rideFailsafeId: ReturnType<typeof setTimeout> | null = null;
+
+  private get activeTheme(): MusicTheme {
+    return MUSIC_THEMES[this.activeThemeId];
+  }
+
+  /**
+   * The level the music bus should rest at right now. Every place that brings
+   * the music back up asks this, so a theme switch finishing mid-ride cannot
+   * accidentally un-duck the ride.
+   */
+  private musicRestingGain(): number {
+    if (this.hushed) return MUSIC_HUSHED;
+    return this.rideDucked ? RIDE_DUCK : MUSIC_BUS_GAIN;
+  }
+
+  /**
+   * Smoothly move the music bus toward `target`, starting now.
+   *
+   * Why not just cancelScheduledValues + setTargetAtTime? Cancelling removes
+   * any in-flight automation, and some browsers then snap the gain back to the
+   * last *scheduled* value before the new curve starts: an audible click.
+   * Pinning the current value first (setValueAtTime(gain.value, now)) makes
+   * the new curve start exactly where the old one was.
+   */
+  private glideMusicBus(target: number, timeConstant: number): void {
+    if (!this.ctx || !this.musicGain) return;
+    const now = this.ctx.currentTime;
+    const gain = this.musicGain.gain;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.setTargetAtTime(target, now, timeConstant);
+  }
+
+  public setMusicTheme(district: NeighborhoodId): void {
+    // Unknown id from a bad caller: ignore rather than crash the audio thread.
+    if (!(district in MUSIC_THEMES)) return;
+
+    const decision = decideThemeChange(
+      { active: this.activeThemeId, pending: this.pendingThemeId, playing: this.musicPlaying },
+      district
+    );
+
+    try {
+      switch (decision) {
+        case 'none':
+          return;
+        case 'swap-now':
+          // Nothing audible (paused, muted, MP3 mode, or not started): just
+          // remember it. startMusic / unmute will begin this theme at bar 0.
+          this.commitTheme(district);
+          return;
+        case 'cancel-queue':
+          this.pendingThemeId = null;
+          this.glideMusicBus(this.musicRestingGain(), 0.15);
+          return;
+        case 'queue': {
+          this.pendingThemeId = district;
+          // Duck toward the bar line so the old theme fades out instead of
+          // being cut. The time constant is a third of the time left, so the
+          // fade is ~95% done by the switch (3 time constants = 95%).
+          const ctx = this.ctx;
+          if (!ctx) return;
+          const secondsToBarLine = this.secondsUntilNextBarLine(ctx.currentTime);
+          const duckTarget = Math.min(THEME_SWITCH_DUCK, this.musicRestingGain());
+          this.glideMusicBus(duckTarget, Math.max(0.04, secondsToBarLine / 3));
+          return;
+        }
+      }
+    } catch {
+      // Never throw from audio.
+    }
+  }
+
+  /** Make `district` the active theme from its first bar, dropping any queue. */
+  private commitTheme(district: NeighborhoodId): void {
+    const changed = district !== this.activeThemeId;
+    this.activeThemeId = district;
+    this.pendingThemeId = null;
+    if (changed) this.currentStep = 0;
+    // Glide (50 ms time constant) rather than jump: old-theme tails may still
+    // be ringing through the filter, and an instant cutoff jump can tick.
+    if (this.ctx && this.musicFilter) {
+      this.musicFilter.frequency.setTargetAtTime(this.activeTheme.warmthHz, this.ctx.currentTime, 0.05);
+    }
+  }
+
+  /** Seconds from `now` until the next bar line of the active theme. */
+  private secondsUntilNextBarLine(now: number): number {
+    const theme = this.activeTheme;
+    const stepsPerBar = theme.stepsPerBar;
+    // nextStepTime is when the next not-yet-scheduled tick sounds. If that tick
+    // is itself a bar line the switch happens there; otherwise count forward.
+    const stepsToBarLine = (stepsPerBar - (this.currentStep % stepsPerBar)) % stepsPerBar;
+    const barLineTime = this.nextStepTime + stepsToBarLine * eighthNoteSeconds(theme);
+    return Math.max(0, barLineTime - now);
+  }
 
   public initOnGesture(): void {
     try {
@@ -313,6 +469,23 @@ class WebAudioSoundEngine implements SoundEngine {
     }
   }
 
+  public setMusicHushed(hushed: boolean): void {
+    if (hushed === this.hushed) return;
+    this.hushed = hushed;
+    // Out: time constant 0.25 s, about a second to silence while the sting plays.
+    // Back: 0.4 s, a slower swell so the new day "fades up" instead of snapping on.
+    if (this.musicPlaying) this.glideMusicBus(this.musicRestingGain(), hushed ? 0.25 : 0.4);
+    // The optional MP3 soundtrack has no gain node on our bus: pause and resume it.
+    try {
+      if (this.customAudio && this.mp3Status === 'playing' && this.musicDesired && !this.muted) {
+        if (hushed) this.customAudio.pause();
+        else this.playCustomAudioElement(this.customAudio);
+      }
+    } catch {
+      // Ignore safely, like every other audio call.
+    }
+  }
+
   public stopMusic(): void {
     this.musicDesired = false;
     this.pauseMusicScheduler();
@@ -335,7 +508,10 @@ class WebAudioSoundEngine implements SoundEngine {
       const pentatonic = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5];
       const safeCombo = Number.isFinite(combo) ? Math.floor(combo) : 1;
       const idx = Math.min(pentatonic.length - 1, Math.max(0, safeCombo - 1));
-      const rootFreq = pentatonic[idx];
+      // The combo is told by WHICH scale note plays, so per-play variation
+      // stays tiny (+-1%, far less than the 12%+ gap between scale steps):
+      // enough to stop machine-gun sameness, never enough to blur the climb.
+      const rootFreq = pentatonic[idx] * varyRatio(0.01, cosmeticRandom);
       const fifthFreq = rootFreq * 1.5;
 
       // Bright 2-note coin chime
@@ -403,10 +579,16 @@ class WebAudioSoundEngine implements SoundEngine {
 
     try {
       const now = ctx.currentTime;
-      // Cheerful ascending bubbly pour arpeggio: C5 -> E5 -> G5 -> C6
+      // Cheerful ascending bubbly pour arpeggio: C5 -> E5 -> G5 -> C6.
+      // Every pour is a little different: +-3% pitch, a slightly faster or
+      // slower bubble run, and a different fizz brightness, like real pouring.
       const notes = [523.25, 659.25, 783.99, 1046.5];
-      notes.forEach((freq, i) => {
-        const t = now + i * 0.055;
+      const detune = varyRatio(0.03, cosmeticRandom);
+      const bubbleGap = 0.05 + cosmeticRandom() * 0.012;
+      const fizzTop = 2000 + cosmeticRandom() * 450;
+      notes.forEach((baseFreq, i) => {
+        const freq = baseFreq * detune;
+        const t = now + i * bubbleGap;
         this.playTone(ctx, this.sfxGain!, {
           type: 'sine',
           freq: freq * 0.92,
@@ -423,7 +605,7 @@ class WebAudioSoundEngine implements SoundEngine {
         start: now,
         duration: 0.24,
         startFreq: 900,
-        endFreq: 2200,
+        endFreq: fizzTop,
         q: 2.2,
         gain: 0.08,
       });
@@ -438,15 +620,26 @@ class WebAudioSoundEngine implements SoundEngine {
 
     try {
       const now = ctx.currentTime;
-      // Subtle crisp UI tap
+      // Subtle crisp UI tap. Clicks are the most repeated sound in the game,
+      // so each one picks one of three slightly different taps and detunes
+      // it by up to 3%: the ear stops noticing a sound that never changes,
+      // but finds an exact repeat mechanical when it does notice.
+      const voicings = [
+        { type: 'triangle' as const, freq: 700, endFreq: 500 },
+        { type: 'triangle' as const, freq: 760, endFreq: 530 },
+        { type: 'sine' as const, freq: 650, endFreq: 470 },
+      ];
+      const voicing = voicings[pickVariant(voicings.length, cosmeticRandom)];
+      const detune = varyRatio(0.03, cosmeticRandom);
       this.playTone(ctx, this.sfxGain, {
-        type: 'triangle',
-        freq: 700,
-        endFreq: 500,
+        type: voicing.type,
+        freq: voicing.freq * detune,
+        endFreq: voicing.endFreq * detune,
         start: now,
         attack: 0.004,
         duration: 0.038,
-        gain: 0.26,
+        // A sine has no upper harmonics, so it reads quieter at equal gain.
+        gain: voicing.type === 'sine' ? 0.3 : 0.26,
       });
     } catch {
       // Ignore safely.
@@ -459,9 +652,18 @@ class WebAudioSoundEngine implements SoundEngine {
 
     try {
       const now = ctx.currentTime;
-      // Warm 3-note success chord (C5 -> E5 -> G5)
-      const chord = [523.25, 659.25, 783.99];
-      chord.forEach((freq, idx) => {
+      // Warm 3-note success chord. All three voicings are the same C-major
+      // chord (so "bought" always means the same thing), in different
+      // inversions: root position C-E-G, E-G-C and G-C-E.
+      const voicings = [
+        [523.25, 659.25, 783.99],
+        [659.25, 783.99, 1046.5],
+        [783.99, 1046.5, 1318.51],
+      ];
+      const chord = voicings[pickVariant(voicings.length, cosmeticRandom)];
+      const detune = varyRatio(0.015, cosmeticRandom);
+      chord.forEach((baseFreq, idx) => {
+        const freq = baseFreq * detune;
         const start = now + idx * 0.048;
         this.playTone(ctx, this.sfxGain!, {
           type: 'triangle',
@@ -491,11 +693,13 @@ class WebAudioSoundEngine implements SoundEngine {
 
     try {
       const now = ctx.currentTime;
-      // Soft descending 2-note thud: E3 -> C3
+      // Soft descending 2-note thud: E3 -> C3. The falling shape is the
+      // meaning ("no"), so only a small +-2% detune is applied to both notes.
+      const detune = varyRatio(0.02, cosmeticRandom);
       this.playTone(ctx, this.sfxGain, {
         type: 'triangle',
-        freq: 164.81,
-        endFreq: 150,
+        freq: 164.81 * detune,
+        endFreq: 150 * detune,
         start: now,
         attack: 0.008,
         duration: 0.11,
@@ -503,8 +707,8 @@ class WebAudioSoundEngine implements SoundEngine {
       });
       this.playTone(ctx, this.sfxGain, {
         type: 'triangle',
-        freq: 130.81,
-        endFreq: 112,
+        freq: 130.81 * detune,
+        endFreq: 112 * detune,
         start: now + 0.095,
         attack: 0.008,
         duration: 0.16,
@@ -642,6 +846,211 @@ class WebAudioSoundEngine implements SoundEngine {
         duration: 0.22,
         gain: 0.22,
       });
+    } catch {
+      // Ignore safely.
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Subway ride: depart -> (rumble under the closed doors) -> arrive.
+  // ---------------------------------------------------------------------------
+
+  public playSubwayDepart(): void {
+    // Duck the music for the ride even when SFX are unavailable this instant,
+    // so the ride/arrive pair always stays balanced.
+    this.beginRideDuck();
+
+    const ctx = this.getActiveSfxContext();
+    if (!ctx || !this.sfxGain) return;
+
+    try {
+      const now = ctx.currentTime;
+      const sfx = this.sfxGain;
+
+      // 1. Door chime: an original two-tone falling fourth (A5 -> E5) on a
+      //    soft bell. Two falling tones is the universal "doors closing"
+      //    signal; the interval and timbre are our own.
+      const chime = [
+        { freq: 880.0, at: 0, dur: 0.22 },
+        { freq: 659.25, at: 0.2, dur: 0.34 },
+      ];
+      for (const note of chime) {
+        this.playTone(ctx, sfx, { type: 'sine', freq: note.freq, start: now + note.at, attack: 0.006, duration: note.dur, gain: 0.2 });
+        this.playTone(ctx, sfx, {
+          type: 'sine',
+          freq: note.freq * 2.76, // inharmonic bell partial (see the 'bell' lead)
+          start: now + note.at,
+          attack: 0.004,
+          duration: note.dur * 0.35,
+          gain: 0.035,
+        });
+      }
+
+      // 2. Doors thud shut just as the chime ends: a low sine drop plus a
+      //    short dull noise burst for the rubber edges meeting.
+      const thudAt = now + 0.55;
+      this.playTone(ctx, sfx, { type: 'sine', freq: 95, endFreq: 48, start: thudAt, attack: 0.004, duration: 0.16, gain: 0.42 });
+      this.playNoiseSweep(ctx, sfx, { start: thudAt, duration: 0.09, startFreq: 420, endFreq: 180, q: 1.1, gain: 0.12 });
+
+      // 3. Train rumble under the cover phase, fresh variation each ride.
+      this.playRideRumble(ctx, sfx, now + 0.35, planRumble(RIDE_RUMBLE_SEC, cosmeticRandom));
+    } catch {
+      // Ignore safely.
+    }
+  }
+
+  public playSubwayArrive(district: NeighborhoodId): void {
+    const ctx = this.getActiveSfxContext();
+    if (ctx && this.sfxGain) {
+      try {
+        // Doors-open hiss: pneumatic air release, a noise sweep falling in
+        // pitch and fading out.
+        this.playNoiseSweep(ctx, this.sfxGain, {
+          start: ctx.currentTime,
+          duration: 0.42,
+          startFreq: 5200,
+          endFreq: 1600,
+          q: 0.8,
+          gain: 0.1,
+        });
+      } catch {
+        // Ignore safely.
+      }
+    }
+
+    this.switchThemeForArrival(district);
+    this.endRideDuck();
+  }
+
+  public playMapStation(index: number, count: number): void {
+    // Throttle on wall-clock time so a fast sweep across the map plays at
+    // most one chime per 40 ms (25 per second) instead of a smear of noise.
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (!throttleAllows(this.lastMapStationMs, nowMs, MAP_STATION_MIN_GAP_MS)) return;
+    this.lastMapStationMs = nowMs;
+
+    const ctx = this.getActiveSfxContext();
+    if (!ctx || !this.sfxGain) return;
+
+    try {
+      const now = ctx.currentTime;
+      // Pitch carries meaning here (where on the line you are), so no detune.
+      const freq = midiToFreq(stationChimeMidi(index, count));
+      this.playTone(ctx, this.sfxGain, { type: 'sine', freq, start: now, attack: 0.003, duration: 0.09, gain: 0.16 });
+      this.playTone(ctx, this.sfxGain, { type: 'triangle', freq: freq * 2, start: now, attack: 0.002, duration: 0.03, gain: 0.04 });
+    } catch {
+      // Ignore safely.
+    }
+  }
+
+  public playMapSelect(): void {
+    const ctx = this.getActiveSfxContext();
+    if (!ctx || !this.sfxGain) return;
+
+    try {
+      const now = ctx.currentTime;
+      // "Ding-dong": a falling major third (E5 -> C5), softer than the ride
+      // chime (peak 0.17 vs 0.2+) because inspecting is not committing.
+      const notes = [
+        { freq: 659.25, at: 0, dur: 0.18, gain: 0.17 },
+        { freq: 523.25, at: 0.13, dur: 0.32, gain: 0.16 },
+      ];
+      for (const note of notes) {
+        this.playTone(ctx, this.sfxGain, { type: 'sine', freq: note.freq, start: now + note.at, attack: 0.005, duration: note.dur, gain: note.gain });
+        this.playTone(ctx, this.sfxGain, {
+          type: 'triangle',
+          freq: note.freq * 2,
+          start: now + note.at,
+          attack: 0.004,
+          duration: note.dur * 0.4,
+          gain: note.gain * 0.18,
+        });
+      }
+    } catch {
+      // Ignore safely.
+    }
+  }
+
+  /**
+   * Low rumble + motor hum + wheel clacks, all fading in and out so the ride
+   * never starts or stops with a click.
+   */
+  private playRideRumble(ctx: AudioContext, dest: AudioNode, start: number, plan: RumblePlan): void {
+    const end = start + RIDE_RUMBLE_SEC;
+
+    // Rumble: noise through a low-pass, with a slow swell and fade.
+    const source = ctx.createBufferSource();
+    source.buffer = this.getNoiseBuffer(ctx);
+    source.loop = true; // the noise buffer is 0.5 s; the ride is longer
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(plan.rumbleCutoffHz, start);
+    lp.Q.value = 0.9;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.0001, start);
+    env.gain.linearRampToValueAtTime(0.32, start + 0.25);
+    env.gain.setValueAtTime(0.32, end - 0.35);
+    env.gain.exponentialRampToValueAtTime(0.0001, end);
+    source.connect(lp);
+    lp.connect(env);
+    env.connect(dest);
+    source.start(start);
+    source.stop(end + 0.02);
+
+    // Motor hum under it.
+    this.playTone(ctx, dest, { type: 'sine', freq: plan.humHz, start, attack: 0.25, duration: RIDE_RUMBLE_SEC, gain: 0.12 });
+
+    // Wheel clacks: short, slightly metallic noise ticks.
+    for (const offset of plan.clackTimes) {
+      const at = start + offset;
+      this.playNoiseSweep(ctx, dest, { start: at, duration: 0.05, startFreq: 1400, endFreq: 700, q: 2.5, gain: 0.14 });
+    }
+  }
+
+  /** Hold the music low for the ride, with a failsafe release. */
+  private beginRideDuck(): void {
+    this.rideDucked = true;
+    if (this.musicPlaying) this.glideMusicBus(RIDE_DUCK, 0.12);
+
+    if (this.rideFailsafeId !== null) clearTimeout(this.rideFailsafeId);
+    this.rideFailsafeId = setTimeout(() => {
+      this.rideFailsafeId = null;
+      this.endRideDuck();
+    }, RIDE_DUCK_FAILSAFE_MS);
+  }
+
+  private endRideDuck(): void {
+    if (this.rideFailsafeId !== null) {
+      clearTimeout(this.rideFailsafeId);
+      this.rideFailsafeId = null;
+    }
+    if (!this.rideDucked) return;
+    this.rideDucked = false;
+    // Swell back over ~1 s (time constant 0.35 s): the new district "fades up"
+    // as the doors open rather than snapping on.
+    if (this.musicPlaying) this.glideMusicBus(this.musicRestingGain(), 0.35);
+  }
+
+  /**
+   * On arrival the music is already ducked under the ride, so there is no
+   * need to wait for a bar line: start the destination theme at its bar 0
+   * right away. This also overrides a switch the caller may have queued with
+   * setMusicTheme during the ride.
+   */
+  private switchThemeForArrival(district: NeighborhoodId): void {
+    if (!(district in MUSIC_THEMES)) return;
+    try {
+      const needsSwitch = district !== this.activeThemeId || this.pendingThemeId !== null;
+      if (!needsSwitch) return; // same district: keep playing, no restart
+      if (!this.musicPlaying || !this.ctx || !this.musicFilter) {
+        this.commitTheme(district);
+        return;
+      }
+      this.commitTheme(district);
+      // Leave a short breath after the hiss before the new bar 0. Never move
+      // the clock backward: ticks before nextStepTime are already booked
+      // (they belong to the old theme, and are ducked).
+      this.nextStepTime = Math.max(this.nextStepTime, this.ctx.currentTime + 0.18);
     } catch {
       // Ignore safely.
     }
@@ -815,7 +1224,7 @@ class WebAudioSoundEngine implements SoundEngine {
     musicFilter.Q.value = 0.6;
 
     const musicGain = ctx.createGain();
-    musicGain.gain.value = MUSIC_BUS_GAIN;
+    musicGain.gain.value = this.musicRestingGain();
 
     musicFilter.connect(musicGain);
     musicGain.connect(masterGain);
@@ -974,8 +1383,8 @@ class WebAudioSoundEngine implements SoundEngine {
     this.pauseMusicScheduler();
 
     const now = ctx.currentTime;
-    this.musicGain.gain.cancelScheduledValues(now);
-    this.musicGain.gain.setTargetAtTime(MUSIC_BUS_GAIN, now, 0.08);
+    this.musicFilter.frequency.setValueAtTime(this.activeTheme.warmthHz, now);
+    this.glideMusicBus(this.musicRestingGain(), 0.08);
 
     this.musicPlaying = true;
     this.nextStepTime = now + 0.06;
@@ -993,13 +1402,22 @@ class WebAudioSoundEngine implements SoundEngine {
     }
     this.musicPlaying = false;
 
-    if (this.ctx && this.musicGain) {
-      const now = this.ctx.currentTime;
-      this.musicGain.gain.cancelScheduledValues(now);
-      this.musicGain.gain.setTargetAtTime(0.0001, now, 0.05);
+    // A switch that was waiting for its bar line will never get one now, so
+    // make it the active theme; resuming then starts it cleanly from bar 0.
+    if (this.pendingThemeId !== null) {
+      this.commitTheme(this.pendingThemeId);
     }
+
+    this.glideMusicBus(0.0001, 0.05);
   }
 
+  /**
+   * The "lookahead scheduler" pattern: a coarse JavaScript timer (every
+   * LOOKAHEAD_MS) books every tick that falls inside the next
+   * SCHEDULE_AHEAD_SEC on the audio clock. JavaScript timers jitter by tens of
+   * milliseconds, but notes booked on the audio clock play sample-accurately,
+   * so the groove stays tight even when the main thread is busy.
+   */
   private scheduleMusicAhead(): void {
     const ctx = this.ctx;
     if (
@@ -1021,81 +1439,303 @@ class WebAudioSoundEngine implements SoundEngine {
 
       const horizon = ctx.currentTime + SCHEDULE_AHEAD_SEC;
       while (this.nextStepTime < horizon) {
-        // Apply subtle jazz-bossa swing to offbeat 8th notes
+        // A queued theme takes over exactly on a bar line, like a band
+        // finishing the bar before changing tunes. Old notes booked before
+        // this point keep their own decays (already ducked), so the two
+        // themes never play on top of each other.
+        if (this.pendingThemeId !== null && this.currentStep % this.activeTheme.stepsPerBar === 0) {
+          const barLine = this.nextStepTime;
+          this.activeThemeId = this.pendingThemeId;
+          this.pendingThemeId = null;
+          this.currentStep = 0;
+          // Swell the new theme in from the duck, and move the tone filter to
+          // its colour, both starting at the bar line. These are appended after
+          // the in-progress duck (no cancel), so the duck finishes first.
+          this.musicGain.gain.setTargetAtTime(this.musicRestingGain(), barLine, 0.25);
+          this.musicFilter.frequency.setTargetAtTime(this.activeTheme.warmthHz, barLine, 0.2);
+        }
+
+        const theme = this.activeTheme;
+        const eighth = eighthNoteSeconds(theme);
+        // Swing: delay every off-beat eighth by a fraction of an eighth.
         const isOffbeat = this.currentStep % 2 === 1;
-        const swungTime = this.nextStepTime + (isOffbeat ? SWING_OFFSET_SEC : 0);
+        const swungTime = this.nextStepTime + (isOffbeat ? theme.swing * eighth : 0);
 
         this.scheduleMusicStep(
           ctx,
+          theme,
           this.musicFilter,
           this.musicGain,
           this.currentStep,
           swungTime
         );
-        this.nextStepTime += EIGHTH_SEC;
-        this.currentStep =
-          (this.currentStep + 1) % (NYC_JAZZ_BOSSA_PROGRESSION.length * 8);
+        this.nextStepTime += eighth;
+        this.currentStep = (this.currentStep + 1) % loopLengthSteps(theme);
       }
     } catch {
       // Ignore transient scheduling issues.
     }
   }
 
+  /**
+   * Play every part of one tick of `theme`. `warmDest` runs through the
+   * low-pass filter (chords and bass, which should be soft); `directDest`
+   * skips it (lead and percussion, which need their sparkle).
+   */
   private scheduleMusicStep(
     ctx: AudioContext,
+    theme: MusicTheme,
     warmDest: AudioNode,
     directDest: AudioNode,
     step: number,
     time: number
   ): void {
-    const barIndex = Math.floor(step / 8);
-    const beatStep = step % 8; // 0..7 (eighth notes)
-    const bar = NYC_JAZZ_BOSSA_PROGRESSION[barIndex];
+    const stepsPerBar = theme.stepsPerBar;
+    const barIndex = Math.floor(step / stepsPerBar);
+    const beatStep = step % stepsPerBar;
+    const bar = theme.progression[barIndex];
+    const eighth = eighthNoteSeconds(theme);
 
-    // 1. Warm Rhodes electric piano chord stabs (dual detuned sine/triangle through low-pass filter)
+    // 1. Chord comping
     if (bar.compSteps.includes(beatStep)) {
       const isDownbeat = beatStep === 0;
-      const chordDur = isDownbeat ? EIGHTH_SEC * 2.5 : EIGHTH_SEC * 1.6;
-      const velocity = isDownbeat ? 0.28 : 0.21;
-
+      const { comp } = theme;
+      const chordDur = eighth * (isDownbeat ? comp.downbeatLength : comp.offbeatLength);
+      const velocity = isDownbeat ? comp.downbeatVelocity : comp.offbeatVelocity;
       bar.chord.forEach((midi, idx) => {
-        const freq = midiToFreq(midi);
-        const strum = idx * 0.009; // gentle electric-piano roll
-        this.playRhodesNote(ctx, warmDest, freq, time + strum, chordDur, velocity);
+        this.playCompNote(
+          comp.instrument,
+          ctx,
+          warmDest,
+          midiToFreq(midi),
+          time + idx * comp.strumSec,
+          chordDur,
+          velocity
+        );
       });
     }
 
-    // 2. Soft plucked upright bass
+    // 2. Bass
     const bassMidi = bar.bass[beatStep];
-    if (bassMidi !== null) {
+    if (bassMidi !== null && bassMidi !== undefined) {
       const isRoot = beatStep === 0;
-      this.playUprightBass(
+      const { bass } = theme;
+      this.playBassNote(
+        bass.instrument,
         ctx,
         warmDest,
         midiToFreq(bassMidi),
         time,
-        isRoot ? EIGHTH_SEC * 2.1 : EIGHTH_SEC * 1.25,
-        isRoot ? 0.5 : 0.4
+        eighth * (isRoot ? bass.rootLength : bass.otherLength),
+        isRoot ? bass.rootGain : bass.otherGain
       );
     }
 
-    // 3. Subtle brushed hi-hat / shaker (soft high-pass filtered noise bursts)
-    const shakerAccents = [0.11, 0.055, 0.08, 0.06, 0.1, 0.055, 0.085, 0.06];
-    this.playBrushedShaker(ctx, directDest, time, shakerAccents[beatStep]);
+    // 3. Percussion
+    const { percussion } = theme;
+    const shakerGain = percussion.shaker[beatStep] ?? 0;
+    if (shakerGain > 0) this.playBrushedShaker(ctx, directDest, time, shakerGain);
+    const kickGain = percussion.kick[beatStep] ?? 0;
+    if (kickGain > 0) this.playSoftKick(ctx, directDest, time, kickGain);
+    const rimGain = percussion.rim[beatStep] ?? 0;
+    if (rimGain > 0) this.playRimClick(ctx, directDest, time, rimGain);
 
-    // 4. Cheerful, bouncy marimba / vibraphone lead melody
+    // 4. Lead melody
     const melodyHit = bar.melody[beatStep];
-    if (melodyHit !== null) {
+    if (melodyHit !== null && melodyHit !== undefined) {
       const [melodyMidi, vel] = melodyHit;
-      this.playMarimbaNote(
+      this.playLeadNote(
+        theme.lead.instrument,
         ctx,
         directDest,
         midiToFreq(melodyMidi),
         time,
-        EIGHTH_SEC * 1.65,
-        0.25 * vel
+        eighth * theme.lead.length,
+        theme.lead.gain * vel
       );
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Instruments. Each one is a recipe of a few oscillators with envelopes.
+  // A sound's "colour" (timbre) comes from which harmonics are present and how
+  // fast each fades: a pluck is bright and short, a pad swells slowly, a bell
+  // has partials that are NOT whole-number multiples of the pitch.
+  // ---------------------------------------------------------------------------
+
+  private playCompNote(
+    instrument: CompInstrument,
+    ctx: AudioContext,
+    dest: AudioNode,
+    freq: number,
+    start: number,
+    duration: number,
+    gain: number
+  ): void {
+    const shape = VOICE_SHAPES[instrument];
+    switch (instrument) {
+      case 'rhodes':
+        this.playRhodesNote(ctx, dest, freq, start, duration, gain, shape);
+        return;
+      case 'piano':
+        // Triangle body plus 2nd and 3rd harmonics that die quickly: a hammer
+        // hit is bright for an instant, then mellows.
+        this.playVoice(ctx, dest, shape, { type: 'triangle', freq, start, attack: 0.005, duration, gain: gain * 0.8 });
+        this.playVoice(ctx, dest, shape, {
+          type: 'sine',
+          freq: freq * 2,
+          start,
+          attack: 0.004,
+          duration: Math.min(0.3, duration * 0.45),
+          gain: gain * 0.22,
+        });
+        this.playVoice(ctx, dest, shape, {
+          type: 'sine',
+          freq: freq * 3,
+          start,
+          attack: 0.004,
+          duration: Math.min(0.12, duration * 0.25),
+          gain: gain * 0.08,
+        });
+        return;
+      case 'pluck':
+        // Nylon string: very fast attack and short decay, with an octave
+        // overtone that is gone almost immediately (the "pick" sound).
+        this.playVoice(ctx, dest, shape, {
+          type: 'triangle',
+          freq,
+          start,
+          attack: 0.003,
+          duration: Math.min(0.45, duration),
+          gain: gain * 0.85,
+        });
+        this.playVoice(ctx, dest, shape, { type: 'sine', freq: freq * 2, start, attack: 0.002, duration: 0.06, gain: gain * 0.2 });
+        return;
+      case 'pad':
+        // Two slightly detuned sines that slowly swell: the detune makes a
+        // gentle "chorus" shimmer like a string section.
+        this.playVoice(ctx, dest, shape, {
+          type: 'sine',
+          freq: freq * 0.997,
+          start,
+          attack: Math.min(0.35, duration * 0.3),
+          duration,
+          gain: gain * 0.6,
+        });
+        this.playVoice(ctx, dest, shape, {
+          type: 'sine',
+          freq: freq * 1.003,
+          start,
+          attack: Math.min(0.4, duration * 0.35),
+          duration,
+          gain: gain * 0.5,
+        });
+        return;
+    }
+  }
+
+  private playBassNote(
+    instrument: BassInstrument,
+    ctx: AudioContext,
+    dest: AudioNode,
+    freq: number,
+    start: number,
+    duration: number,
+    gain: number
+  ): void {
+    const shape = VOICE_SHAPES[instrument];
+    if (instrument === 'upright') {
+      this.playUprightBass(ctx, dest, freq, start, duration, gain, shape);
+      return;
+    }
+    // 'round': a pure sine, a touch louder because a sine alone has less
+    // perceived weight than the upright's triangle + sine.
+    this.playVoice(ctx, dest, shape, { type: 'sine', freq, start, attack: 0.006, duration, gain: gain * 1.15 });
+  }
+
+  private playLeadNote(
+    instrument: LeadInstrument,
+    ctx: AudioContext,
+    dest: AudioNode,
+    freq: number,
+    start: number,
+    duration: number,
+    gain: number
+  ): void {
+    const shape = VOICE_SHAPES[instrument];
+    switch (instrument) {
+      case 'marimba':
+        this.playMarimbaNote(ctx, dest, freq, start, duration, gain, shape);
+        return;
+      case 'vibes':
+        // Metal bar: long sine ring and a faint 4th harmonic shimmer, no wooden click.
+        this.playVoice(ctx, dest, shape, { type: 'sine', freq, start, attack: 0.008, duration, gain });
+        this.playVoice(ctx, dest, shape, {
+          type: 'sine',
+          freq: freq * 4,
+          start,
+          attack: 0.006,
+          duration: Math.min(0.25, duration * 0.3),
+          gain: gain * 0.12,
+        });
+        return;
+      case 'bell':
+        // Celesta: fundamental plus an inharmonic partial (2.76x, the ratio of
+        // a struck metal bar's second mode). The "not quite an octave" partial
+        // is what the ear hears as "bell".
+        this.playVoice(ctx, dest, shape, { type: 'sine', freq, start, attack: 0.004, duration, gain: gain * 0.9 });
+        this.playVoice(ctx, dest, shape, {
+          type: 'sine',
+          freq: freq * 2.76,
+          start,
+          attack: 0.003,
+          duration: Math.min(0.4, duration * 0.35),
+          gain: gain * 0.18,
+        });
+        return;
+      case 'flute':
+        // Breathy: slow-ish attack, triangle reinforced by a sine. No transient.
+        this.playVoice(ctx, dest, shape, { type: 'triangle', freq, start, attack: 0.045, duration, gain: gain * 0.7 });
+        this.playVoice(ctx, dest, shape, { type: 'sine', freq, start, attack: 0.06, duration, gain: gain * 0.45 });
+        return;
+      case 'blip':
+        // Ticker: short sine with an octave, like a terminal beep softened.
+        this.playVoice(ctx, dest, shape, { type: 'sine', freq, start, attack: 0.003, duration: Math.min(0.2, duration), gain });
+        this.playVoice(ctx, dest, shape, {
+          type: 'sine',
+          freq: freq * 2,
+          start,
+          attack: 0.003,
+          duration: Math.min(0.08, duration * 0.4),
+          gain: gain * 0.25,
+        });
+        return;
+    }
+  }
+
+  /** A soft, rounded kick: a sine that drops from 110 Hz to 45 Hz in 0.14 s. */
+  private playSoftKick(ctx: AudioContext, dest: AudioNode, start: number, gain: number): void {
+    this.playTone(ctx, dest, { type: 'sine', freq: 110, endFreq: 45, start, attack: 0.004, duration: 0.14, gain: gain * 2.2 });
+  }
+
+  /** A woody rim click: a very short burst of noise around 1.8 kHz. */
+  private playRimClick(ctx: AudioContext, dest: AudioNode, start: number, gain: number): void {
+    const source = ctx.createBufferSource();
+    source.buffer = this.getNoiseBuffer(ctx);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(1800, start);
+    filter.Q.value = 4;
+    const env = ctx.createGain();
+    const dur = 0.03;
+    env.gain.setValueAtTime(0.0001, start);
+    env.gain.linearRampToValueAtTime(gain * 2.5, start + 0.002);
+    env.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+    source.connect(filter);
+    filter.connect(env);
+    env.connect(dest);
+    source.start(start);
+    source.stop(start + dur + 0.015);
   }
 
   private playRhodesNote(
@@ -1104,10 +1744,11 @@ class WebAudioSoundEngine implements SoundEngine {
     freq: number,
     start: number,
     duration: number,
-    gain: number
+    gain: number,
+    shape: VoiceShape
   ): void {
     // Dual subtly detuned warm sine + soft triangle body
-    this.playTone(ctx, dest, {
+    this.playVoice(ctx, dest, shape, {
       type: 'sine',
       freq: freq * 0.9985,
       start,
@@ -1115,7 +1756,7 @@ class WebAudioSoundEngine implements SoundEngine {
       duration,
       gain: gain * 0.72,
     });
-    this.playTone(ctx, dest, {
+    this.playVoice(ctx, dest, shape, {
       type: 'triangle',
       freq: freq * 1.0015,
       start,
@@ -1124,7 +1765,7 @@ class WebAudioSoundEngine implements SoundEngine {
       gain: gain * 0.32,
     });
     // Gentle Rhodes tine bell overtone (2x frequency, quick decay)
-    this.playTone(ctx, dest, {
+    this.playVoice(ctx, dest, shape, {
       type: 'sine',
       freq: freq * 2,
       start,
@@ -1140,10 +1781,11 @@ class WebAudioSoundEngine implements SoundEngine {
     freq: number,
     start: number,
     duration: number,
-    gain: number
+    gain: number,
+    shape: VoiceShape
   ): void {
     // Woody triangle fundamental with quick finger-pluck envelope
-    this.playTone(ctx, dest, {
+    this.playVoice(ctx, dest, shape, {
       type: 'triangle',
       freq,
       start,
@@ -1152,7 +1794,7 @@ class WebAudioSoundEngine implements SoundEngine {
       gain,
     });
     // Soft warm sine reinforcement
-    this.playTone(ctx, dest, {
+    this.playVoice(ctx, dest, shape, {
       type: 'sine',
       freq,
       start,
@@ -1168,10 +1810,11 @@ class WebAudioSoundEngine implements SoundEngine {
     freq: number,
     start: number,
     duration: number,
-    gain: number
+    gain: number,
+    shape: VoiceShape
   ): void {
     // Warm resonant sine bar tone
-    this.playTone(ctx, dest, {
+    this.playVoice(ctx, dest, shape, {
       type: 'sine',
       freq,
       start,
@@ -1180,7 +1823,7 @@ class WebAudioSoundEngine implements SoundEngine {
       gain,
     });
     // Crisp wooden mallet 4th-harmonic transient
-    this.playTone(ctx, dest, {
+    this.playVoice(ctx, dest, shape, {
       type: 'triangle',
       freq: freq * 4,
       start,
@@ -1216,6 +1859,41 @@ class WebAudioSoundEngine implements SoundEngine {
 
     source.start(start);
     source.stop(start + dur + 0.015);
+  }
+
+  /**
+   * One music oscillator with the sustain-pedal envelope (see VOICE_SHAPES):
+   *   rise to the peak over `attack` (never shorter than the instrument's minimum,
+   *   so no click), settle toward the sustain level while the note is written, then
+   *   keep ringing and fade over the release tail after it ends.
+   * setTargetAtTime is an exponential approach, the way a real string loses energy;
+   * a time constant of release / 5 leaves under 1% of the level when the
+   * oscillator stops. Sound effects keep playTone: their snap is the point.
+   */
+  private playVoice(
+    ctx: AudioContext,
+    dest: AudioNode,
+    shape: VoiceShape,
+    opts: { type: OscillatorType; freq: number; start: number; attack: number; duration: number; gain: number }
+  ): void {
+    const env = voiceEnvelope(shape, opts.attack, opts.duration, opts.gain);
+    const osc = ctx.createOscillator();
+    const amp = ctx.createGain();
+    osc.type = opts.type;
+    osc.frequency.setValueAtTime(opts.freq, opts.start);
+
+    const peakAt = opts.start + env.attack;
+    amp.gain.setValueAtTime(0.0001, opts.start);
+    amp.gain.linearRampToValueAtTime(env.peak, peakAt);
+    // Held: ease from the peak toward the sustain level over about the note's length.
+    amp.gain.setTargetAtTime(env.sustainLevel, peakAt, Math.max(0.02, (env.holdEnd - env.attack) / 3));
+    // Pedal tail: from wherever the hold left it, fade to silence.
+    amp.gain.setTargetAtTime(0.0001, opts.start + env.holdEnd, env.release / 5);
+
+    osc.connect(amp);
+    amp.connect(dest);
+    osc.start(opts.start);
+    osc.stop(opts.start + env.stopAt);
   }
 
   private playTone(
@@ -1329,6 +2007,10 @@ export function startMusic(): void {
   soundEngine.startMusic();
 }
 
+export function setMusicHushed(hushed: boolean): void {
+  soundEngine.setMusicHushed(hushed);
+}
+
 export function stopMusic(): void {
   soundEngine.stopMusic();
 }
@@ -1359,6 +2041,26 @@ export function playDayEnd(): void {
 
 export function playTravel(): void {
   soundEngine.playTravel();
+}
+
+export function setMusicTheme(district: NeighborhoodId): void {
+  soundEngine.setMusicTheme(district);
+}
+
+export function playSubwayDepart(): void {
+  soundEngine.playSubwayDepart();
+}
+
+export function playSubwayArrive(district: NeighborhoodId): void {
+  soundEngine.playSubwayArrive(district);
+}
+
+export function playMapStation(index: number, count: number): void {
+  soundEngine.playMapStation(index, count);
+}
+
+export function playMapSelect(): void {
+  soundEngine.playMapSelect();
 }
 
 export function playHonkKo(): void {

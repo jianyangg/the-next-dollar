@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { useShallow } from 'zustand/react/shallow';
-import { buildStand } from '../core/purchases';
+import { buildStand, leaseFee, signLease } from '../core/purchases';
 import { getNeighborhood } from '../core/neighborhoods';
 import { STALL_KIT_COST } from '../core/sliceModel';
 import { selectActivePlot, useGameStore } from '../state/gameStore';
@@ -12,6 +12,8 @@ import { previewPurchase } from './shop/preview';
  * One sidewalk plot (a district has 2-3: corner, side street, plaza): sign the lease,
  * then build a stand on it with a Stall Kit. The window shows the plot's trade-off in
  * two engine numbers: its RENT and how many WALKERS pass it in a day (core/plots.ts).
+ * Signing also pays the district's one-off city permit (core/purchases.ts `leaseFee`,
+ * $0 in Central Park); the row names it and the preview shows it leaving the cash box.
  * Same three states as before (empty / leased with a kit / leased without one); each is
  * a menu row whose preview comes from the real rule (core/purchases).
  */
@@ -36,19 +38,21 @@ function PlotLeaseModalBody() {
   const rent = <PaperChip label="RENT/DAY" value={`$${plot.dailyRent}`} />;
   const walkers = <PaperChip label="WALKERS/DAY" value={String(plot.walkersPerDay)} />;
   const buildPreview = previewPurchase(economy, (s) => buildStand(s, plot.id), STALL_KIT_COST);
+  const permit = leaseFee(plot.id);
+  const leasePreview = previewPurchase(economy, (s) => signLease(s, plot.id), permit);
 
   let actionRow: ShopRow;
   if (plot.status === 'empty') {
     actionRow = {
       id: 'sign-lease',
       label: 'Sign lease',
-      // "from tonight": signing pays nothing now; the first rent is booked at the closing
-      // bell, so the row says WHEN the cost starts, not only how much it is.
-      value: `$${plot.dailyRent}/day from tonight`,
+      // Rent is booked at the closing bell, so the row says WHEN that cost starts; the
+      // permit (if the district has one) is paid on the spot, so it is named first.
+      value: permit > 0 ? `$${permit} permit + $${plot.dailyRent}/day` : `$${plot.dailyRent}/day from tonight`,
       onSelect: actions.signLease,
-      // Leasing moves no money today (rent starts at day close), so the rent IS the preview.
+      // The preview runs the real rule: the permit leaving cash (or "need $X" when short).
       preview: (
-        <PurchasePreviewView preview={{ kind: 'none' }}>
+        <PurchasePreviewView preview={leasePreview}>
           {rent}
           {walkers}
         </PurchasePreviewView>

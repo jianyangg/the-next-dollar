@@ -21,7 +21,7 @@ The game is the existing single-player Career mode, refined into a **fixed 30-da
 **Under the surface (Implemented).** The lemonade stand sits on a real business model:
 
 - Every sale and cost goes into one double-entry ledger, which produces an income statement, a balance sheet and a cash flow statement (`web/src/domain/ledger.ts`, shown in the Books screen).
-- The score charges 5% a day on money tied up in stock and equipment (`VALUE_POLICY.hurdle` in `web/src/domain/value.ts`).
+- The player races Grandma's bank: her $30 loan growing 15% a day. Each day's line is rent + wages + 15% of the money the player started that day with (`TUNING.hurdleRate` in `game/src/core/tuning.ts`; see 5.6).
 - The player hires workers and managers and runs stands in several New York locations (`web/src/config/catalog.ts`).
 - The player can buy an operating stand from a seller. Today there is one fixed offer (`web/src/ui/acquisition-offer.ts`).
 - The October 31, 2026 release passed 1,537 web tests (`docs/HANDOFF.md`).
@@ -46,7 +46,7 @@ The game is the existing single-player Career mode, refined into a **fixed 30-da
 
 Pillars are the few priorities used to choose between designs when they conflict.
 
-1. **Capital allocation.** Every dollar has a best use: build a stand, bid on one or hold the cash, and choose where. The score charges 5% a day on every dollar in the business, idle cash included (owner decision 2026-11-24, see 5.6), so both blind growth and timid hoarding lose.
+1. **Capital allocation.** Every dollar has a best use: build a stand, bid on one or hold the cash, and choose where. Grandma's bank grows 15% a day whatever the player does, and each day's line asks the player's own money (idle cash included) to earn 15% too (owner decisions 2026-11-24, see 5.6). Blind growth loses because permits and prices paid are not recovered; timid hoarding loses because idle cash earns nothing while her money compounds.
 2. **No undo within a run.** Every purchase and bid in a 30-day career is final. A bad deal stays on your books for the rest of the career, which makes diligence matter—while starting a fresh 30-day career lets players apply what they learned without getting permanently soft-locked.
 3. **Neither the books nor the seller ever lie—but the books don't tell the whole story.** Every number a player sees is true and comes from the engine. Sellers never fabricate figures, and they answer truthfully when asked directly, but they volunteer nothing negative. Good investors read the books *and* ask the right questions.
 
@@ -159,9 +159,18 @@ After a bought stand has run for a while, Books points to the on-book line or of
 
 ### 5.6 Scoring, Fixed 30-Day Career and Ranking (scoring Implemented; 30-day career & ranking Planned, student decided)
 
-**Value created** is profit after a 5% daily charge on all the money in the business: cash, stock and equipment (`HURDLE_RATE = 0.05` and `getMoneyInBusiness` in `game/src/core/sliceModel.ts`). A stand that earns less each day than 5% of what it cost lowers your score, even if it makes a profit.
+**The race (Implemented, `game/src/core/sliceModel.ts`).** Two numbers are compared all run:
 
-> **Owner decision, 2026-11-24: idle cash is charged too.** This replaces the earlier rule "Cash is not charged directly" (`VALUE_POLICY.hurdle` in `web/src/domain/value.ts`). Reason: with free cash, the best play after a good week was to stop investing and hold the money, and the line shrank as the player got richer. Charging every dollar makes the line grow with the player's wealth, so holding cash is a choice with a visible cost and one stand stops being enough. A purchase that only moves money between cash, stock and gear leaves the line unchanged; only money entering or leaving the business (sales, rent, wages, a loss on a resale) moves it.
+- **You** (`getWorth`) = cash + lemons at cost + gear at what it would sell for (a stall kit $8.40, a pitcher $7). Permits and the price paid for a bought stand count as $0 beyond the kit. Every purchase therefore opens a hole the stand has to earn back, and the price paid for a seller's stand matters dollar for dollar.
+- **Grandma** (`grandmaWorth`) = $30 x 1.15^days: $34.50 after day 1, $121.37 after day 10, $491.00 after day 20, $1,986.35 after day 30. It does not depend on anything the player does.
+
+**Today's line (Implemented, `projectDay` in `game/src/core/dayEnd.ts`).** The line = rent + wages + 15% x You at the opening bell (`openingWorth`, written by `startNextDay`). It is frozen for the day: sales and purchases do not move it. Only rent and wages are paid in cash; the 15% part is what the same money would have made in Grandma's bank that day. **Value created** = the day's profit after rent and wages, minus that 15%. A player who beats the line every day grows faster than 15% a day and so stays ahead of Grandma. The reverse is not true: a player can be ahead in the race and miss today's line, which is the early warning that she is catching up.
+
+> **Owner decision, 2026-11-24: idle cash is charged too.** This replaces the earlier rule "Cash is not charged directly" (`VALUE_POLICY.hurdle` in `web/src/domain/value.ts`). Reason: with free cash, the best play after a good week was to stop investing and hold the money, and the line shrank as the player got richer. Charging every dollar makes the line grow with the player's wealth, so holding cash is a choice with a visible cost and one stand stops being enough.
+
+> **Balance pass, 2026-11-24 (owner: "way too easy to hit the hurdle rate").** The rate went from 5% to 15%; the line's base is frozen at the opening bell and counts gear at resale value instead of cost. Before this, a day-1 player earned $23 against a $2.75 line, and the price bid for the seller's stand did not affect the score at all (the bid only moved money from cash to equipment, and both were charged alike). The economy was retuned with the rate; the numbers are in 5.8.
+
+**Day grades** follow the rate (`computeDayGrade`): B = the day's return matched 15%, A = 20% or more, S = 30% or more, C = a profit below 15%, D = a loss.
 
 **Fixed 30-day career (student decided):** Each career lasts **30 days** (replacing the earlier unbounded permanent-business design). Every action and accepted bid inside a 30-day career is final—there is no undo within a run. When a career ends at day 30, the final score posts to the leaderboard, and the player may start a new 30-day career to apply what they learned.
 
@@ -174,6 +183,35 @@ After a bought stand has run for a while, Books points to the on-book line or of
 ### 5.7 No-Undo Within a Run (Planned, student decided)
 
 Instead of enforcing one permanent save per account on the server, permanence applies **within each 30-day career**: purchases, bids and operational choices cannot be undone during a run. Saves stay lightweight in the browser (using the existing career save and leaderboard submission flow), cutting server-state scope ahead of the Nov 28 prototype.
+
+### 5.8 Balance numbers and how they are checked (Implemented 2026-11-24)
+
+Every balance number lives in `game/src/core/tuning.ts` (`TUNING`) and `game/src/core/neighborhoods.ts`. A simulation (`game/src/core/simulateRun.ts`) plays whole 30-day runs through the real rules with scripted players (`game/src/core/simPolicies.ts`), and a test (`game/src/core/simulateRun.test.ts`) fails if a player finishes outside its band against Grandma's $1,986.
+
+| Scripted player | What it does | Must finish at | Measured |
+|---|---|---|---|
+| Lazy | One stand, pours by hand all run | 0.25x to 0.5x Grandma | 0.29x; misses the line from day 7, overtaken on day 18 |
+| Average | Finds the best price, opens the corner of the next cheapest district up to five stands, pays the seller's asking price | 0.9x to 1.2x | 1.12x |
+| Sharp | Buys only what pays for itself in the days left, best payback first | 2x to 3x | 2.54x |
+| Open everything (a control) | Opens and staffs every plot as cash allows | at least 15% below Sharp | 0.14x |
+
+The same test changes each number by 10% in turn and checks that Lazy < Average < Sharp still holds.
+
+| Number | Value |
+|---|---|
+| Grandma's rate | 15% a day |
+| Cup cost | $1 (a crate is $5 for 5 cups) |
+| Worker | $10 a day, serves up to 20 cups a day |
+| Manager | $20 a day |
+| Pour (hold to fill one cup) | 2 s alone; 0.6 s with a worker at that stand |
+| Corner rent a day | Central Park $4, Columbia $10, Broadway $18, West Village $28, Financial District $36, Fifth Avenue $44. A side street costs 70% of the corner, a plaza 140% |
+| Corner walkers a day | Central Park 36, Columbia 36, Broadway 40, West Village 46, Financial District 54, Fifth Avenue 62. A side street sees 60% of the corner, a plaza 140% |
+| City permit, paid once per lease | Central Park $0, Columbia $30, Broadway $60, West Village $90, Financial District $120, Fifth Avenue $150. Not recoverable |
+| Shared crowd | Two stands the player built in one district each keep 80% of their walkers; three keep 60%. A stand bought from a seller is not counted and is not shared |
+
+**One sales formula (`game/src/core/standSales.ts`).** A stand's demand is walkers x the chance a walker buys at the price. A staffed stand sells that, up to its worker's 20 cups. The stand the player runs in person is meant to see the same demand, limited by the player's hands. (The 3D scene's customer timer still has to be switched to this formula; until then the live stand uses its old timer.)
+
+**Known gap.** With a $10 worker, the Central Park seller's stand (about 5 cups a day on its published books) loses money when staffed, at any price paid. It only pays if the player runs it in person. The deal's books predate this balance pass and need rescaling before buying a stand is attractive.
 
 ## 6. Worked deal (illustration, invented numbers)
 
@@ -227,7 +265,7 @@ Every pitch and answer uses only true numbers from the books, asking price, or s
 ## 9. Win and failure conditions
 
 - **Win:** maximize total value created by the end of the 30-day career and rank higher on the leaderboard (Planned ranking, student decided).
-- **Failure:** running out of cash or overpaying for stands that earn less than their 5% daily capital charge drags down your 30-day score. Within a career there is no undo; once a run finishes (or fails), the player can start a new 30-day career.
+- **Failure:** finishing day 30 with less than Grandma's bank ($1,986.35). Running out of cash, or paying more for a stand or a permit than it earns back in the days left, is how that happens. Within a career there is no undo; once a run finishes (or fails), the player can start a new 30-day career.
 - **Career end (Day 30):** Career already has a retirement day policy (`web/src/domain/career/policy.ts`), which will settle the career at day 30.
 
 ## 10. Edge cases
@@ -303,7 +341,7 @@ Same as Career today (`web/src/world/input.ts`): walk with WASD or the arrow key
 2. What spread between asking price and hidden reservation price makes sealed bidding feel rewarding without turning into blind guessing?
 3. Is three questions the right limit?
 4. What share of deals should be clean?
-5. Should idle cash stay at 0% (relying on the 30-day clock for opportunity cost), or should a safe low-yield treasury option (e.g., 1%/day) be added post-G2?
+5. Resolved 2026-11-24: idle cash is charged at Grandma's 15% in the daily line (5.6). A deposit account paying 15% was considered and rejected: banking $20 a day at 15% ends near $8,700, more than four times Grandma, without growing the business at all.
 6. How long after a purchase should Books reveal the catch?
 7. Should the pre-bid hurdle chart stay, since it uses the seller's unadjusted figures?
 8. Does the daily customer rotation stay on top of each neighborhood's base mix?

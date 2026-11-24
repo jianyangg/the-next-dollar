@@ -21,6 +21,12 @@ vi.mock('../audio/soundEngine', () => {
       playDayLost: vi.fn(),
       playLineCrossed: vi.fn(),
       playTravel: vi.fn(),
+      setMusicTheme: vi.fn(),
+      setMusicHushed: vi.fn(),
+      playSubwayDepart: vi.fn(),
+      playSubwayArrive: vi.fn(),
+      playMapStation: vi.fn(),
+      playMapSelect: vi.fn(),
       playHonkKo: vi.fn(),
     },
   };
@@ -36,14 +42,18 @@ import { anchorStore, resetAnchorStore } from './anchorStore';
 import { registerScene } from './sceneBridge';
 import type { SellerClient } from '../deal/sellerClient';
 import {
+  ARRIVAL_TITLE_MS,
   resetGameStore,
   selectClockPaused,
+  selectMusicHushed,
   setSellerClientForTests,
   TRAVEL_COVER_MS,
   TRAVEL_REVEAL_MS,
   useGameStore,
 } from './gameStore';
 import { countOwnedStands } from '../core/sliceModel';
+import { getNeighborhood } from '../core/neighborhoods';
+import { initRunRandom } from '../core/runRandom';
 
 const store = () => useGameStore.getState();
 const actions = () => useGameStore.getState().actions;
@@ -117,7 +127,7 @@ describe('shopping actions match the pure core rules', () => {
     setEconomy({ cash: 30 });
     actions().buyLemons();
     const toast = store().toasts.at(-1);
-    expect(toast?.text).toBe('+10 cups');
+    expect(toast?.text).toBe('+5 cups');
     expect(toast?.chips).toEqual([
       { kind: 'cash', delta: -5 },
       { kind: 'stock', delta: 5 },
@@ -166,7 +176,7 @@ describe('shopping actions match the pure core rules', () => {
     actions().buyLemons(); // -> $13
     actions().buyLemons(); // would leave $8 < $10 pitcher: refused
     expect(store().economy.cash).toBe(13);
-    expect(store().economy.cupsInStock).toBe(10);
+    expect(store().economy.cupsInStock).toBe(5); // one crate = 5 cups
     expect(store().toasts.at(-1)?.text).toBe('Keep $10 for pitcher');
     expect(soundEngine.playReject).toHaveBeenCalledTimes(1);
     actions().buyPitcher(); // the essentials still go through
@@ -178,7 +188,7 @@ describe('shopping actions match the pure core rules', () => {
     actions().buyStallKit();
     actions().buyLemons();
     actions().buyLemons();
-    expect(store().economy.cupsInStock).toBe(20);
+    expect(store().economy.cupsInStock).toBe(10); // two crates of 5
   });
 });
 
@@ -220,7 +230,10 @@ describe('day end', () => {
     expect(store().economy).toEqual(expected!.state);
     expect(store().workingAtStand).toBe(false);
     expect(store().brewedCups).toBe(0); // unserved lemonade spoils overnight
-    expect(soundEngine.playDayEnd).toHaveBeenCalledTimes(1);
+    // Three cups ($6 after lemons) cannot cover $4 rent plus a $10 worker: the losing bell.
+    expect(expected!.record.valueCreated).toBeLessThan(0);
+    expect(soundEngine.playDayLost).toHaveBeenCalledTimes(1);
+    expect(soundEngine.playDayEnd).not.toHaveBeenCalled();
   });
 
   it('startNextDay advances the day, clears the scorecard and rewinds the clock', () => {
@@ -352,7 +365,11 @@ describe('navigation', () => {
     expect(store().neighborhoodId).toBe('market');
     vi.advanceTimersByTime(TRAVEL_REVEAL_MS);
     expect(store().travel).toBeNull();
-    expect(store().toasts.at(-1)?.text).toBe('Supply Market');
+    // The district title shows at the top of the screen (not as a note on a stand), then clears.
+    expect(store().arrival?.district).toBe('market');
+    expect(store().toasts).toEqual([]);
+    vi.advanceTimersByTime(ARRIVAL_TITLE_MS);
+    expect(store().arrival).toBeNull();
   });
 
   it('selectNeighborhood remembers the last business district and closes panels', () => {
@@ -417,17 +434,21 @@ describe('the line and the ending', () => {
   });
 
   it('the sale that pushes today past the line plays the crossing sting once, not a coin', () => {
-    // Built Central Park stand: line = $2 rent + 5% of $27 tied up = $3.35. At $3 a cup
-    // minus $0.50 lemons, cup 1 earns $2.50 (below), cup 2 makes $5.00 (past the line).
+    // Built Central Park stand: line = $4 rent + 15% of the $30 the day opened with = $8.50.
+    // The day has already earned $6 (three cups at $3, minus $1 of lemons each). Each
+    // further cup adds $2: cup 1 makes $8 (still below), cup 2 makes $10 (past the line).
     useGameStore.setState({ workingAtStand: true, brewedCups: 3, economy: tutorialEconomyFromCore() });
-    setEconomy({ equipmentValue: 22, inventoryValue: 5 });
+    setEconomy({ dayRevenue: 9, dayCogs: 3 });
+    actions().setSpaceHeld(true); // a pour fills only while held
     actions().startServeFrontCustomer();
     vi.advanceTimersByTime(50);
     expect(soundEngine.playLineCrossed).not.toHaveBeenCalled();
+    actions().setSpaceHeld(true); // a pour fills only while held
     actions().startServeFrontCustomer();
     vi.advanceTimersByTime(50);
     expect(soundEngine.playLineCrossed).toHaveBeenCalledTimes(1);
     expect(store().toasts.some((t) => t.text === 'Beat the line!')).toBe(true);
+    actions().setSpaceHeld(true); // a pour fills only while held
     actions().startServeFrontCustomer();
     vi.advanceTimersByTime(50);
     expect(soundEngine.playLineCrossed).toHaveBeenCalledTimes(1); // already past it
@@ -453,9 +474,8 @@ describe('the line and the ending', () => {
 });
 
 describe('hold to serve', () => {
-  // Node has no requestAnimationFrame. This stub finishes each 450 ms pour on the next
-  // fake-timer tick by reporting a frame time far in the future, so a test can count
-  // pours by advancing the fake clock.
+  // Node has no requestAnimationFrame. This stub runs each frame on the next fake-timer
+  // tick, reporting a frame time far in the future, so a test can count pours.
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) =>
       setTimeout(() => cb(performance.now() + 10_000), 16)
@@ -472,27 +492,98 @@ describe('hold to serve', () => {
     vi.unstubAllGlobals();
   });
 
-  it('a tap (released before the pour ends) serves exactly one cup', () => {
+  // The rAF stub reports a frame time far in the future, so one frame completes a pour
+  // that is still held; a release before that frame spills it.
+  it('holding until the cup is full serves exactly ONE customer', () => {
+    actions().setSpaceHeld(true);
     actions().startServeFrontCustomer();
     vi.advanceTimersByTime(500);
     expect(store().economy.dayCupsSold).toBe(1);
+    expect(store().brewedCups).toBe(2); // still holding, but the next cup needs a new press
   });
 
-  it('holding keeps pouring until the pitcher is empty, then stops quietly', () => {
+  it('letting go before the cup is full spills it: no sale, customer still waiting', () => {
     actions().setSpaceHeld(true);
     actions().startServeFrontCustomer();
-    vi.advanceTimersByTime(500);
-    expect(store().economy.dayCupsSold).toBe(3); // all 3 brewed cups
-    expect(store().brewedCups).toBe(0);
-    expect(store().toasts.some((t) => t.text === 'Brew first')).toBe(false);
-  });
-
-  it('letting go mid-chain stops after the current pour', () => {
-    actions().setSpaceHeld(true);
-    actions().startServeFrontCustomer();
-    vi.advanceTimersByTime(20); // first pour done, second started
     actions().setSpaceHeld(false);
     vi.advanceTimersByTime(500);
+    expect(store().economy.dayCupsSold).toBe(0);
+    expect(store().serveProgress).toBeNull();
+    expect(soundEngine.playReject).toHaveBeenCalledTimes(1);
+  });
+
+  it('a new press serves the next customer', () => {
+    for (let i = 0; i < 2; i++) {
+      actions().setSpaceHeld(true);
+      actions().startServeFrontCustomer();
+      vi.advanceTimersByTime(500);
+      actions().setSpaceHeld(false);
+    }
     expect(store().economy.dayCupsSold).toBe(2);
+  });
+
+  it('alone the pour is a 2 s hold; a worker at the stand cuts it to 0.6 s', () => {
+    // This test needs frames at a known time, so it replaces the stub above with one
+    // whose frames always report "0.7 s after the pour began".
+    const start = performance.now();
+    vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => setTimeout(() => cb(start + 700), 16));
+    const plot = 'central-park/corner';
+    setEconomy({ plots: { ...store().economy.plots, [plot]: 'built' } });
+
+    // Alone: 0.7 s into a 2 s pour the cup is 35% full and nothing is sold yet.
+    actions().setSpaceHeld(true);
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(20);
+    expect(store().economy.dayCupsSold).toBe(0);
+    expect(store().serveProgress).toBeCloseTo(0.35);
+    actions().setSpaceHeld(false); // let go: the half-poured cup is spilled
+    vi.advanceTimersByTime(20);
+
+    // With a worker at this stand the same 0.7 s is more than the 0.6 s hold: sold.
+    setEconomy({ staffedPlots: [plot] });
+    actions().setSpaceHeld(true);
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(20);
+    expect(store().economy.dayCupsSold).toBe(1);
+  });
+});
+
+describe('music hush', () => {
+  it('hushes while the day receipt is up, and comes back on Next Day', () => {
+    expect(selectMusicHushed(store())).toBe(false);
+    actions().closeDay();
+    expect(selectMusicHushed(store())).toBe(true);
+    actions().startNextDay();
+    expect(selectMusicHushed(store())).toBe(false);
+  });
+
+  it('stays hushed on the run-ending screen', () => {
+    actions().closeDay();
+    actions().finishRun();
+    expect(selectMusicHushed(store())).toBe(true);
+  });
+});
+
+describe('the lemonade brew (squeeze -> sweeten -> stir)', () => {
+  it('starts with this district taste, the player squeezing, and ignores lock', () => {
+    initRunRandom(1);
+    // jsdom-free test: the brew loop only needs a frame scheduler to exist.
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+    setEconomy(tutorialEconomyFromCore());
+    useGameStore.setState({ workingAtStand: true, neighborhoodId: 'fidi' });
+    actions().startBrewGame();
+    const game = store().brewGame;
+    expect(game?.kind).toBe('lemonade-brew');
+    if (game?.kind !== 'lemonade-brew') return;
+    // FiDi likes it tart; the taste meter target is that district's sweetTooth.
+    expect(game.sweeten.target).toBe(getNeighborhood('fidi').sweetTooth);
+    // No helper at this stand, so the player squeezes first.
+    expect(game.phase).toBe('squeeze');
+    // "Lock" is a no-op for this brew: holding Space is its input.
+    actions().lockBrewGame();
+    expect(store().brewGame).toBe(game);
+    resetGameStore(); // stops the brew loop while the stubs still exist
+    vi.unstubAllGlobals();
   });
 });

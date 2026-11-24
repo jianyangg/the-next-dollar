@@ -1,14 +1,13 @@
 import { AnimatePresence, m } from 'motion/react';
 import { type FormEvent, useState } from 'react';
 import { PUBLIC_DEALS } from '../../shared/deals';
-import { CENTRAL_PARK_DEAL, CENTRAL_PARK_DEAL_ID } from '../core/deal';
+import { breakEvenDailyProfit, CENTRAL_PARK_DEAL, CENTRAL_PARK_DEAL_ID } from '../core/deal';
 import { STARTER_QUESTIONS } from '../core/sellerQuestions';
-import { HURDLE_RATE } from '../core/sliceModel';
 import { MAX_QUESTION_CHARS, MAX_QUESTIONS } from '../deal/limits';
 import type { DealView } from '../deal/dealView';
 import { INPUT_PRIORITY } from '../state/input';
 import { useGameStore } from '../state/gameStore';
-import { getPortraits } from './assets';
+import { getSellerPortrait } from './assets';
 import { backdropMotion, modalShellMotion } from './motionPresets';
 import { CursorMenu, type CursorMenuItem } from './kit/CursorMenu';
 import { Key } from './kit/Money';
@@ -22,7 +21,8 @@ import './styles/seller.css';
  *         question pips, and a cursor menu: preset questions, "Type my own", Bid, Walk away.
  *   RIGHT the seller's books on PAPER (engine numbers from the deal registry).
  *   BID   a dial (left/right) and THE LINE meter: what the books say the stand earns a
- *         day vs. the 5% a day this bid must earn to create value.
+ *         day vs. what the stand must earn each day left to beat Grandma's rate on
+ *         this bid (core/deal.ts `breakEvenDailyProfit`).
  *
  * The two surfaces are the lesson: the books are engine facts, the balloon is a person
  * who wants to sell. Spotting the gap is the skill the game teaches.
@@ -49,6 +49,7 @@ export function SellerDealModal() {
 function SellerDealBody({ bid, setBid }: { bid: number; setBid: (n: number) => void }) {
   const deal = useGameStore((s) => s.deal);
   const cash = useGameStore((s) => s.economy.cash);
+  const daysLeft = useGameStore((s) => s.economy.maxDays - s.economy.day + 1);
   const actions = useGameStore((s) => s.actions);
   const [mode, setMode] = useState<Mode>('menu');
 
@@ -94,6 +95,7 @@ function SellerDealBody({ bid, setBid }: { bid: number; setBid: (n: number) => v
               bid={bid}
               setBid={setBid}
               cash={cash}
+              daysLeft={daysLeft}
               deal={deal}
               disabled={busy}
               onSeal={() => actions.submitBid(bid)}
@@ -110,7 +112,7 @@ function SellerDealBody({ bid, setBid }: { bid: number; setBid: (n: number) => v
 
 /** The seller's balloon, or a plain status when there are no real words to show. */
 function Speech({ deal }: { deal: DealView | null }) {
-  const portrait = getPortraits().shiba;
+  const portrait = getSellerPortrait();
   const latest = deal?.qa[deal.qa.length - 1];
   let body: React.ReactNode;
   if (!deal || deal.phase === 'loading' || deal.phase === 'answering') {
@@ -283,6 +285,7 @@ function BidDial({
   bid,
   setBid,
   cash,
+  daysLeft,
   deal,
   disabled,
   onSeal,
@@ -291,13 +294,16 @@ function BidDial({
   bid: number;
   setBid: (n: number) => void;
   cash: number;
+  /** Days of summer still to play, today included: the stand's time to pay back. */
+  daysLeft: number;
   deal: DealView | null;
   disabled: boolean;
   onSeal: () => void;
   onBack: () => void;
 }) {
   const clamp = (n: number) => Math.max(1, Math.round(n));
-  const mustEarn = +(bid * HURDLE_RATE).toFixed(2);
+  // Break-even: the bid repaid at Grandma's compounding rate over the days left.
+  const mustEarn = breakEvenDailyProfit(bid, daysLeft);
   // Meter scale: the larger of the two figures fills the bar.
   const scale = Math.max(latestProfit, mustEarn, 0.01);
 

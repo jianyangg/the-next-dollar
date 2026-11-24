@@ -48,9 +48,15 @@
 .hud-sun-path { fill: none; stroke: var(--sign-dim); stroke-width: 2; stroke-dasharray: 3 4; }
 .hud-sun-done { fill: none; stroke: var(--outline); stroke-width: 3; }
 .hud-sun-horizon { stroke: var(--outline); stroke-width: 3; }
-.hud-sun-disc { fill: var(--title); stroke: var(--outline); stroke-width: 3; }
+/* The sun: an orange disc with eight rays that turn slowly (still with reduced motion). */
+.hud-sun-disc { fill: var(--sun); stroke: var(--outline); stroke-width: 2.5; }
+.hud-sun-rays line { stroke: var(--sun-ray); stroke-width: 2.5; stroke-linecap: square; }
+.hud-sun-rays { animation: hud-sun-turn 12s steps(8) infinite; }
+@keyframes hud-sun-turn { to { rotate: 45deg; } }
+@media (prefers-reduced-motion: reduce) { .hud-sun-rays { animation: none; } }
+/* The moon: a pale crescent before sunrise and after sunset. */
+.hud-moon { fill: var(--moon); stroke: var(--outline); stroke-width: 2; }
 /* Before sunrise / after sunset the sun sits under the horizon, dimmed like the sky. */
-.hud-sun-disc.is-down { fill: var(--sign-2); }
 .hud-clock-time { font-size: var(--t-small); white-space: nowrap; }
 
 /* The 1x/2x toggle is a small sign button: control blue (--accent) when the day runs fast. */

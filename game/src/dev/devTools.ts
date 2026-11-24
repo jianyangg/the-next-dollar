@@ -1,4 +1,5 @@
 import { cents } from '../core/money';
+import { ringOpeningBell } from '../core/dayEnd';
 import { plotsIn } from '../core/plots';
 import * as Purchases from '../core/purchases';
 import { getRunSeed } from '../core/runRandom';
@@ -129,7 +130,8 @@ export function skipToEvening(): DevResult {
 /**
  * Jump to the morning of day `day` (1..maxDays). Only the day counter and the per-day
  * accumulators (cups sold today, revenue today...) are reset, so today's income
- * statement starts clean. Career totals and history are left alone: they are what the
+ * statement starts clean, and the opening bell rings (core/dayEnd.ts `ringOpeningBell`)
+ * so the new day's line is charged on what the player has now. Career totals and history are left alone: they are what the
  * player earned so far, we only moved the calendar.
  */
 export function jumpToDay(day: number): DevResult {
@@ -137,7 +139,7 @@ export function jumpToDay(day: number): DevResult {
   if (!Number.isInteger(day) || day < 1 || day > s.maxDays) {
     throw new RangeError(`[dev] jumpToDay: day must be a whole number 1..${s.maxDays}, got ${day}`);
   }
-  const next: SliceState = { ...s, day, dayCupsSold: 0, dayRevenue: 0, dayCogs: 0, dayRentPaid: 0 };
+  const next: SliceState = ringOpeningBell({ ...s, day, dayCupsSold: 0, dayRevenue: 0, dayCogs: 0, dayRentPaid: 0 });
   useGameStore.setState({ timeProgress: 0, eodRecord: null }, false, 'dev:jumpToDay');
   commitEconomy('jumpToDay', next);
   console.info('[dev]', 'jumpToDay', { from: s.day, to: day });

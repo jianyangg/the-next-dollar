@@ -27,12 +27,12 @@ describe('buildReceipt', () => {
       'Rent',
       'Wages',
       'Profit',
-      'Money in business',
+      "Grandma's 15%",
       'Value created',
     ]);
     expect(rows.map((r) => r.text)).toEqual(['+$24.00', '-$4.00', '-$2.00', '$0.00', '+$18.00', '-$1.15', '+$16.85']);
     expect(rows[0].how).toBe('8 cups × $3.00');
-    expect(rows[5].how).toBe('$23.00 × 5%');
+    expect(rows[5].how).toBe('15% of $23.00');
   });
 
   it('never shows a formal term on the receipt', () => {

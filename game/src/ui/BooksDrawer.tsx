@@ -16,6 +16,7 @@ import { getNeighborhood } from '../core/neighborhoods';
 import { selectLivePlotId, useGameStore } from '../state/gameStore';
 import { INPUT_PRIORITY } from '../state/input';
 import { BOOKS_TABS, type BooksTab, meterShape } from './books/ledger';
+import { ratePct } from './books/receipt';
 import { fmtSignedMoney } from './format';
 import { Key } from './kit/Money';
 import { CursorMenu, type CursorMenuItem } from './kit/CursorMenu';
@@ -79,7 +80,7 @@ function Ledger({ children }: { children: ReactNode }) {
   );
 }
 
-/** The financial statements as four tabs: Income, Balance, Value (the 5% line), Reviews. */
+/** The financial statements as four tabs: Income, Balance, Value (Grandma's daily rate), Reviews. */
 function BooksDrawerBody() {
   const actions = useGameStore((s) => s.actions);
   const state = useGameStore((s) => s.economy);
@@ -197,9 +198,9 @@ function BooksDrawerBody() {
         {tab === 'value' && (
           <section aria-label="Value">
             <Ledger>
-              <Row label="Money in business" formal="cash + stock + gear" value={`$${moneyIn.toFixed(2)}`} />
+              <Row label="You at opening" formal="cash + lemons + gear resale" value={`$${moneyIn.toFixed(2)}`} />
               <Row
-                label={`${(HURDLE_RATE * 100).toFixed(0)}% every day`}
+                label={`Grandma's ${ratePct()} a day`}
                 formal="hurdle charge"
                 value={`-$${dailyHurdle.toFixed(2)}/d`}
                 tone="cost"
@@ -207,7 +208,7 @@ function BooksDrawerBody() {
               />
             </Ledger>
 
-            {/* The meter: today's profit bar against the 5% bar, drawn on one shared scale. */}
+            {/* The meter: today's profit bar against Grandma's daily share, drawn on one shared scale. */}
             <div className="books-meter">
               <div className="books-meter-top">
                 <span>Profit vs the line</span>
@@ -226,7 +227,7 @@ function BooksDrawerBody() {
                 <span className="pt-num books-meter-val">{fmtSignedMoney(projectedNopat)}</span>
               </div>
               <div className="books-meter-row">
-                <span className="books-meter-name">5% line</span>
+                <span className="books-meter-name">Grandma's {ratePct()}</span>
                 <div className="books-meter-track">
                   <div className="books-meter-fill pt-line-fill" style={{ width: `${meter.linePct}%` }} />
                 </div>
@@ -254,7 +255,7 @@ function BooksDrawerBody() {
                     type="button"
                     className="pt-btn is-ghost"
                     onClick={actions.sellUsedPitcher}
-                    title={`Cash +${money(USED_PITCHER_RESALE)}, equipment -${money(PITCHER_COST)}, 5% charge -${money((PITCHER_COST - USED_PITCHER_RESALE) * HURDLE_RATE)}/day`}
+                    title={`Cash +${money(USED_PITCHER_RESALE)}, equipment -${money(PITCHER_COST)}, ${ratePct()} a day -${money((PITCHER_COST - USED_PITCHER_RESALE) * HURDLE_RATE)}/day`}
                   >
                     Sell Pitcher (+{money(USED_PITCHER_RESALE)})
                   </button>
@@ -264,7 +265,7 @@ function BooksDrawerBody() {
                     type="button"
                     className="pt-btn is-ghost"
                     onClick={actions.divestCurrentStand}
-                    title={`Cash +${money(STAND_DIVEST_PROCEEDS)}, equipment -${money(STALL_KIT_COST)}, 5% charge -${money((STALL_KIT_COST - STAND_DIVEST_PROCEEDS) * HURDLE_RATE)}/day`}
+                    title={`Cash +${money(STAND_DIVEST_PROCEEDS)}, equipment -${money(STALL_KIT_COST)}, ${ratePct()} a day -${money((STALL_KIT_COST - STAND_DIVEST_PROCEEDS) * HURDLE_RATE)}/day`}
                   >
                     Divest Stand (+{money(STAND_DIVEST_PROCEEDS)})
                   </button>

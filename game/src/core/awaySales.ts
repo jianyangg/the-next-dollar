@@ -1,8 +1,8 @@
-import { getConversionProb } from './demand';
-import { getNeighborhood } from './neighborhoods';
-import { getPlot, type PlotId } from './plots';
+import { type PlotId } from './plots';
 import { applySale } from './sales';
 import type { SliceState } from './sliceModel';
+import { ownStandsInDistrict, staffedCupsPerDay } from './standSales';
+import { type Tuning, TUNING } from './tuning';
 
 /**
  * AWAY SALES: a stand with a hired worker keeps selling while the player is somewhere
@@ -11,7 +11,7 @@ import type { SliceState } from './sliceModel';
  * Why this exists: owner decision (2026-11-24) "Staffed stands sell". Before, a worker
  * only widened the brew sweet spots, so a second stand was rent with no income and the
  * only way to grow was to stand at one counter. Now every extra stand is a real bet:
- * rent + a $3 wage against walkers x buy chance x price, using the SAME demand rule
+ * rent + a $10 wage against walkers x buy chance x price, using the SAME demand rule
  * (core/demand.ts) and the SAME sale rule (core/sales.ts) as the live stand.
  *
  * How it works (deterministic, no dice):
@@ -46,6 +46,8 @@ export interface AwayStepInput {
   /** Fractional cups owed to each plot from earlier ticks. */
   carry: Readonly<Record<PlotId, number>>;
   nextReviewId: number;
+  /** Balance numbers; the game leaves this out (core/tuning.ts TUNING is used). */
+  tuning?: Tuning;
 }
 
 export interface AwayStepResult {
@@ -58,11 +60,17 @@ export interface AwayStepResult {
   missed: number;
 }
 
-/** Cups per full day a staffed plot is expected to sell at the current price. */
-export function awayCupsPerDay(plotId: PlotId, pricePerCup: number): number {
-  const plot = getPlot(plotId);
-  const buyChance = getConversionProb(pricePerCup, getNeighborhood(plot.district).priceSensitivity);
-  return plot.walkersPerDay * buyChance;
+/**
+ * Cups per full day a staffed plot is expected to sell at the current price. The number
+ * itself comes from core/standSales.ts, the one sales formula shared with the live stand.
+ */
+export function awayCupsPerDay(
+  plotId: PlotId,
+  pricePerCup: number,
+  t: Tuning = TUNING,
+  standsInDistrict = 1
+): number {
+  return staffedCupsPerDay(plotId, pricePerCup, t, standsInDistrict);
 }
 
 export function stepAwaySales(input: AwayStepInput): AwayStepResult {
@@ -70,15 +78,16 @@ export function stepAwaySales(input: AwayStepInput): AwayStepResult {
   const carry: Record<PlotId, number> = { ...input.carry };
   let sold = 0;
   let missed = 0;
+  const t = input.tuning ?? TUNING;
   if (input.dayFraction <= 0) return { state, carry, nextReviewId, sold, missed };
 
   for (const plotId of state.staffedPlots) {
     if (plotId === input.livePlotId || state.plots[plotId] !== 'built') continue;
-    let owed = (carry[plotId] ?? 0) + awayCupsPerDay(plotId, state.pricePerCup) * input.dayFraction;
+    let owed = (carry[plotId] ?? 0) + awayCupsPerDay(plotId, state.pricePerCup, t, ownStandsInDistrict(state.plots, plotId)) * input.dayFraction;
     while (owed >= 1) {
       owed -= 1;
       if (state.cupsInStock - input.reservedCups >= 1) {
-        state = applySale(state, AWAY_SALE_PATIENCE, nextReviewId);
+        state = applySale(state, AWAY_SALE_PATIENCE, nextReviewId, t);
         nextReviewId += 1;
         sold += 1;
       } else {

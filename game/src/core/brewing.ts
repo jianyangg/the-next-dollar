@@ -83,3 +83,17 @@ export function applyBrewOutcome(
   const next = Math.min(cupsInStock, brewedCups + batch);
   return { brewedCups: next, added: Math.max(0, next - brewedCups) };
 }
+
+/**
+ * How hard today's brew is, 0 (day 1) .. 1 (the last day).
+ *
+ * Owner decision (2026-11-24): difficulty must come from the lemonade itself, never from
+ * a faster clock. So it changes WHAT you brew with: more lemons per batch, more of them
+ * dry or seedy (core/minigames/squeeze.ts `drawLemons`), and pickier customers (a
+ * narrower taste band, sweeten.ts `bandForDifficulty`). The pour, press and stir speeds
+ * stay the same all summer.
+ */
+export function brewDifficulty(day: number, maxDays: number): number {
+  if (maxDays <= 1) return 0;
+  return Math.min(1, Math.max(0, (day - 1) / (maxDays - 1)));
+}

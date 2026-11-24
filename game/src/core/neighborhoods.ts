@@ -22,7 +22,29 @@ export interface NeighborhoodConfig {
   shortName: string;
   streetSignA: string;
   streetSignB: string;
+  /** Rent per day of this district's CORNER plot (side streets and plazas scale from it, core/plots.ts). */
   dailyRent: number;
+  /**
+   * Passers-by who reach this district's CORNER stand in a full day (side streets and
+   * plazas scale from it, core/plots.ts). Busier districts cost more rent; whether the
+   * extra crowd is worth the extra rent depends on the price they will pay.
+   */
+  cornerWalkersPerDay: number;
+  /**
+   * One-off city permit paid when a lease is signed on any plot in this district
+   * (core/purchases.ts `leaseFee`). Free in Central Park, where every run starts, and
+   * dearer the busier the district. It is what makes a downtown stand a real investment:
+   * the money is gone the moment it is paid (a permit cannot be resold), so the stand
+   * has to earn it back in the days that are left.
+   */
+  permitFee: number;
+  /**
+   * How sweet this district's customers like their lemonade, 0 (tart) .. 1 (very sweet).
+   * It is the target on the brew's taste meter (core/minigames/sweeten.ts), so moving
+   * to a new district means learning a new taste. Students and tourists like it sweet;
+   * the finance crowd and the Village like it tart.
+   */
+  sweetTooth: number;
   typicalPrice: string;
   crowdLabel: string;
   description: string;
@@ -39,7 +61,10 @@ export const NEIGHBORHOODS: NeighborhoodConfig[] = [
     shortName: 'Columbia',
     streetSignA: 'BROADWAY',
     streetSignB: 'W 116 ST',
-    dailyRent: 3,
+    dailyRent: 10,
+    cornerWalkersPerDay: 36,
+    permitFee: 30,
+    sweetTooth: 0.7,
     typicalPrice: '$3',
     crowdLabel: 'Students & Loyal Regulars',
     description:
@@ -62,7 +87,10 @@ export const NEIGHBORHOODS: NeighborhoodConfig[] = [
     shortName: 'Central Park',
     streetSignA: 'CENTRAL PARK W',
     streetSignB: 'W 72 ST',
-    dailyRent: 2,
+    dailyRent: 4,
+    cornerWalkersPerDay: 36,
+    permitFee: 0,
+    sweetTooth: 0.6,
     typicalPrice: '$2–$3',
     crowdLabel: 'Families & Park Walkers',
     description:
@@ -85,7 +113,10 @@ export const NEIGHBORHOODS: NeighborhoodConfig[] = [
     shortName: 'Fifth Ave',
     streetSignA: '5 AVE',
     streetSignB: 'E 57 ST',
-    dailyRent: 7,
+    dailyRent: 44,
+    cornerWalkersPerDay: 62,
+    permitFee: 150,
+    sweetTooth: 0.4,
     typicalPrice: '$5',
     crowdLabel: 'Luxury Shoppers & Visitors',
     description:
@@ -108,7 +139,10 @@ export const NEIGHBORHOODS: NeighborhoodConfig[] = [
     shortName: 'Broadway',
     streetSignA: 'BROADWAY',
     streetSignB: 'W 44 ST',
-    dailyRent: 4,
+    dailyRent: 18,
+    cornerWalkersPerDay: 40,
+    permitFee: 60,
+    sweetTooth: 0.65,
     typicalPrice: '$3–$4',
     crowdLabel: 'Theatergoers in a Rush',
     description:
@@ -132,6 +166,9 @@ export const NEIGHBORHOODS: NeighborhoodConfig[] = [
     streetSignA: 'E 14 ST',
     streetSignB: 'BROADWAY',
     dailyRent: 0,
+    cornerWalkersPerDay: 0,
+    permitFee: 0,
+    sweetTooth: 0.5,
     typicalPrice: 'Wholesale',
     crowdLabel: 'Lemon & Pitcher Vendors',
     description:
@@ -154,7 +191,10 @@ export const NEIGHBORHOODS: NeighborhoodConfig[] = [
     shortName: 'West Village',
     streetSignA: 'BLEECKER ST',
     streetSignB: 'W 4 ST',
-    dailyRent: 5,
+    dailyRent: 28,
+    cornerWalkersPerDay: 46,
+    permitFee: 90,
+    sweetTooth: 0.35,
     typicalPrice: '$4',
     crowdLabel: 'Quality-First Locals',
     description:
@@ -177,7 +217,10 @@ export const NEIGHBORHOODS: NeighborhoodConfig[] = [
     shortName: 'FiDi',
     streetSignA: 'WALL ST',
     streetSignB: 'BROAD ST',
-    dailyRent: 6,
+    dailyRent: 36,
+    cornerWalkersPerDay: 54,
+    permitFee: 120,
+    sweetTooth: 0.3,
     typicalPrice: '$4–$5',
     crowdLabel: 'Fast-Moving Office Pros',
     description:

@@ -16,10 +16,19 @@ import { type InputLayerOptions, pushInputLayer } from '../../state/input';
  */
 export function useInputLayer(
   onKeyDown: (e: KeyboardEvent) => boolean,
-  { active = true, blocking = false, passKeys, priority }: Omit<InputLayerOptions, 'onKeyDown'> & { active?: boolean }
+  {
+    active = true,
+    blocking = false,
+    passKeys,
+    priority,
+    onKeyUp,
+  }: Omit<InputLayerOptions, 'onKeyDown'> & { active?: boolean }
 ): void {
   const handlerRef = useRef(onKeyDown);
   handlerRef.current = onKeyDown;
+  // Key-ups go through a ref too (optional; most layers only care about presses).
+  const keyUpRef = useRef(onKeyUp);
+  keyUpRef.current = onKeyUp;
   const passKeysKey = passKeys?.join('\u0000');
   const present = useIsPresent();
   const live = active && present;
@@ -28,6 +37,7 @@ export function useInputLayer(
     if (!live) return;
     return pushInputLayer({
       onKeyDown: (e) => handlerRef.current(e),
+      onKeyUp: (e) => keyUpRef.current?.(e),
       blocking,
       passKeys: passKeysKey === undefined ? undefined : passKeysKey.split('\u0000'),
       priority,

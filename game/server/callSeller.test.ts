@@ -1,5 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SPEND_CAP_USD } from '../shared/limits.ts';
+import {
+  OUTPUT_TOKEN_CEILING,
+  PITCH_INPUT_TOKEN_CEILING,
+  PRICE_USD_PER_MILLION_INPUT_TOKENS,
+  PRICE_USD_PER_MILLION_OUTPUT_TOKENS,
+  SPEND_CAP_USD,
+} from '../shared/limits.ts';
+
+/**
+ * Expected cost in micro-dollars, computed from the A9 price constants. The tests derive
+ * it instead of hard-coding a figure, so switching models (Gemini -> OpenAI on
+ * 2026-11-24) changes the price in one place and these tests still check the arithmetic.
+ */
+const microUsd = (inputTokens: number, outputTokens: number): number =>
+  Math.round(inputTokens * PRICE_USD_PER_MILLION_INPUT_TOKENS + outputTokens * PRICE_USD_PER_MILLION_OUTPUT_TOKENS);
 import { StubSellerModel } from './gemini.ts';
 import { NEUTRAL_ANSWER } from './template.ts';
 import { CTX, GOOD_LEASE_ANSWER, GOOD_PITCH, json, makeService } from './testSupport.ts';
@@ -159,8 +173,8 @@ describe('6-second deadline (fake timers)', () => {
     const pending = service.pitch(CTX);
     await vi.advanceTimersByTimeAsync(6000);
     await pending;
-    // 2000 input tokens at $0.75/M + 400 output tokens at $3.75/M = $0.0030
-    expect(await store.getMicroUsd()).toBe(3000);
+    // The worst case: the pitch's input-token ceiling plus the output-token ceiling.
+    expect(await store.getMicroUsd()).toBe(microUsd(PITCH_INPUT_TOKEN_CEILING, OUTPUT_TOKEN_CEILING));
   });
 });
 
@@ -201,15 +215,16 @@ describe('spend cap (A9)', () => {
   });
 
   it('adds each call to the running tally using the A9 prices, and stops once the cap is crossed', async () => {
-    // 1,000,000 input tokens ($0.75) + 1,000,000 output tokens ($3.75) = $4.50 per call.
-    const model = new StubSellerModel([
-      { type: 'reply', rawText: json(GOOD_PITCH), inputTokens: 1_000_000, outputTokens: 1_000_000 },
-    ]);
+    // Pick an output-token count so ONE call costs 90% of the cap at whatever the prices
+    // are: the first call fits under the cap, the second pushes the tally over it.
+    const outputTokens = Math.round((SPEND_CAP_USD * 0.9 * 1_000_000) / PRICE_USD_PER_MILLION_OUTPUT_TOKENS);
+    const perCall = microUsd(0, outputTokens);
+    const model = new StubSellerModel([{ type: 'reply', rawText: json(GOOD_PITCH), inputTokens: 0, outputTokens }]);
     const { service, store } = makeService(model);
     expect((await service.pitch(CTX)).source).toBe('model');
-    expect(await store.getMicroUsd()).toBe(4_500_000);
-    expect((await service.pitch(CTX)).source).toBe('model'); // $4.50 is still under $5
-    expect(await store.getMicroUsd()).toBe(9_000_000);
+    expect(await store.getMicroUsd()).toBe(perCall);
+    expect((await service.pitch(CTX)).source).toBe('model'); // 90% of the cap is still under it
+    expect(await store.getMicroUsd()).toBe(2 * perCall);
     expect((await service.pitch(CTX)).source).toBe('template'); // now over the cap
     expect(model.calls).toHaveLength(2);
   });
@@ -259,7 +274,7 @@ describe('logging (A11)', () => {
     });
     const line = logs[0] as unknown as Record<string, unknown>;
     expect(line['rawReply']).toBe(json(GOOD_PITCH));
-    expect(line['costUsd']).toBeCloseTo(0.003, 6);
+    expect(line['costUsd']).toBeCloseTo(microUsd(2000, 400) / 1_000_000, 6);
     expect(Object.keys(line).filter((k) => /user|account|player|email/i.test(k))).toEqual([]);
   });
 });

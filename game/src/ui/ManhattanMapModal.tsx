@@ -20,6 +20,11 @@ import './styles/map.css';
 
 export interface ManhattanMapModalProps {
   currentId: NeighborhoodId;
+  /**
+   * The district the player came from, for the Back button (null = no ride yet). Like a
+   * browser's Back: one press rides straight back there, no need to find it on the line.
+   */
+  backId?: NeighborhoodId | null;
   onSelect: (id: NeighborhoodId) => void;
   onClose: () => void;
 }
@@ -61,6 +66,8 @@ const MANHATTAN_PATH =
 const PREV_KEYS = ['ArrowUp', 'ArrowLeft', 'w', 'W', 'a', 'A'];
 const NEXT_KEYS = ['ArrowDown', 'ArrowRight', 's', 'S', 'd', 'D'];
 const TRAVEL_KEYS = ['Enter', 'e', 'E'];
+/** Q (or Backspace) rides back to the district you came from. */
+const BACK_KEYS = ['q', 'Q', 'Backspace'];
 
 /** Map position (percent of the canvas) to SVG user units (the 420x560 viewBox). */
 const toX = (pct: number) => (pct / 100) * 420;
@@ -81,9 +88,12 @@ const PriceTag: React.FC<{ className?: string }> = ({ className }) => (
 
 export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
   currentId,
+  backId = null,
   onSelect,
   onClose,
 }) => {
+  // Back is offered only when it goes somewhere else (never "back" to where you stand).
+  const backTo = backId !== null && backId !== currentId ? getNeighborhood(backId) : null;
   const [selectedId, setSelectedId] = useState<NeighborhoodId>(currentId);
   const [hoveredId, setHoveredId] = useState<NeighborhoodId | null>(null);
   const icons = getIcons();
@@ -108,8 +118,13 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
   const trainAt = pointOf(activeId);
   const hereAt = currentConfig.mapPos;
 
+  /** Each station has its own note: uptown high, downtown low, so the line sounds like a scale. */
+  const chimeFor = (id: NeighborhoodId): void =>
+    soundEngine.playMapStation(SUBWAY_LINE_ORDER.indexOf(id), SUBWAY_LINE_ORDER.length);
+
   const handleTravel = (targetId: NeighborhoodId) => {
     if (targetId !== currentId) {
+      soundEngine.playMapSelect(); // "ding-dong": a ride was booked (the depart chime follows)
       onSelect(targetId);
     }
     onClose();
@@ -126,14 +141,20 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
         e.preventDefault();
         const at = SUBWAY_LINE_ORDER.indexOf(activeId);
         const n = SUBWAY_LINE_ORDER.length;
-        soundEngine.playClick();
+        const nextId = SUBWAY_LINE_ORDER[(at + step + n) % n];
+        chimeFor(nextId);
         setHoveredId(null); // the keyboard takes over from a resting mouse
-        setSelectedId(SUBWAY_LINE_ORDER[(at + step + n) % n]);
+        setSelectedId(nextId);
         return true;
       }
       if (TRAVEL_KEYS.includes(e.key)) {
         e.preventDefault();
         handleTravel(activeId);
+        return true;
+      }
+      if (backTo && BACK_KEYS.includes(e.key)) {
+        e.preventDefault();
+        handleTravel(backTo.id);
         return true;
       }
       return false;
@@ -160,6 +181,11 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
             Subway
           </h2>
           <div className="nycmap-keys">
+            {backTo && (
+              <button type="button" className="nycmap-key nycmap-close" onClick={() => handleTravel(backTo.id)}>
+                <Key k="Q" nav /> Back to {backTo.shortName}
+              </button>
+            )}
             <span className="nycmap-key">
               <Key k="↑↓" nav /> Pick
             </span>
@@ -297,7 +323,10 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
                     aria-label={`${n.name}, ${isHere ? 'you are here, ' : ''}${
                       n.hasSellerDeal ? 'for sale, ' : ''
                     }${n.dailyRent > 0 ? `rent $${n.dailyRent} per day` : 'no rent'}`}
-                    onMouseEnter={() => setHoveredId(n.id)}
+                    onMouseEnter={() => {
+                      chimeFor(n.id);
+                      setHoveredId(n.id);
+                    }}
                     onMouseLeave={() => setHoveredId(null)}
                     onFocus={() => setSelectedId(n.id)}
                     onClick={() => setSelectedId(n.id)}

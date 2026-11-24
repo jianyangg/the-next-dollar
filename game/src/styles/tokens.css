@@ -69,6 +69,14 @@
   --outline: #2b2118; /* warm dark brown: softer than black, still a crisp pixel edge */
   --drop: rgba(43, 33, 24, 0.35); /* hard offset shadow, never blurred */
   --pop-fill: #fffaf0; /* outlined text floating over the 3D scene */
+  /* The HUD day clock's sky: a warm orange sun with brighter rays, a pale moon. */
+  --sun: #f28a1e;
+  --sun-ray: #ffb43a;
+  --moon: #ece6cc;
+  /* Money colours for outlined text over the 3D scene: LIGHT, because the outline is
+     dark. (The sign greens/reds above are dark and vanish inside a dark outline.) */
+  --gain-pop: #8ef0a8;
+  --cost-pop: #ff9a8f;
 
   /* ---- Type ----
    * Jersey 20     big numbers, titles, prompts (pixel display face)

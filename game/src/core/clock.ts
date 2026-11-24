@@ -22,16 +22,16 @@ export function advanceClock(progress: number, realDtSeconds: number, speed: Clo
 }
 
 /**
- * The clock stops while the player is reading or deciding (any panel open), before
- * their first stand exists on day 1, and after the career ends.
+ * The clock stops while the player is reading or deciding (the opening story, the
+ * founder pick, any panel open) and after the career ends. Otherwise it runs.
+ *
+ * Owner decision (2026-11-24): the clock starts as soon as the story is over. It used to
+ * stay frozen at 5:00 AM on day 1 until the first stand was built, which made the start
+ * feel dead; a moving sun from the first second is the game's sense of urgency. Shop
+ * windows still pause it, so reading prices never costs daylight.
  */
-export function isClockPaused(p: {
-  overlayOpen: boolean;
-  day: number;
-  maxDays: number;
-  ownedStands: number;
-}): boolean {
-  return p.overlayOpen || (p.day === 1 && p.ownedStands < 1) || p.day > p.maxDays;
+export function isClockPaused(p: { overlayOpen: boolean; day: number; maxDays: number }): boolean {
+  return p.overlayOpen || p.day > p.maxDays;
 }
 
 /** Opening and closing time, in minutes after midnight. */

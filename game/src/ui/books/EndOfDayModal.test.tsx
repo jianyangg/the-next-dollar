@@ -87,10 +87,10 @@ describe('EndOfDayModal', () => {
     render(<EndOfDayModal />);
     act(() => void vi.advanceTimersByTime(5000));
     const text = document.body.textContent ?? '';
-    for (const needle of ['8 cups × $3.00', '+$24.00', '-$4.00', '-$2.00', '+$18.00', '-$1.15', '$23.00 × 5%', '78.3%', '+$41.20', 'Day 4 of 30']) {
+    for (const needle of ['8 cups × $3.00', '+$24.00', '-$4.00', '-$2.00', '+$18.00', '-$1.15', '15% of $23.00', '78.3%', '+$41.20', 'Day 4 of 30']) {
       expect(text).toContain(needle);
     }
-    expect(text).toContain('Money in business');
+    expect(text).toContain("Grandma's 15%");
     expect(text).not.toMatch(/NOPAT|EVA|ROIC/);
     // The verdict leads: this record's +$16.85 beat the line.
     expect(text).toContain('BEAT THE LINE');

@@ -7,6 +7,16 @@ import { NEIGHBORHOODS } from '../core/neighborhoods';
 import { getPlot, plotsIn, SELLER_PLOT_ID, type PlotView } from '../core/plots';
 import type { PlotStatus } from '../core/sliceModel';
 import {
+  CROSS_STREET_Z_MAX,
+  CROSS_STREET_Z_MIN,
+  WALKER_LANES,
+  isOnRoad,
+  ownStandBox,
+  sidewalkOf,
+  standFacing,
+} from './collision';
+import {
+  customerLookDirection,
   FOOT_TRAFFIC_MAX,
   FOOT_TRAFFIC_MIN,
   PLOT_INTERACT_RADIUS,
@@ -16,6 +26,7 @@ import {
   queueJoinCooldownSeconds,
   queueSlotsAt,
   streetCandidates,
+  vendorLookDirection,
 } from './CentralParkScene';
 
 /** A district's plots as the store would hand them to the scene, all with one status. */
@@ -23,28 +34,74 @@ const viewsOf = (district: (typeof NEIGHBORHOODS)[number]['id'], status: PlotSta
   plotsIn(district).map((p) => ({ ...p, status, staffed }));
 
 describe('live queue follows the live plot', () => {
-  it('puts the same line shape in front of whichever plot is live', () => {
-    const corner = getPlot('fidi/corner');
-    const side = getPlot('fidi/side');
-    const atCorner = queueSlotsAt(corner);
-    const atSide = queueSlotsAt(side);
-    expect(atCorner).toHaveLength(QUEUE_CAPACITY);
-    // The first customer stands right in front of the counter (toward the camera, +z).
-    expect(atSide[0].x).toBeCloseTo(side.x);
-    expect(atSide[0].z).toBeGreaterThan(side.z);
-    // Moving the live plot moves every spot by exactly the plot offset (shape unchanged).
-    atCorner.forEach((slot, i) => {
-      expect(atSide[i].x - slot.x).toBeCloseTo(side.x - corner.x);
-      expect(atSide[i].z - slot.z).toBeCloseTo(side.z - corner.z);
+  const corner = getPlot('fidi/corner'); // far sidewalk
+  const side = getPlot('fidi/side'); // near sidewalk
+  const plaza = getPlot('fidi/plaza'); // near sidewalk
+
+  it('puts plots on both sidewalks: the corner far, side and plaza near', () => {
+    expect(sidewalkOf(corner.z)).toBe('far');
+    expect(sidewalkOf(side.z)).toBe('near');
+    expect(sidewalkOf(plaza.z)).toBe('near');
+    expect(standFacing(corner)).toBe(1);
+    expect(standFacing(side)).toBe(-1);
+  });
+
+  it('lines customers up in front of a far stand: toward the camera (+z), trailing right', () => {
+    const slots = queueSlotsAt(corner);
+    expect(slots).toHaveLength(QUEUE_CAPACITY);
+    expect(slots[0].x).toBeCloseTo(corner.x);
+    for (const slot of slots) expect(slot.z).toBeGreaterThan(corner.z);
+    for (let i = 1; i < slots.length; i++) expect(slots[i].x).toBeGreaterThan(slots[i - 1].x);
+  });
+
+  it('mirrors the line for a near stand: toward the street (-z), trailing left, same shape', () => {
+    const far = queueSlotsAt(corner);
+    const near = queueSlotsAt(side);
+    expect(near[0].x).toBeCloseTo(side.x);
+    for (const slot of near) expect(slot.z).toBeLessThan(side.z);
+    // Half-circle turn: every offset from the stand is exactly negated.
+    far.forEach((slot, i) => {
+      expect(near[i].x - side.x).toBeCloseTo(-(slot.x - corner.x));
+      expect(near[i].z - side.z).toBeCloseTo(-(slot.z - corner.z));
     });
   });
 
-  it('only walkers level with the LIVE stand consider joining', () => {
-    const side = getPlot('fidi/side');
-    const corner = getPlot('fidi/corner');
-    expect(isWithinQueueReach(side.x + 1, side.x)).toBe(true);
-    // A walker passing the corner is not in reach of a live stand on the side plot.
-    expect(isWithinQueueReach(corner.x, side.x)).toBe(false);
+  it('keeps every near-side queue spot on the sidewalk, off the road, behind the walker lane and clear of the stand', () => {
+    for (const plot of [side, plaza]) {
+      const box = ownStandBox(plot);
+      for (const slot of queueSlotsAt(plot)) {
+        expect(sidewalkOf(slot.z)).toBe('near');
+        expect(isOnRoad(slot), `${plot.id} slot on a road`).toBe(false);
+        expect(slot.z).toBeGreaterThan(WALKER_LANES.near.maxZ);
+        expect(slot.z).toBeLessThan(box.minZ);
+      }
+    }
+  });
+
+  it('puts the vendor behind the counter looking at the customers, mirrored for near stands', () => {
+    expect(vendorLookDirection(standFacing(corner))).toBe('down');
+    expect(customerLookDirection(standFacing(corner))).toBe('up');
+    expect(vendorLookDirection(standFacing(side))).toBe('up');
+    expect(customerLookDirection(standFacing(side))).toBe('down');
+  });
+
+  it('only walkers level with the LIVE stand, on its own sidewalk, consider joining', () => {
+    const farLane = WALKER_LANES.far.minZ;
+    const nearLane = WALKER_LANES.near.minZ;
+    expect(isWithinQueueReach({ x: corner.x + 1, laneZ: farLane }, corner)).toBe(true);
+    expect(isWithinQueueReach({ x: side.x + 1, laneZ: nearLane }, side)).toBe(true);
+    // Level with the stand but on the other sidewalk: never crosses the street to queue.
+    expect(isWithinQueueReach({ x: side.x, laneZ: farLane }, side)).toBe(false);
+    expect(isWithinQueueReach({ x: corner.x, laneZ: nearLane }, corner)).toBe(false);
+    // Same sidewalk but too far along it.
+    expect(isWithinQueueReach({ x: plaza.x, laneZ: nearLane }, side)).toBe(false);
+  });
+
+  it('has a walker lane on each sidewalk, outside the cross street', () => {
+    expect(WALKER_LANES.far.maxZ).toBeLessThan(CROSS_STREET_Z_MIN);
+    expect(WALKER_LANES.near.minZ).toBeGreaterThan(CROSS_STREET_Z_MAX);
+    expect(sidewalkOf(WALKER_LANES.near.minZ)).toBe('near');
+    expect(sidewalkOf(WALKER_LANES.far.maxZ)).toBe('far');
   });
 });
 
@@ -75,15 +132,32 @@ describe('nearest-plot targeting', () => {
   });
 
   it('picks the closer plot when two are in reach', () => {
-    const plots = viewsOf('broadway', 'leased');
-    const side = getPlot('broadway/side');
-    const plaza = getPlot('broadway/plaza');
-    // A point between side and plaza, a little nearer the plaza, inside both radii.
-    const x = (side.x + plaza.x) / 2 + 0.3;
-    const z = side.z + 0.8;
-    expect(Math.hypot(x - side.x, z - side.z)).toBeLessThan(PLOT_INTERACT_RADIUS);
-    expect(Math.hypot(x - plaza.x, z - plaza.z)).toBeLessThan(PLOT_INTERACT_RADIUS);
-    expect(pickNearbyCandidate(streetCandidates({ x, z }, 'broadway', plots, false))?.plotId).toBe(plaza.id);
+    // No two plots of today's layout are within reach of one point (they sit on opposite
+    // sidewalks or far apart), so this checks the tie-break rule itself.
+    const near = pickNearbyCandidate([
+      { target: 'plot-lease', dist: 2.0, radius: PLOT_INTERACT_RADIUS, plotId: 'x/side' },
+      { target: 'own-stand', dist: 1.1, radius: PLOT_INTERACT_RADIUS, plotId: 'x/plaza' },
+    ]);
+    expect(near?.plotId).toBe('x/plaza');
+  });
+
+  it('never has one point in reach of two plots in the real layout', () => {
+    for (const n of NEIGHBORHOODS) {
+      const plots = plotsIn(n.id);
+      for (let i = 0; i < plots.length; i++) {
+        for (let j = i + 1; j < plots.length; j++) {
+          const gap = Math.hypot(plots[i].x - plots[j].x, plots[i].z - plots[j].z);
+          expect(gap, `${plots[i].id} vs ${plots[j].id}`).toBeGreaterThan(2 * PLOT_INTERACT_RADIUS);
+        }
+      }
+    }
+  });
+
+  it('targets a near-side plot from the walker lane in front of it', () => {
+    const plots = viewsOf('fifth-ave', 'empty');
+    const plaza = getPlot('fifth-ave/plaza');
+    const near = pickNearbyCandidate(streetCandidates({ x: plaza.x, z: plaza.z - 1.4 }, 'fifth-ave', plots, false));
+    expect(near).toMatchObject({ target: 'plot-lease', plotId: plaza.id });
   });
 
   it('offers no plot targets in the market, only its stalls', () => {

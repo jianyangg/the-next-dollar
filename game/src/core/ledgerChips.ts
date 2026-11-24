@@ -4,7 +4,7 @@ import { getDailyHurdleCharge, getDayNopat, type SliceState } from './sliceModel
 /**
  * Money chips: the in-world "receipt" that floats up when the player spends or earns.
  *
- *   Buy a pitcher  ->  [CASH −$10]  [GEAR +$10]  [PROFIT $0]  [5%/DAY +$0.50]
+ *   Buy a pitcher  ->  [CASH −$10]  [GEAR +$10]  [PROFIT $0]
  *
  * WHY CHIPS ARE COMPUTED, NOT TYPED
  *   The old toasts were hand-written strings ("Cash -$10 · Equip +$10 · Profit $0").
@@ -18,10 +18,10 @@ import { getDailyHurdleCharge, getDayNopat, type SliceState } from './sliceModel
  *   - Buying stock or equipment moves money from CASH into STOCK or GEAR; PROFIT does
  *     not move. Showing "PROFIT $0" right next to "CASH −$10" is the whole point:
  *     spending is not the same as losing money.
- *   - Every dollar in the business (cash, stock and gear) costs 5% a day (THE LINE), so
- *     a purchase that only moves money between them leaves the line unchanged; the line
- *     chip appears when money actually enters or leaves the business (a loss on a
- *     resale, for example).
+ *   - THE LINE (what today must earn to keep pace with Grandma's bank) is fixed at the
+ *     opening bell, so no action during the day moves it and the line chip no longer
+ *     appears for same-day actions. It is kept for comparisons across a bell (the line
+ *     of a new morning against yesterday's).
  */
 
 export type ChipKind = 'cash' | 'stock' | 'gear' | 'profit' | 'line';
@@ -29,8 +29,8 @@ export type ChipKind = 'cash' | 'stock' | 'gear' | 'profit' | 'line';
 export interface MoneyChip {
   kind: ChipKind;
   /**
-   * Signed dollars, rounded to cents. For 'line' this is the change in the DAILY 5%
-   * charge (so +0.5 means "this stand must now earn $0.50 more each day").
+   * Signed dollars, rounded to cents. For 'line' this is the change in the daily
+   * charge of Grandma's rate (so +0.5 means "today asks for $0.50 more than before").
    */
   delta: number;
 }
@@ -45,7 +45,7 @@ const ORDER: ChipKind[] = ['cash', 'stock', 'gear', 'profit', 'line'];
  *   - cash / stock / gear appear only when they changed.
  *   - profit appears whenever any balance moved, INCLUDING when it is $0 (that zero is
  *     the lesson), and also on its own when only profit changed.
- *   - line appears only when the daily 5% charge changed.
+ *   - line appears only when the daily charge changed (never within one day, see above).
  * An action that changed none of these returns [] (callers show no chip strip).
  */
 export function ledgerChips(before: SliceState, after: SliceState): MoneyChip[] {

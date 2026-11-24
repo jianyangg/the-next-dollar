@@ -14,14 +14,17 @@ describe('sliceModel', () => {
     expect(getDailyWages(createInitialState())).toBe(0);
   });
 
-  it('charges 5% on idle cash too: $30 to start costs $1.50 a day', () => {
-    expect(getDailyHurdleCharge(createInitialState())).toBe(1.5);
+  it('charges 15% on idle cash too: the $30 the run opens with costs $4.50 a day', () => {
+    expect(getDailyHurdleCharge(createInitialState())).toBe(4.5);
   });
 
   it('grades return on invested capital at the documented cut-offs', () => {
-    expect(computeDayGrade(20)).toBe('S');
-    expect(computeDayGrade(10)).toBe('A');
-    expect(computeDayGrade(5)).toBe('B');
+    // Cut-offs are multiples of Grandma's 15%: B matches her, A is a third better, S double.
+    expect(computeDayGrade(30)).toBe('S');
+    expect(computeDayGrade(29.9)).toBe('A');
+    expect(computeDayGrade(20)).toBe('A');
+    expect(computeDayGrade(15)).toBe('B');
+    expect(computeDayGrade(14.9)).toBe('C');
     expect(computeDayGrade(0)).toBe('C');
     expect(computeDayGrade(-1)).toBe('D');
   });

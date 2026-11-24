@@ -39,7 +39,7 @@
   color: var(--sign-dim);
 }
 
-/* Card 2: the founders standing in a row. */
+/* Card 3: the founders standing in a row (whichever one you pick, the can is yours). */
 .intro-figures { display: flex; gap: var(--s-3); align-items: flex-end; }
 .intro-figure {
   width: 64px;
@@ -48,7 +48,10 @@
   image-rendering: pixelated;
 }
 
-/* Card 3: what you buy sits on THE LINE (hazard stripes = the 5% daily charge). */
+/* Card 6: what you will buy, plain (no stripes: those mean THE LINE, card 5). */
+.intro-icon-row { display: flex; gap: var(--s-4); }
+
+/* Card 5: the money sits on THE LINE (hazard stripes = the 5% daily charge). */
 .intro-line-bar {
   display: flex;
   gap: var(--s-4);
@@ -73,6 +76,9 @@
   color: var(--sign-dim);
 }
 .intro-key { display: inline-flex; align-items: center; gap: var(--s-2); margin-left: auto; }
+/* Back sits just left of Next, so the pair reads as one control. */
+.intro-back { margin-left: auto; }
+.intro-back + .intro-key { margin-left: 0; }
 .intro-skip {
   display: inline-flex;
   align-items: center;
@@ -84,7 +90,7 @@
   cursor: pointer;
 }
 
-/* Progress: four square pips; the current card's pip is filled. */
+/* Progress: one square pip per card; the current card's pip is filled. */
 .intro-dots { display: inline-flex; gap: var(--s-2); }
 .intro-dots i {
   width: 14px;

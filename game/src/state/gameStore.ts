@@ -1,11 +1,11 @@
 import { type Actor, createActor, fromPromise } from 'xstate';
 import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
-import { applyBrewOutcome, type BrewKind, type BrewTier, pickChallenge, type StirKey } from '../core/brewing';
+import { applyBrewOutcome, type BrewKind, brewDifficulty, type BrewTier, type StirKey } from '../core/brewing';
 import { advanceClock, type ClockSpeed, isClockPaused } from '../core/clock';
 import { beatTheLine, closeDay as closeBooks, projectDay, startNextDay as advanceToNextDay } from '../core/dayEnd';
 import { CENTRAL_PARK_DEAL, CENTRAL_PARK_DEAL_ID, resolveSealedBid, toPublicView } from '../core/deal';
-import { type BrewGameState, initGame, pressGame, pressStirKey, stepGame } from '../core/minigames';
+import { type BrewCue, type BrewGameState, lemonadeBrew, pressGame, pressStirKey, stepGame } from '../core/minigames';
 import { getNeighborhood, type NeighborhoodId } from '../core/neighborhoods';
 import * as Purchases from '../core/purchases';
 import { stepAwaySales } from '../core/awaySales';
@@ -15,11 +15,12 @@ import { ledgerChips, type MoneyChip } from '../core/ledgerChips';
 import { STARTER_NAME, type StarterItem, starterShortfall } from '../core/tutorial';
 import { gameplayRandom } from '../core/runRandom';
 import { applySale, applyWalkout, salePopLabel } from '../core/sales';
+import { pourDurationMs } from '../core/standSales';
+import { TUNING } from '../core/tuning';
 import { dealMachine } from '../deal/dealMachine';
 import { type DealView, toDealView } from '../deal/dealView';
 import { createSellerClient, getRunId, type SellerClient } from '../deal/sellerClient';
 import {
-  countOwnedStands,
   createInitialState,
   type DayRecord,
   MANAGER_DAILY_WAGE,
@@ -120,7 +121,7 @@ export interface GameData {
   combo: number;
   /** Bumps on every sale so the cash counter can replay its pulse animation. */
   cashPulseKey: number;
-  /** 0..1 progress of the 450 ms pour animation, or null when not pouring. */
+  /** 0..1 progress of the pour (core/standSales.ts pourDurationMs), or null when not pouring. */
   serveProgress: number | null;
 
   // --- ui ---
@@ -160,6 +161,8 @@ export interface GameData {
   awayCarry: Record<PlotId, number>;
   /** Last non-market district, so "Back to <district>" knows where to return. */
   lastBusinessNeighborhood: NeighborhoodId;
+  /** The district the player rode in from (null before the first ride): the map's Back. */
+  previousNeighborhood: NeighborhoodId | null;
   muted: boolean;
 
   // --- feedback (floating text) and the id counters that name each item ---
@@ -168,6 +171,13 @@ export interface GameData {
   nextToastId: number;
   nextPopId: number;
   nextReviewId: number;
+
+  /**
+   * The district title shown at the top of the screen after a subway ride
+   * (ui/ArrivalTitle.tsx). `id` changes on every arrival so a quick second ride
+   * restarts the title. Cleared by a timer.
+   */
+  arrival: { id: number; district: NeighborhoodId } | null;
 
   // --- seller deal (a render-ready view of the deal machine; null until first opened) ---
   deal: DealView | null;
@@ -319,12 +329,14 @@ export function createInitialGameData(): GameData {
     activePlotId: null,
     awayCarry: {},
     lastBusinessNeighborhood: 'central-park',
+    previousNeighborhood: null,
     muted: soundEngine.isMuted(),
     toasts: [],
     salePops: [],
     nextToastId: 1,
     nextPopId: 1,
     nextReviewId: 1,
+    arrival: null,
     deal: null,
   };
 }
@@ -397,6 +409,13 @@ export const selectWorkersHere = (s: GameData): number => {
 };
 
 /** True while the day clock must stand still (a panel is open, day 1 has no stand yet...). */
+/**
+ * Play has stopped on this screen: the day's receipt is up, or the run is over. The
+ * music hushes so the screen feels different from the street (owner request,
+ * 2026-11-24: the soundtrack kept playing over the receipt as if nothing happened).
+ */
+export const selectMusicHushed = (s: GameData): boolean => s.eodRecord !== null || s.runOver;
+
 export const selectClockPaused = (s: GameData): boolean =>
   isClockPaused({
     overlayOpen:
@@ -410,7 +429,6 @@ export const selectClockPaused = (s: GameData): boolean =>
       s.runOver,
     day: s.economy.day,
     maxDays: s.economy.maxDays,
-    ownedStands: countOwnedStands(s.economy),
   });
 
 /** Interval (ms) of the hired manager's auto-serve beat, or null when it must not run. */
@@ -427,9 +445,22 @@ export const selectManagerIntervalMs = (s: GameData): number | null => {
 // ---------------------------------------------------------------------------
 
 const TOAST_LIFETIME_MS = 2200;
+/** How long the district title stays up after the subway doors open. */
+export const ARRIVAL_TITLE_MS = 2000;
 const SALE_POP_LIFETIME_MS = 1200;
 const STIR_SHAKE_MS = 180;
-const POUR_DURATION_MS = 450;
+/**
+ * How long the player must HOLD to fill one cup when they are ALONE at the counter.
+ *
+ * Balance pass (2026-11-24): raised from 700 ms to 2 s. One pair of hands is meant to be
+ * the bottleneck of the first days: the line grows faster than the player can pour,
+ * some customers walk off, and that (not a tutorial) is the push to hire. The slow hold
+ * is not meant to last: with a worker at the stand the hold drops to
+ * `pourDurationMs(1)` (0.6 s), see core/standSales.ts. The serve loop below reads
+ * `pourDurationMs(selectWorkersHere(...))`; this constant is the alone case, kept
+ * exported for tests and UI that need a number.
+ */
+export const POUR_DURATION_MS = TUNING.pourMsAlone;
 /**
  * Subway ride timing: the screen closes over the old district, the district is swapped
  * while fully covered (so the player never sees the scene rebuild), then it opens on
@@ -597,11 +628,31 @@ export const useGameStore = create<GameState>()(
         }
       };
 
+      /**
+       * Sounds for the lemonade brew's events. The rules report them as `cues` on the
+       * frame they happen (core/minigames/types.ts), so the store never has to diff the
+       * old and new state to notice "seeds just started falling".
+       */
+      const playBrewCues = (cues: readonly BrewCue[] | undefined): void => {
+        if (!cues) return;
+        for (const cue of cues) {
+          if (cue === 'seeds' || cue === 'overshoot' || cue === 'slop') soundEngine.playReject();
+          else if (cue === 'lemon-done' || cue === 'step-done' || cue === 'fix' || cue === 'stir') soundEngine.playClick();
+          // 'brew-done' is voiced by finishBrewOutcome with the tier's own sound.
+        }
+      };
+
       const pressStir = (pressedKey: StirKey): void => {
         const game = get().brewGame;
-        if (!game || game.kind !== 'rapid-stir') return;
+        if (!game || (game.kind !== 'rapid-stir' && game.kind !== 'lemonade-brew')) return;
         const result = pressStirKey(game, pressedKey);
         patch({ brewGame: result.state }, 'stirKey');
+        if (game.kind === 'lemonade-brew') {
+          // A spoon quarter turn: the rule decides clean / splash; the cue carries it.
+          playBrewCues(result.cues);
+          if (result.outcome) finishBrewOutcome(result.outcome);
+          return;
+        }
         if (result.shake) {
           soundEngine.playReject();
           patch({ stirShake: true }, 'stirShakeOn');
@@ -847,20 +898,28 @@ export const useGameStore = create<GameState>()(
             { workingAtStand: false, activeModal: null, mapOpen: false, travel: { to: id, phase: 'cover' } },
             'travelDepart'
           );
-          soundEngine.playTravel();
+          soundEngine.playSubwayDepart(); // chime, doors, rumble; music dips for the ride
           scheduleTimeout(() => {
             patch(
               {
                 lastBusinessNeighborhood: id !== 'market' ? id : get().lastBusinessNeighborhood,
+                previousNeighborhood: get().neighborhoodId,
                 neighborhoodId: id,
                 activePlotId: null,
                 travel: { to: id, phase: 'reveal' },
               },
               'travelArrive'
             );
+            // Doors open: air hiss, and the music switches to this district's theme.
+            soundEngine.playSubwayArrive(id);
             scheduleTimeout(() => {
-              patch({ travel: null }, 'travelDone');
-              pushToast(getNeighborhood(id).shortName, 'neutral', 'own-stand');
+              // The district name gets its own screen title (it used to be a note on the
+              // stand, where it sat on the stand's own sign and could not be read).
+              const arrivalId = (get().arrival?.id ?? 0) + 1;
+              patch({ travel: null, arrival: { id: arrivalId, district: id } }, 'travelDone');
+              scheduleTimeout(() => {
+                if (get().arrival?.id === arrivalId) patch({ arrival: null }, 'arrivalDone');
+              }, ARRIVAL_TITLE_MS);
             }, TRAVEL_REVEAL_MS);
           }, TRAVEL_COVER_MS);
         },
@@ -930,9 +989,22 @@ export const useGameStore = create<GameState>()(
 
         signLease: () => {
           const plotId = get().activePlotId;
-          if (!plotId || !runPurchase((s) => Purchases.signLease(s, plotId), 'signLease').ok) return;
+          if (!plotId) return;
+          const before = get().economy;
+          const result = runPurchase((s) => Purchases.signLease(s, plotId), 'signLease');
+          if (!result.ok) {
+            // The only refusal a player can run into here: the district's permit costs
+            // more cash than they have (core/purchases.ts leaseFee).
+            if (result.reason === 'insufficient-cash') {
+              soundEngine.playReject();
+              pushToast(`Permit $${Purchases.leaseFee(plotId)}`, 'negative', 'own-stand');
+            }
+            return;
+          }
           soundEngine.playBuy();
-          pushToast(`Leased · rent $${getPlot(plotId).dailyRent}/day`, 'positive', 'own-stand');
+          // The permit (if this district has one) shows as money chips: cash down, and the
+          // receipt makes the cost visible at the moment it is paid.
+          pushLedger(before, 'own-stand', `Leased · rent $${getPlot(plotId).dailyRent}/day`);
         },
 
         buildStandOnPlot: () => {
@@ -999,13 +1071,21 @@ export const useGameStore = create<GameState>()(
             return;
           }
 
-          // One of the 4 arcade challenges, never the same one twice in a row.
-          const chosen = pickChallenge(get().lastBrewKind, gameplayRandom);
-          patch({ lastBrewKind: chosen, brewGame: initGame(chosen, gameplayRandom), spaceHeld: false }, 'startBrew');
+          // The lemonade brew: squeeze -> sweeten -> stir (core/minigames/lemonadeBrew.ts).
+          // Its settings come from where and when the player is brewing:
+          //   difficulty       later in the summer = tougher lemons, pickier taste
+          //   targetSweetness  this district's taste (core/neighborhoods.ts sweetTooth)
+          //   workerSqueezes   a hired helper at this stand does the squeezing for you
+          const brew = lemonadeBrew.init(gameplayRandom, {
+            difficulty: brewDifficulty(cur.day, cur.maxDays),
+            targetSweetness: getNeighborhood(get().neighborhoodId).sweetTooth,
+            workerSqueezes: selectWorkersHere(get()) > 0,
+          });
+          patch({ brewGame: brew, spaceHeld: false }, 'startBrew');
           soundEngine.playClick();
 
-          // One loop for every challenge: advance the pure game state by the real
-          // frame time, publish it, and stop when the rules report an outcome.
+          // Advance the pure game state by the real frame time, publish it, and stop
+          // when the rules report an outcome.
           let lastNow = performance.now();
           const tick = (now: number): void => {
             const game = get().brewGame;
@@ -1019,6 +1099,7 @@ export const useGameStore = create<GameState>()(
               spaceHeld,
             });
             patch({ brewGame: result.state }, 'brewFrame');
+            playBrewCues(result.cues);
             if (result.outcome) {
               finishBrewOutcome(result.outcome);
               return;
@@ -1033,6 +1114,9 @@ export const useGameStore = create<GameState>()(
         lockBrewGame: () => {
           const game = get().brewGame;
           if (!game) return;
+          // The lemonade brew has no "lock": holding Space (setSpaceHeld) IS its input,
+          // and the frame loop turns the hold's edges into press / release.
+          if (game.kind === 'lemonade-brew') return;
 
           if (game.kind === 'rapid-stir') {
             pressStir(game.seq[game.index] ?? 'SPACE');
@@ -1076,11 +1160,25 @@ export const useGameStore = create<GameState>()(
             return;
           }
 
+          // PRESS AND HOLD TO SERVE ONE CUSTOMER: the cup fills only while Space (or the
+          // mouse on Serve, or E on the Serve row) is held. Let go before it is full and the
+          // pour is spilled: no sale, the customer keeps waiting. A full cup serves exactly
+          // ONE customer; the next one needs a fresh press (held-key repeats are ignored in
+          // loops.ts), so every cup is its own little act.
           const startTime = performance.now();
+          // Fixed when the pour starts: alone it is a long hold, with a worker at this
+          // stand a short one (the worker has the cup ready).
+          const pourMs = pourDurationMs(selectWorkersHere(s));
           patch({ serveProgress: 0.01 }, 'serveStart');
 
           const tick = (now: number): void => {
-            const pct = Math.min(1, (now - startTime) / POUR_DURATION_MS);
+            if (!get().spaceHeld) {
+              setServeFrame(null);
+              patch({ serveProgress: null }, 'serveSpilled');
+              soundEngine.playReject();
+              return;
+            }
+            const pct = Math.min(1, (now - startTime) / pourMs);
             patch({ serveProgress: pct }, 'serveFrame');
             if (pct < 1) {
               setServeFrame(requestAnimationFrame(tick));
@@ -1098,20 +1196,6 @@ export const useGameStore = create<GameState>()(
             // The sale pop ("+$2", combo) is the whole celebration; a second toast
             // repeating the cash in a sentence was noise.
             completeSale(served.patienceRatio);
-
-            // HOLD TO SERVE: a tap pours one cup; while Space (or the Serve button) is
-            // still held, the next pour starts by itself. It stops quietly when the
-            // player lets go, the line is empty or the pitcher is out (no "Brew first"
-            // toast here: the player did not press anything new).
-            const after = get();
-            if (
-              after.spaceHeld &&
-              after.workingAtStand &&
-              after.brewedCups >= 1 &&
-              anchorStore.getState().queue.length > 0
-            ) {
-              actions.startServeFrontCustomer();
-            }
           };
           setServeFrame(requestAnimationFrame(tick));
         },

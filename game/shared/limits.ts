@@ -36,18 +36,30 @@ export const CONFIG_VERSION = 'seller-config-v1';
  * lower-case slugs; 'gemini-3.8-flash' is our best reading of that name and has
  * NOT been checked against Vertex's model list. Verify before the first live call.
  */
+/**
+ * The seller's model. Owner decision (2026-11-24): OpenAI gpt-6-luna "for now", in place
+ * of Gemini on Vertex, whose sign-in from a Cloudflare Worker was never proven.
+ * Checked on 2026-11-24 with one live call: the model exists, accepts Chat Completions
+ * with reasoning_effort and response_format json_object, and returns usage counts.
+ */
 export const MODEL_CONFIG = {
-  model: 'gemini-3.8-flash',
-  temperature: 1.0,
-  /** A5 "Thinking: low". gemini.ts maps this string to the SDK's ThinkingLevel enum. */
-  thinking: 'low',
-  /** A5: about 80 words of text plus thinking. */
+  provider: 'openai',
+  model: 'gpt-6-luna',
+  /** A5 "Thinking: low", sent as Chat Completions `reasoning_effort`. */
+  reasoningEffort: 'low',
+  /** A5: about 80 words of text plus reasoning. Reasoning tokens count against this cap. */
   maxOutputTokens: 400,
 } as const;
 
-/** A9 prices: Google's listed prices used in the midterm (estimates, not billing records). */
-export const PRICE_USD_PER_MILLION_INPUT_TOKENS = 0.75;
-export const PRICE_USD_PER_MILLION_OUTPUT_TOKENS = 3.75;
+/**
+ * A9 prices for MODEL_CONFIG.model, used for the $5 running cost tally. OpenAI's listed
+ * standard price for gpt-6-luna (https://developers.openai.com/api/docs/pricing, read
+ * 2026-11-24): $0.10 per 1M input tokens, $0.50 per 1M output tokens (reasoning tokens
+ * are billed as output and are included in the output count). Estimates, not billing
+ * records. Change these together with MODEL_CONFIG.model, never separately.
+ */
+export const PRICE_USD_PER_MILLION_INPUT_TOKENS = 0.1;
+export const PRICE_USD_PER_MILLION_OUTPUT_TOKENS = 0.5;
 
 /**
  * A9 token ceilings. Used only to charge the budget for a call that timed out:

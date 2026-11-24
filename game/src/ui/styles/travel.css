@@ -40,6 +40,22 @@
   transform: translate(-50%, -50%);
   padding: var(--s-3) var(--s-5);
 }
+/* After the ride: the district's name on a plate at the top centre (ArrivalTitle.tsx). */
+.arrival-title {
+  position: absolute;
+  top: var(--s-5);
+  left: 50%;
+  translate: -50% 0;
+  z-index: var(--z-hud);
+  padding: var(--s-2) var(--s-5);
+  pointer-events: none;
+}
+.arrival-name {
+  font-size: var(--t-title);
+  color: var(--sign-text);
+  white-space: nowrap;
+}
+
 .travel-name {
   font-size: var(--t-giant);
   color: var(--sign-text);

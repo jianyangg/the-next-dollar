@@ -1,3 +1,4 @@
+import { CALL_DEADLINE_MS } from '../../shared/limits';
 import {
   apiErrorSchema,
   type ApiError,
@@ -26,7 +27,20 @@ import {
  *   UUID v4 (see server/index.ts "WHY A RUN ID"). One page load = one run.
  */
 
-export type SellerErrorCode = ApiError['error'] | 'network' | 'bad-response';
+export type SellerErrorCode = ApiError['error'] | 'network' | 'bad-response' | 'timeout';
+
+/**
+ * The longest the browser waits for one seller call. The server already gives up at
+ * CALL_DEADLINE_MS (6 s, retry included) and then answers with its own fallback, so a
+ * healthy server always replies before this. The extra 2 s covers the network.
+ *
+ * Without a limit, a request that never comes back (seller server not running behind a
+ * proxy that holds the connection, a dropped Wi-Fi) left the deal window stuck in its
+ * "loading" state with every row disabled: the window looked frozen and could not be
+ * used. Now the call fails as 'timeout' and the window opens in its "seller
+ * unavailable" state, where Bid and Walk away still work.
+ */
+export const CLIENT_DEADLINE_MS = CALL_DEADLINE_MS + 2000;
 
 export class SellerApiError extends Error {
   constructor(
@@ -56,21 +70,29 @@ export function createSellerClient({ runId, fetchImpl = (...args) => fetch(...ar
 
   /** POST and parse; any failure becomes a SellerApiError with a stable code. */
   async function post<T>(path: string, body: unknown, parse: (v: unknown) => T | null): Promise<T> {
+    // One AbortController covers the whole call: the request AND reading its body.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CLIENT_DEADLINE_MS);
     let res: Response;
-    try {
-      res = await fetchImpl(path, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    } catch {
-      throw new SellerApiError('network', null);
-    }
     let json: unknown;
     try {
-      json = await res.json();
-    } catch {
-      throw new SellerApiError('bad-response', res.status);
+      try {
+        res = await fetchImpl(path, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch {
+        throw new SellerApiError(controller.signal.aborted ? 'timeout' : 'network', null);
+      }
+      try {
+        json = await res.json();
+      } catch {
+        throw new SellerApiError(controller.signal.aborted ? 'timeout' : 'bad-response', res.status);
+      }
+    } finally {
+      clearTimeout(timer);
     }
     if (!res.ok) {
       const err = apiErrorSchema.safeParse(json);

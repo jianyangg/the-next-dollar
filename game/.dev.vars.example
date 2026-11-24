@@ -1,0 +1,8 @@
+# Local secrets for the seller Worker (`wrangler dev` reads .dev.vars; it is gitignored).
+# Copy this file to .dev.vars and fill in your own values. Never commit .dev.vars.
+#
+# Kill switch: anything other than "true" keeps the seller silent (shown as offline).
+AGENT_ENABLED=true
+#
+# The seller runs on OpenAI gpt-6-luna (shared/limits.ts MODEL_CONFIG).
+OPENAI_API_KEY_2=

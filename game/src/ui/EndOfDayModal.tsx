@@ -5,11 +5,11 @@ import { beatTheLine } from '../core/dayEnd';
 import { getDailyPlotRent } from '../core/rent';
 import { getNeighborhood } from '../core/neighborhoods';
 import { getRunSeed } from '../core/runRandom';
-import { getDailyWages, HURDLE_RATE } from '../core/sliceModel';
+import { getDailyWages } from '../core/sliceModel';
 import type { DayRecord } from '../core/sliceModel';
 import { INPUT_PRIORITY } from '../state/input';
 import { useGameStore } from '../state/gameStore';
-import { buildReceipt, splitProfit } from './books/receipt';
+import { buildReceipt, ratePct, splitProfit } from './books/receipt';
 import type { ReceiptRow, Tone } from './books/receipt';
 import { useReveal } from './books/useReveal';
 import { fmtSignedMoney } from './format';
@@ -122,29 +122,29 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
             <div className={`eodr-split ${stage.rowsShown >= rows.length ? '' : 'is-hidden'}`}>
               {split.kind === 'split' ? (
                 <>
-                  <div className="eodr-split-bar" role="img" aria-label="How much of the profit the 5% line took">
+                  <div className="eodr-split-bar" role="img" aria-label={`How much of the profit Grandma's ${ratePct()} took`}>
                     <div className="eodr-split-take pt-line-fill" style={{ width: `${split.takenPct}%` }} />
                     <div className="eodr-split-keep" />
                   </div>
                   <div className="eodr-split-cap">
-                    <span>5% line: ${split.taken.toFixed(2)}</span>
+                    <span>Grandma's {ratePct()}: ${split.taken.toFixed(2)}</span>
                     <span>
                       Yours: ${split.kept.toFixed(2)} of ${split.profit.toFixed(2)}
                     </span>
                   </div>
                   {split.shortfall > 0 && (
-                    <div className="eodr-short pt-cost-paper">Line wanted ${split.shortfall.toFixed(2)} more than the profit</div>
+                    <div className="eodr-short pt-cost-paper">Her {ratePct()} wanted ${split.shortfall.toFixed(2)} more than the profit</div>
                   )}
                 </>
               ) : (
                 <div className="eodr-short pt-cost-paper">
-                  No profit to split. Short of the 5% line by ${split.short.toFixed(2)}
+                  No profit to split. Short of Grandma's {ratePct()} by ${split.short.toFixed(2)}
                 </div>
               )}
               {/* The same fact as a rate: profit as a share of all the money in the business. */}
               <div className="eodr-split-cap">
                 <span>Return on your money: {eodRecord.roicPct.toFixed(1)}%</span>
-                <span>Line asks {(HURDLE_RATE * 100).toFixed(0)}%</span>
+                <span>Her money earns {ratePct()}</span>
               </div>
             </div>
           </section>

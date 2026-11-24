@@ -50,6 +50,7 @@ import {
   AVENUE_HALF_WIDTH,
   CROSS_STREET_Z_MAX,
   CROSS_STREET_Z_MIN,
+  isOnCrosswalk,
   WALK_BOUNDS,
   type Box,
   type Vec2,
@@ -60,8 +61,8 @@ export const CELL_SIZE = 0.25;
 
 /**
  * Grid dimensions over WALK_BOUNDS: width 25 / 0.25 = 100 columns; depth
- * 10.88 / 0.25 = 43.52, rounded UP to 44 rows so the whole area is covered
- * (the last row's centre, z = 8.195, is still inside the bounds). 4,400 cells.
+ * 14.08 / 0.25 = 56.32, rounded UP to 57 rows so the whole area is covered (both
+ * sidewalks and the cross street between them). 5,700 cells.
  */
 export const GRID_COLS = Math.ceil((WALK_BOUNDS.maxX - WALK_BOUNDS.minX) / CELL_SIZE);
 export const GRID_ROWS = Math.ceil((WALK_BOUNDS.maxZ - WALK_BOUNDS.minZ) / CELL_SIZE);
@@ -85,8 +86,21 @@ export const PLAYER_RADIUS = 0.3;
  */
 export const ROAD_COST = 4;
 
+/**
+ * Cost of a road cell that is a painted crosswalk. Half of ROAD_COST, so a route between
+ * the two sidewalks walks to the nearest crosswalk instead of jaywalking: crossing the
+ * 4.6-deep cross street costs ~18 cells x 2 = 36 on the zebra versus ~18 x 4 = 72 beside
+ * it, which pays for a detour of up to ~36 sidewalk cells (9 units, more than the whole
+ * gap between a plot and its nearest crosswalk). Dearer than sidewalk (1) on purpose:
+ * tried 1.5 first, and A* then did its sideways drift diagonally ON the zebra; at 2 the
+ * drift happens on the sidewalk and the zebra is crossed straight.
+ */
+export const CROSSWALK_COST = 2;
+
 const ROAD_AVENUE = 1;
 const ROAD_CROSS = 2;
+/** Extra bit on a road cell that is a painted crosswalk (see isOnCrosswalk). */
+const ROAD_CROSSWALK = 4;
 
 const OPEN = 0;
 const BLOCKED = 1;
@@ -100,8 +114,9 @@ export interface NavGrid {
   /** blocked[row * cols + col] is 1 when that cell cannot be walked on. */
   readonly blocked: Uint8Array;
   /**
-   * road[row * cols + col] is a bit set: ROAD_AVENUE (1) and/or ROAD_CROSS (2).
-   * 0 means sidewalk. Used for the road-cost A* weights and the smoothing rule.
+   * road[row * cols + col] is a bit set: ROAD_AVENUE (1) and/or ROAD_CROSS (2), plus
+   * ROAD_CROSSWALK (4) on a painted crosswalk. 0 means sidewalk. Used for the road-cost
+   * A* weights and the smoothing rules.
    */
   readonly road: Uint8Array;
   /** The configured A* solver (synchronous). Cached so grids are built once and queried many times. */
@@ -145,7 +160,7 @@ function isCellBlocked(grid: NavGrid, p: Vec2): boolean {
  * Rasterise colliders into a grid. A cell is blocked when its centre lies inside
  * any collider grown by PLAYER_RADIUS on every side (strict `<`, like isBlocked).
  * Road cells (avenue + cross street) get extra A* cost when the neighborhood has
- * traffic. Building costs ~4,400 cells x a few boxes, which is cheap enough to
+ * traffic, except on painted crosswalks. Building costs ~5,700 cells x a few boxes, which is cheap enough to
  * redo whenever the neighborhood or the plot status changes.
  */
 export function buildGrid(colliders: readonly Box[], opts: { hasTraffic: boolean }): NavGrid {
@@ -192,8 +207,13 @@ export function buildGrid(colliders: readonly Box[], opts: { hasTraffic: boolean
         const onAvenue = Math.abs(c.x) < AVENUE_HALF_WIDTH;
         const onCross = c.z > CROSS_STREET_Z_MIN && c.z < CROSS_STREET_Z_MAX;
         if ((onAvenue || onCross) && blocked[row * GRID_COLS + col] === OPEN) {
-          solver.setAdditionalPointCost(col, row, ROAD_COST);
-          road[row * GRID_COLS + col] = (onAvenue ? ROAD_AVENUE : 0) | (onCross ? ROAD_CROSS : 0);
+          // A painted crosswalk is where people are SUPPOSED to cross, so it is cheap
+          // (CROSSWALK_COST). It is still marked as road below, so the smoothing rule
+          // keeps refusing shortcuts that walk ALONG the road, even on the zebra.
+          const zebra = isOnCrosswalk(c);
+          solver.setAdditionalPointCost(col, row, zebra ? CROSSWALK_COST : ROAD_COST);
+          road[row * GRID_COLS + col] =
+            (onAvenue ? ROAD_AVENUE : 0) | (onCross ? ROAD_CROSS : 0) | (zebra ? ROAD_CROSSWALK : 0);
         }
       }
     }
@@ -259,26 +279,54 @@ function nearestOpenCell(grid: NavGrid, p: Vec2): { col: number; row: number } |
  * strip) it is the x movement. Crossing squarely scores 0; strolling down the
  * middle of the avenue scores its full length.
  */
-function alongRoadDistance(grid: NavGrid, a: Vec2, b: Vec2): number | null {
+interface RoadUse {
+  /** Distance walked ALONG a road (see above). */
+  along: number;
+  /** Distance walked on road cells that are NOT a painted crosswalk (jaywalking). */
+  jaywalk: number;
+}
+
+/**
+ * Measure how segment a->b uses the road. Returns null when the segment is blocked, or
+ * when it goes over `limit` (if given): the caller only wants to know whether a shortcut
+ * fits its budget, so we stop sampling the moment it cannot. That early exit matters:
+ * smoothing tries the longest shortcuts first and most of them are rejected, so without
+ * it every rejected try paid for sampling its full length (hundreds of samples).
+ */
+function roadUse(grid: NavGrid, a: Vec2, b: Vec2, limit?: RoadUse): RoadUse | null {
   const dx = b.x - a.x;
   const dz = b.z - a.z;
-  const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / SEGMENT_SAMPLE_STEP));
+  const len = Math.hypot(dx, dz);
+  const steps = Math.max(1, Math.ceil(len / SEGMENT_SAMPLE_STEP));
   let along = 0;
+  let jaywalk = 0;
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const col = colOf(a.x + dx * t);
     const row = rowOf(a.z + dz * t);
     if (!inGrid(col, row) || grid.blocked[row * grid.cols + col] === BLOCKED) return null;
-    const kind = grid.road[row * grid.cols + col];
+    const bits = grid.road[row * grid.cols + col];
+    const kind = bits & (ROAD_AVENUE | ROAD_CROSS);
     // Each sample owns one step of the segment. Standing in the intersection (both bits)
-    // counts as 0: you may legitimately go either way there.
+    // counts as 0 for "along": you may legitimately go either way there.
     if (i > 0) {
       if (kind === ROAD_AVENUE) along += Math.abs(dz) / steps;
       else if (kind === ROAD_CROSS) along += Math.abs(dx) / steps;
+      if (kind !== 0 && (bits & ROAD_CROSSWALK) === 0) jaywalk += len / steps;
+      if (limit && (along > limit.along || jaywalk > limit.jaywalk)) return null;
     }
   }
-  return along;
+  return { along, jaywalk };
 }
+
+/**
+ * How much more jaywalking (road off the crosswalks) a shortcut may do than the grid
+ * route it replaces. A* already chose where to cross (on a crosswalk when one is near);
+ * without this rule a long shortcut could cut diagonally through the intersection, which
+ * the along-road rule alone does not catch (the intersection counts as "along" nothing).
+ * A quarter unit (one cell) absorbs sampling noise at the road's edges.
+ */
+const MAX_EXTRA_JAYWALK = 0.25;
 
 /**
  * Even when no road is being walked along on purpose, allow this much along-road
@@ -296,18 +344,22 @@ const MAX_FREE_ALONG_ROAD = 0.5;
  * replace "drift sideways on the sidewalk, then cross the avenue squarely" with
  * a single diagonal cut across the road, undoing what A* worked out. So a shortcut
  * is accepted only if it walks no further ALONG a road than the raw grid path it
- * replaces (or than MAX_FREE_ALONG_ROAD, whichever is larger).
+ * replaces (or than MAX_FREE_ALONG_ROAD, whichever is larger), AND it does not walk on
+ * more road off the crosswalks than that path did (plus MAX_EXTRA_JAYWALK).
  *
  * Input includes the start; output includes the start too (callers drop it).
  */
 function smooth(grid: NavGrid, points: Vec2[]): Vec2[] {
   if (points.length <= 2) return points;
 
-  // cum[i] = along-road distance of the raw path from points[0] to points[i].
+  // cum[i] / cumJay[i] = along-road and jaywalk distance of the raw path from points[0] to points[i].
   const cum: number[] = [0];
+  const cumJay: number[] = [0];
   for (let i = 1; i < points.length; i++) {
     // A raw hop can sample as blocked only at the unsnapped real start; treat it as 0.
-    cum.push(cum[i - 1] + (alongRoadDistance(grid, points[i - 1], points[i]) ?? 0));
+    const hop = roadUse(grid, points[i - 1], points[i]);
+    cum.push(cum[i - 1] + (hop?.along ?? 0));
+    cumJay.push(cumJay[i - 1] + (hop?.jaywalk ?? 0));
   }
 
   const out: Vec2[] = [points[0]];
@@ -315,8 +367,12 @@ function smooth(grid: NavGrid, points: Vec2[]): Vec2[] {
   while (anchor < points.length - 1) {
     let next = anchor + 1; // adjacent points are always fine: the raw path already links them
     for (let j = points.length - 1; j > anchor + 1; j--) {
-      const along = alongRoadDistance(grid, points[anchor], points[j]);
-      if (along !== null && along <= Math.max(MAX_FREE_ALONG_ROAD, cum[j] - cum[anchor])) {
+      // The shortcut may use the road no more than the raw path it replaces (see above).
+      const budget: RoadUse = {
+        along: Math.max(MAX_FREE_ALONG_ROAD, cum[j] - cum[anchor]),
+        jaywalk: cumJay[j] - cumJay[anchor] + MAX_EXTRA_JAYWALK,
+      };
+      if (roadUse(grid, points[anchor], points[j], budget) !== null) {
         next = j;
         break;
       }

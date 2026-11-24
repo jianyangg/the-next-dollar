@@ -1,3 +1,4 @@
+import { lemonCupsLeft } from '../core/brewing';
 import { cosmeticRandom, gameplayRandom } from '../core/runRandom';
 import { getConversionProb } from '../core/demand';
 import { getNeighborhood } from '../core/neighborhoods';
@@ -24,7 +25,7 @@ const sameTuple = <T extends readonly unknown[]>(a: T, b: T): boolean => a.every
  *
  * WHY SUBSCRIPTIONS INSTEAD OF `useEffect`
  *   The old App pushed state into the scene with one `useEffect` per property
- *   ("when pitchers change, call scene.setPitcherCount"). Each effect lived inside a
+ *   ("when the stock changes, call scene.setTableStock"). Each effect lived inside a
  *   component that had to re-render to notice the change, and the scene itself was
  *   rebuilt whenever a callback's identity changed. Here the direction is reversed:
  *     - The scene is created exactly ONCE per mount (the caller's effect has an
@@ -108,12 +109,14 @@ export function connectScene(container: HTMLElement): () => void {
     // scene starts with "not working", which matches the store.
     useGameStore.subscribe((s) => s.workingAtStand, (v) => scene.setWorkingAtStand(v)),
 
+    useGameStore.subscribe(selectStandOpen, (open) => scene.setStandOpen(open), { fireImmediately: true }),
+
+    // Stock on the live stand's counter: the two piles the HUD stock card shows, ready
+    // cups (brewed, waiting to be sold) and lemons left (not brewed yet). Pitchers owned
+    // are equipment, not stock, so they are not drawn on the counter (see setTableStock).
     useGameStore.subscribe(
-      (s) => [s.economy.pitchers, selectStandOpen(s)] as const,
-      ([pitchers, open]) => {
-        scene.setPitcherCount(pitchers);
-        scene.setStandOpen(open);
-      },
+      (s) => [s.brewedCups, lemonCupsLeft(s.economy.cupsInStock, s.brewedCups)] as const,
+      ([readyCups, lemons]) => scene.setTableStock({ readyCups, lemons }),
       { equalityFn: sameTuple, fireImmediately: true }
     ),
 

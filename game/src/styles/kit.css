@@ -185,15 +185,20 @@
   text-align: left;
   cursor: pointer;
 }
-/* The ▶ cursor is always there but transparent, so the label never shifts sideways. */
+/*
+ * The ▶ cursor exists only on the selected row: that row's label steps right to make
+ * room for it, and every other row sits flush left with no reserved gap.
+ * Owner decision (2026-11-24): this replaces an invisible ▶ that held a blank gutter
+ * on every row so labels never moved; the empty column read as stray white space.
+ * The one-row nudge is the cursor's "step in" motion, like a classic game menu.
+ */
 .pt-menu-item::before {
   content: '\25B6';
+  display: none;
   font-size: 18px;
-  color: transparent;
-  transition: color var(--dur-cursor) steps(2);
 }
 .pt-menu-item.is-cursor { background: var(--sign-2); border-color: var(--accent); }
-.pt-menu-item.is-cursor::before { color: var(--accent); }
+.pt-menu-item.is-cursor::before { display: inline; color: var(--accent); }
 .pt-menu-item:disabled { color: var(--sign-dim); cursor: not-allowed; }
 .pt-menu-item .pt-menu-value { margin-left: auto; color: var(--accent); }
 .pt-menu-item:focus-visible { outline: none; } /* the ▶ row highlight IS the focus ring */

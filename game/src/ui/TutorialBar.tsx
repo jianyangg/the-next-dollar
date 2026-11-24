@@ -25,7 +25,7 @@ export const selectTutorialStepNum = (s: GameData): number | null => {
   if (!hasSupplies && s.neighborhoodId !== 'market') return 2;
   if (!hasSupplies) return 3;
   if (ownedStands === 0) return 4;
-  // After the first sale the last goal points at the score: beat the 5% line at closing.
+  // After the first sale the last goal points at the score: clear Grandma's daily rate at closing.
   if (totalRevenue <= 0) return 5;
   return 6;
 };
@@ -55,7 +55,7 @@ const GOALS: Record<number, GoalPart[]> = {
   4: [{ key: 'E', words: 'Build your stand' }],
   5: [
     { key: 'F', words: 'Brew' },
-    { key: 'Space', words: 'Serve' },
+    { key: 'Space', words: 'Hold to serve' },
   ],
   6: [{ words: `${CLOSING_TIME_SHORT}: beat the line` }],
 };

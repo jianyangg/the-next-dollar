@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { soundEngine } from '../../audio/soundEngine';
 import { INPUT_PRIORITY } from '../../state/input';
 import { useInputLayer } from './useInputLayer';
@@ -129,6 +129,26 @@ export function CursorMenu({
     }
   };
 
+  // A keyboard hold in progress: which key started it and which item it reports to.
+  // E/Enter on a hold item reports held=true and selects; releasing THAT key reports
+  // held=false. The key-up arrives through the input router like every other key (one
+  // window listener for the whole game), not through a listener of our own.
+  const keyHold = useRef<{ key: string; item: CursorMenuItem } | null>(null);
+  const endKeyHold = (): void => {
+    const hold = keyHold.current;
+    keyHold.current = null;
+    hold?.item.onHoldChange?.(false);
+  };
+  // Losing window focus swallows the key-up, and unmounting mid-hold would never see it:
+  // both count as letting go, so a hold can never stick on.
+  useEffect(() => {
+    window.addEventListener('blur', endKeyHold);
+    return () => {
+      window.removeEventListener('blur', endKeyHold);
+      endKeyHold();
+    };
+  }, []);
+
   useInputLayer(
     (e) => {
       if ((PREV_KEYS[orientation] as readonly string[]).includes(e.key)) {
@@ -154,12 +174,24 @@ export function CursorMenu({
         const item = items[cursor];
         if (!item || item.disabled) return false;
         e.preventDefault();
+        if (item.onHoldChange) {
+          endKeyHold(); // a second confirm key while one is held replaces that hold
+          keyHold.current = { key: e.key.toLowerCase(), item };
+          item.onHoldChange(true);
+        }
         item.onSelect();
         return true;
       }
       return false;
     },
-    { active: active && items.length > 0, blocking, priority: blocking ? INPUT_PRIORITY.modal : INPUT_PRIORITY.menu }
+    {
+      active: active && items.length > 0,
+      blocking,
+      priority: blocking ? INPUT_PRIORITY.modal : INPUT_PRIORITY.menu,
+      onKeyUp: (e) => {
+        if (keyHold.current && e.key.toLowerCase() === keyHold.current.key) endKeyHold();
+      },
+    }
   );
 
   return (

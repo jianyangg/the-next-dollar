@@ -20,16 +20,23 @@ vi.mock('../audio/soundEngine', () => {
       playDayLost: noop,
       playLineCrossed: noop,
       playTravel: noop,
+      setMusicTheme: noop,
+      setMusicHushed: noop,
+      playSubwayDepart: noop,
+      playSubwayArrive: noop,
+      playMapStation: noop,
+      playMapSelect: noop,
       playHonkKo: noop,
     },
   };
 });
 
+import * as Purchases from '../core/purchases';
 import { initRunRandom } from '../core/runRandom';
 import { resetAnchorStore } from '../state/anchorStore';
 import { resetGameStore, useGameStore } from '../state/gameStore';
 import * as dev from './devTools';
-import { countOwnedStands } from '../core/sliceModel';
+import { countOwnedStands, getWorth } from '../core/sliceModel';
 
 const eco = () => useGameStore.getState().economy;
 
@@ -58,12 +65,11 @@ describe('money and stock cheats', () => {
     expect(eco().cash).toBe(0);
   });
 
-  it('addLemons adds 10 cups worth $5 and leaves cash unchanged ($0.50/cup)', () => {
+  it('addLemons adds one crate (its cups and its cost) and leaves cash unchanged', () => {
     dev.addLemons();
-    expect(eco().cupsInStock).toBe(10);
-    expect(eco().inventoryValue).toBe(5);
+    expect(eco().cupsInStock).toBe(Purchases.LEMON_CRATE_CUPS);
+    expect(eco().inventoryValue).toBe(Purchases.LEMON_CRATE_COST);
     expect(eco().cash).toBe(30);
-    expect(eco().inventoryValue / eco().cupsInStock).toBe(0.5);
   });
 
   it('addPitcher adds one pitcher and $10 equipment, cash unchanged', () => {
@@ -109,6 +115,14 @@ describe('time cheats', () => {
     expect(useGameStore.getState().timeProgress).toBe(0);
     expect(useGameStore.getState().eodRecord).toBeNull();
     expect(eco().dayRevenue).toBe(0);
+  });
+
+  it('jumpToDay rings the opening bell: the line is charged on what the player has now', () => {
+    dev.addCash();
+    const worth = getWorth(eco());
+    expect(eco().openingWorth).not.toBe(worth);
+    dev.jumpToDay(5);
+    expect(eco().openingWorth).toBe(worth);
   });
 
   it('jumpToDay rejects days outside 1..30 and non-integers', () => {

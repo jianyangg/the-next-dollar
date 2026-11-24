@@ -54,7 +54,9 @@ describe('plotSignWord', () => {
   });
   it('says "Build" on a leased plot, near or far', () => {
     expect(plotSignWord({ ...corner, status: 'leased' }, false)).toBe('Build');
-    expect(plotSignWord({ ...corner, status: 'leased' }, true)).toBe('Build');
+    expect(plotSignWord({ ...corner, status: 'leased' }, true, 1)).toBe('Build');
+    // Up close without a stall kit, E goes to buy one: the sign says so.
+    expect(plotSignWord({ ...corner, status: 'leased' }, true, 0)).toBe('Buy kit');
   });
   it('says "Stand" from afar and "Open" up close on a built plot', () => {
     expect(plotSignWord({ ...corner, status: 'built' }, false)).toBe('Stand');

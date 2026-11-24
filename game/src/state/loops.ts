@@ -1,4 +1,5 @@
-import { selectClockPaused, selectManagerIntervalMs, useGameStore } from './gameStore';
+import { soundEngine } from '../audio/soundEngine';
+import { selectClockPaused, selectManagerIntervalMs, selectMusicHushed, useGameStore } from './gameStore';
 import { INPUT_PRIORITY, pushInputLayer, startInputRouter } from './input';
 
 /**
@@ -87,7 +88,8 @@ export function handleGameKeyDown(e: KeyboardEvent): boolean {
 
   const k = e.key.toLowerCase();
   const brewGameActive = s.brewGame !== null;
-  if (brewGameActive && s.brewGame?.kind === 'rapid-stir' && s.workingAtStand) {
+  const stirring = s.brewGame?.kind === 'rapid-stir' || s.brewGame?.kind === 'lemonade-brew';
+  if (brewGameActive && stirring && s.workingAtStand) {
     const stirKeys: Array<[boolean, 'W' | 'A' | 'S' | 'D']> = [
       [k === 'w' || e.key === 'ArrowUp', 'W'],
       [k === 'a' || e.key === 'ArrowLeft', 'A'],
@@ -101,7 +103,9 @@ export function handleGameKeyDown(e: KeyboardEvent): boolean {
         return true;
       }
     }
-    if (e.code === 'Space') {
+    // Rapid-stir uses Space as one of its keys. The lemonade brew does not: there Space
+    // is the hold (squeeze, pour sugar), handled by the Space branch below.
+    if (e.code === 'Space' && s.brewGame?.kind === 'rapid-stir') {
       e.preventDefault();
       actions.stirKey('SPACE');
       return true;
@@ -127,6 +131,9 @@ export function handleGameKeyDown(e: KeyboardEvent): boolean {
   }
   if (e.code === 'Space' && s.workingAtStand && nothingOverlaying) {
     e.preventDefault();
+    // A held key repeats key-down events. Serving is one cup per PRESS, so repeats must
+    // not start the next pour on their own.
+    if (e.repeat && !brewGameActive) return true;
     actions.setSpaceHeld(true);
     if (brewGameActive) {
       if (s.brewGame?.kind !== 'keep-in-tube') actions.lockBrewGame();
@@ -163,7 +170,19 @@ function startKeyboard(): () => void {
 }
 
 /** Start every loop and listener; the returned function stops them all. */
+/**
+ * Keep the music in step with the screen: hushed while play is stopped (see
+ * selectMusicHushed). Driven by a store subscription rather than calls inside each
+ * action, so every way into or out of those screens (closing a day, Next Day, ending
+ * the run, a new run, dev tools) is covered without anyone remembering to call it.
+ */
+function startMusicMood(): () => void {
+  return useGameStore.subscribe(selectMusicHushed, (hushed) => soundEngine.setMusicHushed(hushed), {
+    fireImmediately: true,
+  });
+}
+
 export function startGameLoops(): () => void {
-  const stops = [startClock(), startManager(), startKeyboard()];
+  const stops = [startClock(), startManager(), startKeyboard(), startMusicMood()];
   return () => stops.forEach((stop) => stop());
 }

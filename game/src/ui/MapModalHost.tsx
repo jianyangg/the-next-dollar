@@ -9,6 +9,7 @@ export function MapModalHost() {
   const actions = useGameStore((s) => s.actions);
   const mapOpen = useGameStore((s) => s.mapOpen);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
+  const previousNeighborhood = useGameStore((s) => s.previousNeighborhood);
 
   // The map keeps its own CSS entrance (inside ManhattanMapModal); this wrapper adds the fade-OUT.
   // It animates opacity only: a `transform` on the wrapper would turn it into the containing
@@ -22,7 +23,12 @@ export function MapModalHost() {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, pointerEvents: 'none', transition: { duration: 0.14, ease: EASE_IN } }}
         >
-          <ManhattanMapModal currentId={neighborhoodId} onSelect={actions.selectNeighborhood} onClose={actions.closeMap} />
+          <ManhattanMapModal
+            currentId={neighborhoodId}
+            backId={previousNeighborhood}
+            onSelect={actions.selectNeighborhood}
+            onClose={actions.closeMap}
+          />
         </m.div>
       )}
     </AnimatePresence>

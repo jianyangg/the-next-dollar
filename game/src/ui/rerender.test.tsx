@@ -43,6 +43,12 @@ vi.mock('../audio/soundEngine', () => {
       playDayLost: noop,
       playLineCrossed: noop,
       playTravel: noop,
+      setMusicTheme: noop,
+      setMusicHushed: noop,
+      playSubwayDepart: noop,
+      playSubwayArrive: noop,
+      playMapStation: noop,
+      playMapSelect: noop,
       playHonkKo: noop,
     },
   };

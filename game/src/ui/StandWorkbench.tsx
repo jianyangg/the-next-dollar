@@ -38,7 +38,7 @@ const selectBrewing = (s: GameState): boolean => s.brewGame !== null;
 /**
  * The pour progress bar under the menu.
  *
- * `serveProgress` runs 0 -> 1 on every frame of the 450 ms pour. The bar is driven through a
+ * `serveProgress` runs 0 -> 1 on every frame of the pour while the player holds. The bar is driven through a
  * motion value (see `useStoreMotionValue`), so those frames never re-render this component:
  * Motion writes the width straight into the DOM and React is never told. Idle = empty bar.
  */
@@ -100,12 +100,12 @@ function StandMenu() {
     },
     {
       id: 'serve',
-      label: <Labelled k="Space">Serve</Labelled>,
+      label: <Labelled k="Space">Hold to serve</Labelled>,
       // Customers waiting in line (engine number); nothing shown when the line is empty.
       value: queueLength > 0 ? queueLength : undefined,
       disabled: brewedCups < 1 || queueLength === 0 || pouring,
       onSelect: actions.startServeFrontCustomer,
-      // Hold the mouse on Serve to keep pouring for the next customers (same as Space).
+      // Hold to pour: the cup fills only while the mouse (or E, or Space) is held down.
       onHoldChange: actions.setSpaceHeld,
     },
     { id: 'price', label: 'Price', value: `$${pricePerCup}`, onSelect: () => setPanel('price') },

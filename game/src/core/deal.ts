@@ -2,6 +2,7 @@ import { PUBLIC_DEALS, type PublicDealView } from '../../shared/deals/index';
 import { cents } from './money';
 import { SELLER_PLOT_ID } from './plots';
 import { SliceState } from './sliceModel';
+import { TUNING, type Tuning } from './tuning';
 
 /**
  * A stand that a seller wants to sell to the player.
@@ -79,4 +80,33 @@ export function resolveSealedBid(s: SliceState, deal: Deal, bid: number): BidRes
     };
   }
   return { kind: 'rejected', bid, state: { ...s, dealStatus: 'rejected', dealBidPrice: bid } };
+}
+
+/**
+ * What the bought stand must earn EVERY remaining day (profit after its rent and
+ * wages) for the purchase to beat leaving the money with Grandma.
+ *
+ * The bid stops compounding at Grandma's rate the moment it is paid. In return the
+ * player gets the stand's daily profit, plus, on the last day, the stand's resale value
+ * (`stallKitResale`: a built stand counts in YOU at what its kit would sell for). The
+ * break-even is the level daily amount whose value matches the bid, all discounted at
+ * the same daily rate r over the n days left. That is the textbook loan-payment
+ * ("capital recovery") formula:
+ *
+ *     netCost = bid - resale / (1 + r)^n        what the stand really costs today
+ *     perDay  = netCost * r / (1 - (1 + r)^-n)  the level payment that repays it
+ *
+ * Two properties make it the honest number to show next to the books:
+ * - With many days left it tends to bid * r (Grandma's rate on the money), so a bid
+ *   always costs at least its share of the line.
+ * - With few days left it climbs steeply: a stand bought on day 28 has two days to
+ *   earn its price back, and the meter says so.
+ */
+export function breakEvenDailyProfit(bid: number, daysLeft: number, t: Tuning = TUNING): number {
+  const n = Math.max(1, Math.floor(daysLeft));
+  const r = t.hurdleRate;
+  const grow = (1 + r) ** n;
+  const netCost = bid - t.stallKitResale / grow;
+  if (netCost <= 0) return 0;
+  return +((netCost * r) / (1 - 1 / grow)).toFixed(2);
 }

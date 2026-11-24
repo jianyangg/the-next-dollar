@@ -27,7 +27,7 @@ export const CHIP_LABEL: Record<ChipKind, string> = {
 
 /**
  * "$0" for a zero profit chip (the lesson: buying is not losing), otherwise a signed
- * amount. The 5% line shows its per-day change.
+ * amount. Grandma's daily rate shows its per-day change.
  */
 export function chipValue(chip: MoneyChip): string {
   if (chip.delta === 0) return '$0';

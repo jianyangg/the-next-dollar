@@ -11,10 +11,18 @@ import {
   hasTraffic,
   PLAYER_SPEED,
   moveWithSliding,
+  AVENUE_CROSSWALKS,
+  CROSS_CROSSWALK_HALF_WIDTH,
+  CROSS_CROSSWALK_X,
   plotsOnStreet,
   sellerStandPos,
   sellerStandShown,
+  sidewalkOf,
+  standFacing,
+  WALKER_LANES,
   type Box,
+  type Sidewalk,
+  type StandFacing,
   type Vec2,
 } from './collision';
 import { PLOTS, type PlotId, type PlotView } from '../core/plots';
@@ -37,6 +45,7 @@ import {
   createGrassTexture,
   createIronFenceTexture,
   createKnockedOutSpriteTexture,
+  createPedestrianKnockedOutTexture,
   createLemonCrateTexture,
   createLemonadeStandFrontTexture,
   createLimestoneLuxuryFacadeTexture,
@@ -54,12 +63,15 @@ import {
   createParkBenchTexture,
   createParkPathTexture,
   createPitcherTexture,
+  createPitcherFillTexture,
+  createLemonadeCupTexture,
   createSidewalkTexture,
   createSoulSpriteTexture,
   createStoneWallTexture,
   createTheaterMarqueeFacadeTexture,
   createTreeSpriteTexture,
 } from './pixelArt';
+import { MAX_TABLE_CUPS, tableStockView, type PitcherFill, type TableStockInput } from './tableStock';
 
 export type NearbyTarget =
   | 'own-stand'
@@ -125,8 +137,13 @@ interface Pedestrian {
   moodSprite: THREE.Sprite;
   mood: QueueMood;
   frames: Record<'down' | 'up' | 'left' | 'right', [THREE.CanvasTexture, THREE.CanvasTexture, THREE.CanvasTexture]>;
+  /** This walker's own knocked-out frame (same kind as `frames`), shown during a taxi bonk. */
+  koTex: THREE.CanvasTexture;
   x: number;
   z: number;
+  /** Which sidewalk this walker strolls on, for life (see WALKER_LANES). */
+  lane: Sidewalk;
+  /** The z this walker strolls along (inside its lane's band; re-rolled on respawn). */
   homeZ: number;
   vx: number;
   speed: number;
@@ -185,13 +202,24 @@ interface TrafficVehicle {
   halfZ: number;
 }
 
+/** The stock display's shared textures: one pitcher per fill level, one filled cup. */
+interface StockTextures {
+  pitcher: Record<PitcherFill, THREE.CanvasTexture>;
+  cup: THREE.CanvasTexture;
+}
+
 interface StandStyleOptions {
   accentHex: string;
   secondaryHex: string;
   label: string;
   signTopText: string;
   signSubText: string;
-  includePitchers: boolean;
+  /**
+   * Build the live-stock display (one pitcher, a row of filled cups, a lemon crate whose
+   * lemons can be shown or hidden). Only the player's stands have it; buildStandStructure
+   * returns the parts so setTableStock can drive them.
+   */
+  includeStockDisplay: boolean;
   isSeller?: boolean;
   marketKind?: 'stalls' | 'lemons' | 'pitchers';
   parentGroup: THREE.Group;
@@ -241,8 +269,21 @@ interface PlotSlot {
   standGroup: THREE.Group;
   /** The hired worker behind the counter (sprite + shadow). */
   workerGroup: THREE.Group;
-  /** The 3 pitcher sprites on this stand's counter (see applyPlotVisuals). */
-  pitchers: THREE.Sprite[];
+  /** This stand's stock display (see setTableStock / applyPlotVisuals). */
+  stock: StandStockParts;
+}
+
+/**
+ * The pieces of a player stand that show the live stock (world/tableStock.ts decides how
+ * many of each are visible). Built hidden; only the live stand shows them.
+ */
+interface StandStockParts {
+  /** One pitcher; its texture is swapped to show the fill level. */
+  pitcher: THREE.Sprite;
+  /** MAX_TABLE_CUPS filled cups in a row on the counter; the first N are shown. */
+  cups: THREE.Sprite[];
+  /** The lemons heaped on the top crate (CRATE_LEMON_SLOTS of them); the first N are shown. */
+  crateLemons: THREE.Mesh[];
 }
 
 const slotKey = (p: { x: number; z: number }): string => `${p.x},${p.z}`;
@@ -364,9 +405,12 @@ export function streetCandidates(
 
 const QUEUE_MAX_PATIENCE = 16;
 /**
- * Where customers line up, as offsets from the LIVE stand's position: the first spot is
- * right in front of the counter (+z is toward the camera), and the line then trails off
- * to the right and slightly forward so every customer stays visible.
+ * Where customers line up, as offsets from the LIVE stand's position, written for a stand
+ * whose counter faces +z (a far-sidewalk stand): the first spot is right in front of the
+ * counter, and the line then trails off to the stand's right and slightly forward so every
+ * customer stays visible. A near-sidewalk stand is the same model turned half a circle
+ * (standFacing = -1), so its line is these offsets turned half a circle too: both x and z
+ * flip (see queueSlotsAt).
  */
 const QUEUE_SLOT_OFFSETS: readonly Vec2[] = [
   { x: 0, z: 1.05 },
@@ -377,17 +421,49 @@ const QUEUE_SLOT_OFFSETS: readonly Vec2[] = [
 /** The most customers that can wait at once (one per slot). */
 export const QUEUE_CAPACITY = QUEUE_SLOT_OFFSETS.length;
 
-/** The queue spots in front of a stand at `stand` (world x/z). Pure; unit-tested. */
+/**
+ * The queue spots in front of a stand at `stand` (world x/z). Turning a stand by half a
+ * circle maps a local offset (x, z) to (-x, -z), so both components are multiplied by the
+ * stand's facing (+1 far sidewalk, -1 near sidewalk). Pure; unit-tested.
+ */
 export function queueSlotsAt(stand: Vec2): Vec2[] {
-  return QUEUE_SLOT_OFFSETS.map((o) => ({ x: stand.x + o.x, z: stand.z + o.z }));
+  const f = standFacing(stand);
+  return QUEUE_SLOT_OFFSETS.map((o) => ({ x: stand.x + f * o.x, z: stand.z + f * o.z }));
 }
 
 /** A walker considers joining the line only while within this many units (in x) of the live stand. */
 export const QUEUE_REACH_X = 2.6;
 
-/** True when a strolling walker at `walkerX` is level with the live stand at `standX`. */
-export function isWithinQueueReach(walkerX: number, standX: number): boolean {
-  return Math.abs(walkerX - standX) < QUEUE_REACH_X;
+/**
+ * True when a strolling walker is level with the live stand AND on the same sidewalk.
+ * Without the sidewalk check, a walker on the far side passing x = 7.6 would walk straight
+ * across the cross street to queue at a near-side stand (and vice versa).
+ * `walker.laneZ` is the walker's home lane z (their sidewalk), not their current z.
+ */
+export function isWithinQueueReach(walker: { x: number; laneZ: number }, stand: Vec2): boolean {
+  return sidewalkOf(walker.laneZ) === sidewalkOf(stand.z) && Math.abs(walker.x - stand.x) < QUEUE_REACH_X;
+}
+
+/**
+ * Offsets (in z, before applying the stand's facing) of the people behind a counter:
+ *   BEHIND: where the vendor / the working player stands, on the step stool.
+ *   FRONT_DOOR: where the player is put when they stop working (in front of the counter).
+ *   SHADOW: the vendor's contact shadow on the stool.
+ * World z = stand z + facing * offset.
+ */
+const COUNTER_BEHIND_Z = -0.62;
+const COUNTER_FRONT_DOOR_Z = 1.12;
+const COUNTER_SHADOW_Z = -0.58;
+
+/** Which way someone behind a counter looks: toward the customers in front of it. */
+export function vendorLookDirection(facing: StandFacing): 'down' | 'up' {
+  // 'down' is toward the camera (+z), 'up' away from it (-z).
+  return facing === 1 ? 'down' : 'up';
+}
+
+/** Which way a queued customer looks: at the counter (opposite of the vendor). */
+export function customerLookDirection(facing: StandFacing): 'down' | 'up' {
+  return facing === 1 ? 'up' : 'down';
 }
 
 /**
@@ -553,7 +629,8 @@ export class CentralParkScene {
     DistrictPedestrianKind,
     Record<'down' | 'up' | 'left' | 'right', [THREE.CanvasTexture, THREE.CanvasTexture, THREE.CanvasTexture]>
   >;
-  private pedKoTex!: THREE.CanvasTexture;
+  /** One knocked-out frame per passer-by kind, so a struck walker keeps their own look. */
+  private pedKoBank!: Record<DistrictPedestrianKind, THREE.CanvasTexture>;
   private pedestrians: Pedestrian[] = [];
   private queue: Pedestrian[] = [];
   private queueJoinCooldown = 1.2;
@@ -561,8 +638,13 @@ export class CentralParkScene {
   private sparkleGeo = new THREE.BoxGeometry(0.09, 0.09, 0.09);
   private taxiGroup!: THREE.Group;
   private vehicles: TrafficVehicle[] = [];
-  private pitcherSprites: THREE.Sprite[] = [];
-  private pitcherCount = 1;
+  /**
+   * The live stock the player's stand shows on its counter: ready cups and lemons left
+   * (pushed in by connectScene from the store, which sends it immediately on connect).
+   */
+  private tableStock: TableStockInput = { readyCups: 0, lemons: 0 };
+  /** Textures for the stock display, made once and shared by every player stand. */
+  private stockTextures: StockTextures | null = null;
   private standOpen = true;
   /**
    * Chance (0..1) that a walker reaching the stand buys at today's price in this
@@ -692,13 +774,17 @@ export class CentralParkScene {
   }
 
   /**
-   * How many pitchers the player owns. Pitchers are ONE shared pool used at the stand the
-   * player runs, so they are drawn on the live stand only (1 to 3 sprites); other stands
-   * show none. (They used to be one list across every plot spot, so the count only ever
-   * appeared on the corner spot, whichever stand the player was running.)
+   * The stock the live stand shows on its counter: `readyCups` brewed cups waiting to be
+   * sold and `lemons` cups' worth of lemons not brewed yet. Stock is one shared pool used
+   * at the stand the player runs, so it is drawn on the live stand only.
+   *
+   * (The counter used to show one pitcher per pitcher OWNED. Pitchers are equipment that
+   * widens the brew sweet spot, not stock, but a counter of full pitchers looked like
+   * "lots of lemonade ready" whether or not anything was brewed. Now the one pitcher's
+   * fill and the row of cups both mean ready lemonade; the pitcher count lives on the HUD.)
    */
-  public setPitcherCount(count: number): void {
-    this.pitcherCount = count;
+  public setTableStock(stock: TableStockInput): void {
+    this.tableStock = { readyCups: stock.readyCups, lemons: stock.lemons };
     this.applyPlotVisuals();
   }
 
@@ -789,12 +875,32 @@ export class CentralParkScene {
       const playerIsHere = this.workingAtStand && plot !== undefined && plot.id === this.livePlotId;
       slot.workerGroup.visible = plot?.status === 'built' && plot.staffed && !playerIsHere;
       const isLive = plot !== undefined && plot.status === 'built' && plot.id === this.livePlotId;
-      const shown = isLive ? Math.max(1, Math.min(slot.pitchers.length, this.pitcherCount)) : 0;
-      slot.pitchers.forEach((sp, i) => {
-        sp.visible = i < shown;
-      });
+      this.showStock(slot.stock, isLive);
     }
     this.sellerStandGroup.visible = sellerStandShown(this.currentNeighborhood, this.sellerPresent);
+  }
+
+  /**
+   * Show the live stock on one stand's counter, or hide it all (`isLive` false: other
+   * stands do not hold the player's stock, so their counter and crate stay bare).
+   */
+  private showStock(parts: StandStockParts, isLive: boolean): void {
+    const view = isLive ? tableStockView(this.tableStock) : null;
+    parts.pitcher.visible = view !== null;
+    if (view !== null) {
+      const map = this.getStockTextures().pitcher[view.pitcher];
+      const mat = parts.pitcher.material;
+      if (mat.map !== map) {
+        mat.map = map;
+        mat.needsUpdate = true;
+      }
+    }
+    parts.cups.forEach((cup, i) => {
+      cup.visible = view !== null && i < view.cups;
+    });
+    parts.crateLemons.forEach((lemon, i) => {
+      lemon.visible = view !== null && i < view.crateLemons;
+    });
   }
 
   public burstSaleSparkles(combo = 1): void {
@@ -907,13 +1013,17 @@ export class CentralParkScene {
     this.keys.clear();
 
     if (working && this.livePos) {
-      // Positioned directly behind the open-top counter so full face & body are 100% visible
+      // Behind the open-top counter (on the stool), looking at the customers. "Behind"
+      // depends on which way the stand faces: -z for a far-sidewalk stand, +z for a
+      // near-sidewalk one (see standFacing).
       this.counterPos = this.livePos.clone();
-      this.playerPos.set(this.counterPos.x, 0, this.counterPos.z - 0.62);
-      this.playerFacing = 'down';
+      const f = standFacing(this.counterPos);
+      this.playerPos.set(this.counterPos.x, 0, this.counterPos.z + f * COUNTER_BEHIND_Z);
+      this.playerFacing = vendorLookDirection(f);
     } else if (this.counterPos) {
       // Step out to the front of the counter we were working at.
-      this.playerPos.set(this.counterPos.x, 0, this.counterPos.z + 1.12);
+      const f = standFacing(this.counterPos);
+      this.playerPos.set(this.counterPos.x, 0, this.counterPos.z + f * COUNTER_FRONT_DOOR_Z);
       this.playerFacing = 'down';
       this.counterPos = null;
     }
@@ -1435,29 +1545,25 @@ export class CentralParkScene {
     }
 
     const stripeMat = new THREE.MeshBasicMaterial({ color: '#ece7dc' });
-    // North zebra crossing
-    for (let x = -2.0; x <= 2.01; x += 0.8) {
-      const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 2.0), stripeMat);
-      stripe.rotation.x = -Math.PI / 2;
-      stripe.position.set(x, 0.045, 1.3);
-      target.add(stripe);
-
-      const stripeSouth = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 1.8), stripeMat);
-      stripeSouth.rotation.x = -Math.PI / 2;
-      stripeSouth.position.set(x, 0.045, 8.6);
-      target.add(stripeSouth);
+    // Zebra crossings. Their positions come from collision.ts (AVENUE_CROSSWALKS,
+    // CROSS_CROSSWALK_X), the same numbers the path-finder uses to prefer crossing here.
+    // Across the avenue: one on each side of the intersection.
+    for (const crossing of AVENUE_CROSSWALKS) {
+      for (let x = -2.0; x <= 2.01; x += 0.8) {
+        const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.45, crossing.halfDepth * 2), stripeMat);
+        stripe.rotation.x = -Math.PI / 2;
+        stripe.position.set(x, 0.045, crossing.z);
+        target.add(stripe);
+      }
     }
     // West & East zebra crossings across the horizontal cross-street
     for (let z = 3.6; z <= 6.81; z += 0.8) {
-      const sWest = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.42), stripeMat);
-      sWest.rotation.x = -Math.PI / 2;
-      sWest.position.set(-4.2, 0.045, z);
-      target.add(sWest);
-
-      const sEast = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.42), stripeMat);
-      sEast.rotation.x = -Math.PI / 2;
-      sEast.position.set(4.2, 0.045, z);
-      target.add(sEast);
+      for (const side of [-1, 1]) {
+        const stripe = new THREE.Mesh(new THREE.PlaneGeometry(CROSS_CROSSWALK_HALF_WIDTH * 2, 0.42), stripeMat);
+        stripe.rotation.x = -Math.PI / 2;
+        stripe.position.set(side * CROSS_CROSSWALK_X, 0.045, z);
+        target.add(stripe);
+      }
     }
 
     const curbMat = new THREE.MeshStandardMaterial({ color: '#b5ac9b', roughness: 0.9 });
@@ -1693,12 +1799,13 @@ export class CentralParkScene {
   private buildUnionSquareMarketLayout(): THREE.Group {
     const g = new THREE.Group();
 
-    // Full pedestrian cobblestone plaza
+    // Full pedestrian cobblestone plaza. Runs to z = 17 so the ground continues past the
+    // walk area's near edge (z 11.4) as far as the camera can see from there.
     const cobbleGround = new THREE.Mesh(
-      new THREE.BoxGeometry(36, 0.2, 26),
-      new THREE.MeshStandardMaterial({ map: createCobblestoneTexture(16, 12), roughness: 0.92 })
+      new THREE.BoxGeometry(36, 0.2, 32),
+      new THREE.MeshStandardMaterial({ map: createCobblestoneTexture(16, 15), roughness: 0.92 })
     );
-    cobbleGround.position.set(0, -0.1, -2);
+    cobbleGround.position.set(0, -0.1, 1);
     cobbleGround.receiveShadow = true;
     g.add(cobbleGround);
 
@@ -1861,12 +1968,13 @@ export class CentralParkScene {
   private buildColumbiaQuadLayout(): THREE.Group {
     const g = new THREE.Group();
 
-    // Red-brick College Walk promenade ground (no car avenue)
+    // Red-brick College Walk promenade ground (no car avenue). Runs to z = 17 so the near
+    // sidewalk (walkable to z 11.4, where two plots stand) has ground under it and in view.
     const plaza = new THREE.Mesh(
-      new THREE.BoxGeometry(36, 0.2, 26),
-      new THREE.MeshStandardMaterial({ map: createCobblestoneTexture(16, 12), color: '#c8836b', roughness: 0.92 })
+      new THREE.BoxGeometry(36, 0.2, 32),
+      new THREE.MeshStandardMaterial({ map: createCobblestoneTexture(16, 15), color: '#c8836b', roughness: 0.92 })
     );
-    plaza.position.set(0, -0.1, -2);
+    plaza.position.set(0, -0.1, 1);
     plaza.receiveShadow = true;
     g.add(plaza);
 
@@ -2179,19 +2287,21 @@ export class CentralParkScene {
   private buildWestVillageLayout(): THREE.Group {
     const g = new THREE.Group();
 
+    // Both run to z = 17 (they used to stop at z 10-11): the near sidewalk is walkable to
+    // z 11.4 and holds two plots, and the camera sees a few units past the player.
     const sidewalk = new THREE.Mesh(
-      new THREE.BoxGeometry(34, 0.2, 24),
-      new THREE.MeshStandardMaterial({ map: createSidewalkTexture(18, 12), color: '#e6d4be', roughness: 0.92 })
+      new THREE.BoxGeometry(34, 0.2, 31),
+      new THREE.MeshStandardMaterial({ map: createSidewalkTexture(18, 15), color: '#e6d4be', roughness: 0.92 })
     );
-    sidewalk.position.set(0, -0.1, -2);
+    sidewalk.position.set(0, -0.1, 1.5);
     sidewalk.receiveShadow = true;
     g.add(sidewalk);
 
     const cobbleStreet = new THREE.Mesh(
-      new THREE.BoxGeometry(7.4, 0.14, 26),
-      new THREE.MeshStandardMaterial({ map: createCobblestoneTexture(4, 12), roughness: 0.94 })
+      new THREE.BoxGeometry(7.4, 0.14, 32),
+      new THREE.MeshStandardMaterial({ map: createCobblestoneTexture(4, 15), roughness: 0.94 })
     );
-    cobbleStreet.position.set(0, -0.04, -2);
+    cobbleStreet.position.set(0, -0.04, 1);
     cobbleStreet.receiveShadow = true;
     g.add(cobbleStreet);
 
@@ -2691,7 +2801,19 @@ export class CentralParkScene {
     target.add(group);
   }
 
-  private buildLemonCrate(x: number, y: number, z: number, rotY = 0, withLemons = true): THREE.Group {
+  /**
+   * A wooden lemon crate. With `withLemons`, lemons are heaped on top; when `lemonsOut` is
+   * given they are also pushed into it, bottom row first and the top lemon last, so
+   * showing "the first N" fills the crate the way a real heap grows.
+   */
+  private buildLemonCrate(
+    x: number,
+    y: number,
+    z: number,
+    rotY = 0,
+    withLemons = true,
+    lemonsOut?: THREE.Mesh[]
+  ): THREE.Group {
     const crate = new THREE.Group();
     crate.position.set(x, y, z);
     crate.rotation.y = rotY;
@@ -2728,6 +2850,7 @@ export class CentralParkScene {
         lemon.position.set(lx, ly, lz);
         lemon.castShadow = true;
         crate.add(lemon);
+        lemonsOut?.push(lemon);
       }
     }
 
@@ -2758,14 +2881,18 @@ export class CentralParkScene {
   }
 
   // Clean OPEN-TOP wooden counter booth (NO overhead canopy blocking characters!)
-  private buildStandStructure(pos: THREE.Vector3, opts: StandStyleOptions): void {
+  /**
+   * Build one stand. Returns the live-stock display parts when `includeStockDisplay` is
+   * set (the player's stands), otherwise null.
+   */
+  private buildStandStructure(pos: THREE.Vector3, opts: StandStyleOptions): StandStockParts | null {
     const {
       accentHex,
       secondaryHex,
       label,
       signTopText,
       signSubText,
-      includePitchers,
+      includeStockDisplay,
       isSeller = false,
       marketKind,
       parentGroup,
@@ -2773,6 +2900,12 @@ export class CentralParkScene {
 
     const group = new THREE.Group();
     group.position.copy(pos);
+    // The model is authored with its counter front facing +z (toward the camera). A stand
+    // on the near sidewalk faces the street instead (standFacing = -1), so the whole model
+    // is turned half a circle about its centre: customers, crates and the stool all end up
+    // on the correct sides together.
+    const facing = standFacing(pos);
+    if (facing === -1) group.rotation.y = Math.PI;
 
     const woodDarkMat = new THREE.MeshStandardMaterial({ color: '#61391c', roughness: 0.9 });
     const woodMidMat = new THREE.MeshStandardMaterial({ color: '#875329', roughness: 0.86 });
@@ -2795,14 +2928,17 @@ export class CentralParkScene {
     plinth.receiveShadow = true;
     group.add(plinth);
 
-    // Main counter body with pixel-art front panel
+    // Main counter body with pixel-art front panel. A turned-around (near-sidewalk) stand
+    // shows its BACK to the camera, so it carries the painted panel on the back too: the
+    // stand's name stays readable from where the player looks. (The side sign plaque is
+    // painted on both faces already.)
     const counter = new THREE.Mesh(new THREE.BoxGeometry(2.04, 0.54, 0.88), [
       woodMidMat,
       woodMidMat,
       counterTopMat,
       woodDarkMat,
       frontMat,
-      woodMidMat,
+      facing === -1 ? frontMat : woodMidMat,
     ]);
     counter.position.set(0, 0.33, 0);
     counter.castShadow = true;
@@ -2890,6 +3026,8 @@ export class CentralParkScene {
 
     // Props on & beside the counter (low profile so vendor face & torso stay 100% clear)
     const counterY = 0.682;
+    // Filled by buildLemonCrate below on a player stand: the lemons setTableStock shows.
+    const crateLemons: THREE.Mesh[] = [];
     if (marketKind === 'stalls') {
       // Carpentry & Stall Kits vendor: stacked wooden planks/beams + miniature stall frame on counter + timber stack beside stall
       const plankMat = new THREE.MeshStandardMaterial({ color: '#c88c4b', roughness: 0.82 });
@@ -2964,24 +3102,53 @@ export class CentralParkScene {
     } else {
       const crateSide = isSeller ? -1.36 : 1.36;
       group.add(this.buildLemonCrate(crateSide, 0, 0.08, isSeller ? 0.18 : -0.14, true));
+      // The top crate's heap is the one the player sees. On a player stand it shows the
+      // lemons left (setTableStock); the seller's top crate is a closed, empty one.
       group.add(
-        this.buildLemonCrate(crateSide + (isSeller ? -0.04 : 0.05), 0.34, -0.04, isSeller ? -0.12 : 0.22, !isSeller)
+        this.buildLemonCrate(
+          crateSide + (isSeller ? -0.04 : 0.05),
+          0.34,
+          -0.04,
+          isSeller ? -0.12 : 0.22,
+          !isSeller,
+          includeStockDisplay ? crateLemons : undefined
+        )
       );
 
       group.add(this.buildCupStack(isSeller ? 0.74 : -0.78, counterY, 0.24, accentHex));
       group.add(this.buildCupStack(isSeller ? 0.58 : -0.62, counterY, 0.31, accentHex));
     }
 
-    if (includePitchers) {
-      const pTex = createPitcherTexture();
-      const offsets = [-0.26, 0.22, 0.7];
-      for (const ox of offsets) {
-        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: pTex, transparent: true }));
-        sp.scale.set(0.42, 0.5, 1);
-        sp.position.set(ox, counterY + 0.24, 0.18);
-        group.add(sp);
-        this.pitcherSprites.push(sp);
+    let stock: StandStockParts | null = null;
+    if (includeStockDisplay) {
+      const tex = this.getStockTextures();
+      // One pitcher at the crate end of the counter. Its own material, because each
+      // stand's pitcher swaps its texture (fill level) independently of the others.
+      const pitcher = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex.pitcher.empty, transparent: true }));
+      pitcher.scale.set(0.42, 0.5, 1);
+      pitcher.position.set(0.7, counterY + 0.24, 0.18);
+      pitcher.visible = false;
+      group.add(pitcher);
+
+      // A neat row of filled cups along the front edge of the counter, left to right,
+      // between the empty cup stacks (x -0.62 and further left) and the pitcher (x 0.7).
+      // The cups share one material: they never differ, they are only shown or hidden.
+      const cupMat = new THREE.SpriteMaterial({ map: tex.cup, transparent: true });
+      const CUP_SPACING = 0.155;
+      const FIRST_CUP_X = -0.42;
+      const cups: THREE.Sprite[] = [];
+      for (let i = 0; i < MAX_TABLE_CUPS; i++) {
+        const cup = new THREE.Sprite(cupMat);
+        cup.scale.set(0.15, 0.2, 1);
+        cup.position.set(FIRST_CUP_X + i * CUP_SPACING, counterY + 0.1, 0.3);
+        cup.visible = false;
+        group.add(cup);
+        cups.push(cup);
       }
+      crateLemons.forEach((lemon) => {
+        lemon.visible = false;
+      });
+      stock = { pitcher, cups, crateLemons };
     } else if (isSeller) {
       const pTex = createPitcherTexture();
       const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: pTex, transparent: true }));
@@ -3000,6 +3167,21 @@ export class CentralParkScene {
     }
 
     parentGroup.add(group);
+    return stock;
+  }
+
+  /** The stock display's textures, made on first use and shared by every player stand. */
+  private getStockTextures(): StockTextures {
+    this.stockTextures ??= {
+      pitcher: {
+        empty: createPitcherFillTexture('empty'),
+        low: createPitcherFillTexture('low'),
+        half: createPitcherFillTexture('half'),
+        full: createPitcherFillTexture('full'),
+      },
+      cup: createLemonadeCupTexture(),
+    };
+    return this.stockTextures;
   }
 
   /**
@@ -3014,28 +3196,30 @@ export class CentralParkScene {
       const pos = new THREE.Vector3(plot.x, 0, plot.z);
       const emptyGroup = new THREE.Group();
       const emptyPadMat = this.buildPaintedPlot(emptyGroup, pos, '#f0b829', '#ffe885', 'FOR LEASE', 'PRESS [E]');
-      const slot: PlotSlot = {
-        key,
-        pos,
-        emptyGroup,
-        emptyPadMat,
-        leasedGroup: new THREE.Group(),
-        standGroup: new THREE.Group(),
-        workerGroup: new THREE.Group(),
-        pitchers: [],
-      };
-      const firstPitcher = this.pitcherSprites.length;
-      this.buildPaintedPlot(slot.leasedGroup, pos, '#2fb862', '#7ef2a6', 'LEASED', 'BUILD STAND');
-      this.buildStandStructure(pos, {
+      const leasedGroup = new THREE.Group();
+      this.buildPaintedPlot(leasedGroup, pos, '#2fb862', '#7ef2a6', 'LEASED', 'BUILD STAND');
+      const standGroup = new THREE.Group();
+      const stock = this.buildStandStructure(pos, {
         accentHex: '#e0a512',
         secondaryHex: '#fff9e6',
         label: 'LEMONADE',
         signTopText: 'LEMONADE',
         signSubText: 'FRESH SQUEEZED',
-        includePitchers: true,
-        parentGroup: slot.standGroup,
+        includeStockDisplay: true,
+        parentGroup: standGroup,
       });
-      slot.pitchers = this.pitcherSprites.slice(firstPitcher);
+      // includeStockDisplay: true always returns the parts; a null here is a coding error.
+      if (stock === null) throw new Error('buildStandStructure: player stand built without its stock display');
+      const slot: PlotSlot = {
+        key,
+        pos,
+        emptyGroup,
+        emptyPadMat,
+        leasedGroup,
+        standGroup,
+        workerGroup: new THREE.Group(),
+        stock,
+      };
       // Each worker gets its own blink/breath timing (seed) from its slot's index, so two
       // staffed stands side by side do not blink in unison.
       this.addShopkeeper('helper', pos, slot.workerGroup, 0.27 + this.plotSlots.size * 0.31);
@@ -3061,6 +3245,10 @@ export class CentralParkScene {
     signSub: string
   ): THREE.MeshBasicMaterial {
     target.position.copy(pos);
+    // Turned around on the near sidewalk like the stand that will stand on it, so the
+    // sign stake lands on the same side as the built stand's crates. The plaque is
+    // painted on both faces, so it reads from the camera either way.
+    if (standFacing(pos) === -1) target.rotation.y = Math.PI;
 
     // Opacity was 0.22, which vanished against the pavement. The unleased pad also
     // pulses (see animate step 1d) so a free plot is the loudest thing on the street.
@@ -3147,7 +3335,7 @@ export class CentralParkScene {
       label: 'FOR SALE',
       signTopText: 'FOR SALE',
       signSubText: 'INQUIRE WITHIN',
-      includePitchers: false,
+      includeStockDisplay: false,
       isSeller: true,
       parentGroup: this.sellerStandGroup,
     });
@@ -3164,18 +3352,21 @@ export class CentralParkScene {
    * never blink in unison.
    */
   private addShopkeeper(kind: VendorKind, standPos: { x: number; z: number }, parent: THREE.Group, seed: number): void {
+    // Behind the counter and looking at the customers, whichever way the stand faces.
+    const f = standFacing(standPos);
+    const look = vendorLookDirection(f);
     const frames: Record<IdleFrameKey, THREE.CanvasTexture> = {
-      rest: createVendorSpriteTexture(kind, 0, 'down', IDLE_POSES.rest),
-      breathe: createVendorSpriteTexture(kind, 0, 'down', IDLE_POSES.breathe),
-      blink: createVendorSpriteTexture(kind, 0, 'down', IDLE_POSES.blink),
+      rest: createVendorSpriteTexture(kind, 0, look, IDLE_POSES.rest),
+      breathe: createVendorSpriteTexture(kind, 0, look, IDLE_POSES.breathe),
+      blink: createVendorSpriteTexture(kind, 0, look, IDLE_POSES.blink),
     };
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: frames.rest, transparent: true, alphaTest: 0.2 }));
     sprite.scale.set(PLAYER_SPRITE_W, PLAYER_SPRITE_H, 1);
-    sprite.position.set(standPos.x, PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT, standPos.z - 0.62);
+    sprite.position.set(standPos.x, PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT, standPos.z + f * COUNTER_BEHIND_Z);
     parent.add(sprite);
 
     const shadow = this.createContactShadowMesh(0.4, 0.26);
-    shadow.position.set(standPos.x, 0.265, standPos.z - 0.6);
+    shadow.position.set(standPos.x, 0.265, standPos.z + f * COUNTER_SHADOW_Z);
     parent.add(shadow);
 
     this.idleActors.push({ sprite, frames, seed, current: 'rest' });
@@ -3189,7 +3380,7 @@ export class CentralParkScene {
       label: 'STALL KITS',
       signTopText: 'STALL KITS',
       signSubText: 'CARPENTRY $12',
-      includePitchers: false,
+      includeStockDisplay: false,
       marketKind: 'stalls',
       parentGroup: this.marketStandsGroup,
     });
@@ -3203,7 +3394,7 @@ export class CentralParkScene {
       label: 'PITCHERS',
       signTopText: 'PITCHERS',
       signSubText: 'GLASS GEAR $10',
-      includePitchers: false,
+      includeStockDisplay: false,
       marketKind: 'pitchers',
       parentGroup: this.marketStandsGroup,
     });
@@ -3217,7 +3408,7 @@ export class CentralParkScene {
       label: 'LEMONS',
       signTopText: 'LEMONS',
       signSubText: 'WHOLESALE $5',
-      includePitchers: false,
+      includeStockDisplay: false,
       marketKind: 'lemons',
       parentGroup: this.marketStandsGroup,
     });
@@ -3425,7 +3616,6 @@ export class CentralParkScene {
   }
 
   private buildPedestrians(): void {
-    this.pedKoTex = createKnockedOutSpriteTexture('penguin');
     const sharedSoulTex = createSoulSpriteTexture();
     this.moodTextures = {
       happy: createMoodFaceTexture('happy'),
@@ -3445,7 +3635,9 @@ export class CentralParkScene {
       DistrictPedestrianKind,
       Record<'down' | 'up' | 'left' | 'right', [THREE.CanvasTexture, THREE.CanvasTexture, THREE.CanvasTexture]>
     >;
+    this.pedKoBank = {} as Record<DistrictPedestrianKind, THREE.CanvasTexture>;
     for (const kind of allKinds) {
+      this.pedKoBank[kind] = createPedestrianKnockedOutTexture(kind);
       this.pedSpriteBank[kind] = {
         down: [
           createDistrictPedestrianTexture(kind, 0, 'down'),
@@ -3471,7 +3663,8 @@ export class CentralParkScene {
     }
 
     const initialKinds = DISTRICT_PEDESTRIANS[this.currentNeighborhood];
-    const initialSpawns: Array<{ x: number; z: number; dir: 1 | -1; speed: number }> = [
+    // The far-sidewalk crowd the game was tuned with (unchanged).
+    const farSpawns: Array<{ x: number; z: number; dir: 1 | -1; speed: number }> = [
       { x: 8.6, z: 0.45, dir: -1, speed: 1.75 },
       { x: 2.4, z: 0.9, dir: 1, speed: 1.6 },
       { x: 12.8, z: 1.35, dir: -1, speed: 1.45 },
@@ -3479,6 +3672,23 @@ export class CentralParkScene {
       { x: -11.5, z: 1.55, dir: 1, speed: 1.65 },
       { x: 15.5, z: 0.75, dir: -1, speed: 1.75 },
       { x: -15.8, z: 1.15, dir: 1, speed: 1.5 },
+    ];
+    // The near sidewalk gets a crowd of the SAME size, so a near-side stand sees as many
+    // passers-by as a far-side one (plots then differ only by their trafficMultiplier, as
+    // core/plots.ts intends). Each near walker mirrors a far one: opposite x and direction
+    // (so the two crowds do not march in lockstep), and the same relative place inside its
+    // lane's z band.
+    const far = WALKER_LANES.far;
+    const near = WALKER_LANES.near;
+    const nearSpawns = farSpawns.map((a) => ({
+      x: -a.x,
+      z: near.minZ + ((a.z - far.minZ) / (far.maxZ - far.minZ)) * (near.maxZ - near.minZ),
+      dir: (a.dir === 1 ? -1 : 1) as 1 | -1,
+      speed: a.speed,
+    }));
+    const initialSpawns = [
+      ...farSpawns.map((a) => ({ ...a, lane: 'far' as const })),
+      ...nearSpawns.map((a) => ({ ...a, lane: 'near' as const })),
     ];
 
     initialSpawns.forEach((a, idx) => {
@@ -3524,8 +3734,10 @@ export class CentralParkScene {
         moodSprite,
         mood: 'happy',
         frames,
+        koTex: this.pedKoBank[kind],
         x: a.x,
         z: a.z,
+        lane: a.lane,
         homeZ: a.z,
         vx: a.speed * a.dir,
         speed: a.speed,
@@ -3550,7 +3762,8 @@ export class CentralParkScene {
     this.pedestrians.forEach((ped, idx) => {
       const kind = kinds[idx % kinds.length];
       ped.frames = this.pedSpriteBank[kind];
-      const dir = ped.state === 'queued' ? 'up' : ped.vx < 0 ? 'left' : 'right';
+      ped.koTex = this.pedKoBank[kind];
+      const dir = ped.state === 'queued' ? this.customerLook() : ped.vx < 0 ? 'left' : 'right';
       const mat = ped.sprite.material as THREE.SpriteMaterial;
       mat.map = ped.frames[dir][0];
       mat.needsUpdate = true;
@@ -3562,8 +3775,12 @@ export class CentralParkScene {
     const nextKind = kinds[Math.floor(this.rng.cosmetic() * kinds.length)];
     const fromLeft = this.rng.gameplay() > 0.5;
     ped.frames = this.pedSpriteBank[nextKind];
+    ped.koTex = this.pedKoBank[nextKind];
     ped.x = fromLeft ? -17.5 : 17.5;
-    ped.homeZ = 0.4 + this.rng.cosmetic() * 1.45;
+    // A new stroll line inside the walker's own lane (for the far lane this is the same
+    // 0.4 + r * 1.45 as before).
+    const band = WALKER_LANES[ped.lane];
+    ped.homeZ = band.minZ + this.rng.cosmetic() * (band.maxZ - band.minZ);
     ped.z = ped.homeZ;
     ped.speed = 1.4 + this.rng.gameplay() * 0.55;
     ped.vx = fromLeft ? ped.speed : -ped.speed;
@@ -3682,6 +3899,11 @@ export class CentralParkScene {
     if (result.kind === 'path') this.route = startRoute(this.playerPos, result.waypoints);
   }
 
+  /** Which way customers in the live line look (at the live counter). */
+  private customerLook(): 'down' | 'up' {
+    return customerLookDirection(this.livePos ? standFacing(this.livePos) : 1);
+  }
+
   /** What the player is standing next to right now (closest in reach), or null. */
   private getNearby(): NearbyCandidate | null {
     return pickNearbyCandidate(
@@ -3742,19 +3964,20 @@ export class CentralParkScene {
     } else if (this.workingAtStand && this.counterPos) {
       // Behind the live stand's counter (counterPos is set whenever workingAtStand is true).
       const counter = this.counterPos;
+      const f = standFacing(counter);
       this.playerAnimTimer += dt * 4.2;
       const workBob = Math.abs(Math.sin(this.playerAnimTimer * Math.PI)) * 0.05;
       const workFrame = Math.floor(this.playerAnimTimer) % 2 === 0 ? 0 : 1;
-      playerMat.map = this.playerFrames.down[workFrame];
+      playerMat.map = this.playerFrames[vendorLookDirection(f)][workFrame];
       playerMat.opacity = 1;
       this.playerSprite.position.set(
         counter.x,
         PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT + workBob,
-        counter.z - 0.62
+        counter.z + f * COUNTER_BEHIND_Z
       );
       const sScale = 1 - workBob * 1.1;
       this.playerShadow.scale.set(sScale, sScale, 1);
-      this.playerShadow.position.set(counter.x, 0.265, counter.z - 0.58);
+      this.playerShadow.position.set(counter.x, 0.265, counter.z + f * COUNTER_SHADOW_Z);
     } else {
       if (this.invulnTimer > 0) {
         this.invulnTimer = Math.max(0, this.invulnTimer - dt);
@@ -3957,7 +4180,7 @@ export class CentralParkScene {
         ped.koTimer -= dt;
         const p = THREE.MathUtils.clamp(1 - ped.koTimer / 1.2, 0, 1);
         const shake = Math.sin(this.elapsedTime * 34 + ped.id) * 0.03;
-        (ped.sprite.material as THREE.SpriteMaterial).map = this.pedKoTex;
+        (ped.sprite.material as THREE.SpriteMaterial).map = ped.koTex;
         ped.sprite.position.set(ped.x + shake, PED_SPRITE_H * 0.44, ped.z);
         ped.shadow.position.set(ped.x, 0.022, ped.z + 0.04);
 
@@ -3992,7 +4215,7 @@ export class CentralParkScene {
           ped.x = slot.x;
           ped.z = slot.z;
           ped.state = 'queued';
-          (ped.sprite.material as THREE.SpriteMaterial).map = ped.frames.up[0];
+          (ped.sprite.material as THREE.SpriteMaterial).map = ped.frames[this.customerLook()][0];
           ped.sprite.position.set(ped.x, PED_SPRITE_H * 0.48, ped.z);
           ped.shadow.scale.set(1, 1, 1);
           ped.shadow.position.set(ped.x, 0.022, ped.z + 0.04);
@@ -4017,7 +4240,7 @@ export class CentralParkScene {
         // Subtle impatient fidget when patience gets low
         const lowPatience = ped.patience < ped.maxPatience * 0.35;
         const fidget = lowPatience ? Math.abs(Math.sin(this.elapsedTime * 11 + ped.id)) * 0.04 : 0;
-        (ped.sprite.material as THREE.SpriteMaterial).map = ped.frames.up[0];
+        (ped.sprite.material as THREE.SpriteMaterial).map = ped.frames[this.customerLook()][0];
         ped.sprite.position.set(ped.x, PED_SPRITE_H * 0.48 + fidget, ped.z);
         ped.shadow.scale.set(1, 1, 1);
         ped.shadow.position.set(ped.x, 0.022, ped.z + 0.04);
@@ -4099,7 +4322,7 @@ export class CentralParkScene {
         ped.boughtCooldown <= 0 &&
         this.queue.length < QUEUE_CAPACITY &&
         this.queueJoinCooldown <= 0 &&
-        isWithinQueueReach(ped.x, live.x)
+        isWithinQueueReach({ x: ped.x, laneZ: ped.homeZ }, live)
       ) {
         // PRICE DECIDES: one roll per pass against the buy chance for today's price.
         // Rolled only when there is room in line, so a full line never counts as a
@@ -4268,12 +4491,18 @@ export class CentralParkScene {
     addMaterial(this.contactShadowMat);
     addMaterial(this.streetSignAMat);
     addMaterial(this.streetSignBMat);
-    for (const tex of [this.summerTreeTex, this.autumnTreeTex, this.playerKoTex, this.pedKoTex]) {
+    for (const tex of [this.summerTreeTex, this.autumnTreeTex, this.playerKoTex]) {
       if (tex) resources.add(tex);
     }
+    for (const tex of Object.values(this.pedKoBank ?? {})) resources.add(tex);
     // Textures that are only attached to a sprite part of the time (one mood face / idle
     // frame is on screen, the others wait in these tables).
     for (const tex of Object.values(this.moodTextures ?? {})) resources.add(tex);
+    // The live pitcher shows one fill level at a time; the other levels wait here.
+    if (this.stockTextures) {
+      for (const tex of Object.values(this.stockTextures.pitcher)) resources.add(tex);
+      resources.add(this.stockTextures.cup);
+    }
     for (const actor of this.idleActors) {
       for (const tex of Object.values(actor.frames)) resources.add(tex);
     }

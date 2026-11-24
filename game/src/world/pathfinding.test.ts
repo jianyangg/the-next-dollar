@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getPlot, plotsIn } from '../core/plots';
-import { getColliders, isBlocked, type Box, type Vec2 } from './collision';
+import { getColliders, isBlocked, isOnCrosswalk, isOnRoad, ownStandBox, type Box, type Vec2 } from './collision';
 import { CELL_SIZE, GRID_COLS, GRID_ROWS, buildGrid, findPath, rawPathLength, type NavGrid } from './pathfinding';
 
 /** Central Park with its corner stand built and the seller still in business (the original layout). */
@@ -32,10 +32,10 @@ function expectPath(r: ReturnType<typeof findPath>): Vec2[] {
 }
 
 describe('grid', () => {
-  it('covers the walk bounds with 0.25 cells: 100 x 44', () => {
+  it('covers the walk bounds (both sidewalks) with 0.25 cells: 100 x 57', () => {
     expect(CELL_SIZE).toBe(0.25);
     expect(GRID_COLS).toBe(100);
-    expect(GRID_ROWS).toBe(44);
+    expect(GRID_ROWS).toBe(57);
   });
 
   it('blocks cells within the player radius of a stand but not cells well clear of it', () => {
@@ -148,12 +148,18 @@ describe('road costs steer long routes', () => {
   const traffic = buildGrid(colliders, { hasTraffic: true });
   const noTraffic = buildGrid(colliders, { hasTraffic: false });
 
-  /** Distance walked along the avenue (z movement, |x| < 2.8) plus along the cross street (x movement, z in 2.9..7.5), excluding the intersection. */
+  /**
+   * Distance walked along the avenue (z movement, |x| < 2.8) plus along the cross street
+   * (x movement, z in 2.9..7.5), excluding the intersection and the painted crosswalks
+   * (drifting sideways while crossing on a zebra is how people cross; walking down the
+   * open road is what we forbid).
+   */
   function alongRoads(from: Vec2, wps: Vec2[]): number {
     const pts = sampleRoute(from, wps);
     let total = 0;
     for (let i = 1; i < pts.length; i++) {
       const p = pts[i];
+      if (isOnCrosswalk(p)) continue;
       const onAve = Math.abs(p.x) < 2.8;
       const onCross = p.z > 2.9 && p.z < 7.5;
       if (onAve && !onCross) total += Math.abs(p.z - pts[i - 1].z);
@@ -169,6 +175,49 @@ describe('road costs steer long routes', () => {
     const withoutTraffic = alongRoads(from, expectPath(findPath(from, to, noTraffic)));
     expect(withTraffic).toBeLessThan(withoutTraffic);
     expect(withTraffic).toBeLessThan(1.5);
+  });
+});
+
+describe('crossing between the two sidewalks', () => {
+  // Fifth Ave with every plot built: the corner on the far sidewalk, side and plaza on the near one.
+  const colliders = getColliders({ neighborhood: 'fifth-ave', builtPlots: plotsIn('fifth-ave'), sellerPresent: false });
+  const traffic = buildGrid(colliders, { hasTraffic: true });
+
+  /** Total distance walked on road that is NOT a painted crosswalk (jaywalking). */
+  function jaywalked(from: Vec2, wps: Vec2[]): number {
+    const pts = sampleRoute(from, wps);
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      if (isOnRoad(pts[i]) && !isOnCrosswalk(pts[i])) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z);
+    }
+    return total;
+  }
+
+  for (const id of ['fifth-ave/side', 'fifth-ave/plaza']) {
+    it(`from the far sidewalk, a click on ${id} (near side) crosses at a crosswalk`, () => {
+      const plot = getPlot(id);
+      // Start on the far sidewalk level with the plot; finish in front of its counter
+      // (near stands face -z, so "in front" is the street side).
+      const from = { x: plot.x, z: 0.8 };
+      const to = { x: plot.x, z: plot.z - 1.12 };
+      const wps = expectPath(findPath(from, to, traffic));
+      const pts = sampleRoute(from, wps);
+      // It does get across the cross street...
+      expect(pts.some((p) => p.z > 2.9 && p.z < 7.5)).toBe(true);
+      // ...on the zebra (a cell or so of slack where the route steps on and off it).
+      expect(jaywalked(from, wps)).toBeLessThan(0.6);
+      for (const p of pts) expect(isBlocked(p, colliders)).toBe(false);
+    });
+  }
+
+  it('can walk all the way round every near-side stand (a path behind it exists)', () => {
+    for (const id of ['fifth-ave/side', 'fifth-ave/plaza']) {
+      const box = ownStandBox(getPlot(id));
+      const behind = { x: (box.minX + box.maxX) / 2, z: box.maxZ + 0.5 };
+      // The strip behind is open (not snapped elsewhere) and reachable from the far sidewalk.
+      const wps = expectPath(findPath({ x: 0, z: 1 }, behind, traffic));
+      expect(wps.at(-1)).toEqual(behind);
+    }
   });
 });
 
@@ -203,9 +252,14 @@ describe('performance', () => {
       sellerPresent: false,
       includeProps: true,
     });
-    // Warm up the JIT once so we time steady state, not V8's first-run compilation
-    // (measured cold: roughly 5 ms build + 8-12 ms first path; warm: about 1 ms + 2.5 ms).
-    findPath({ x: -10, z: -2 }, { x: 10, z: 7 }, buildGrid(colliders, { hasTraffic: true }));
+    // Warm up the JIT so we time steady state, not V8's first-run compilation.
+    // One warm-up call is not enough: V8 only optimises a function after it has run
+    // hot for a while, so after a single call the next path still costs ~10 ms
+    // (measured the same on the old one-sidewalk grid). After a few calls it settles at
+    // about 1.4 ms build + 2-3 ms path, which is the figure this budget protects.
+    for (let i = 0; i < 4; i++) {
+      findPath({ x: -10, z: -2 }, { x: 10, z: 7 }, buildGrid(colliders, { hasTraffic: true }));
+    }
 
     const t0 = performance.now();
     const grid: NavGrid = buildGrid(colliders, { hasTraffic: true });

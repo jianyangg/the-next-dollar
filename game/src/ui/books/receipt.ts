@@ -84,10 +84,11 @@ export function buildReceipt({ record, dailyRent, dailyWages }: ReceiptInput): R
       text: fmtSignedMoney(record.nopat),
       tone: toneOf(record.nopat),
     },
-    // THE LINE row: the 5% daily cost of all the money in the business, idle cash
-    // included. The base is the one recorded at the bell, so the receipt's arithmetic
-    // always multiplies out to the charge next to it.
-    costRow('line', 'Money in business', record.hurdleCharge, `$${record.chargedOn.toFixed(2)} × ${(HURDLE_RATE * 100).toFixed(0)}%`),
+    // THE LINE row: the opportunity cost of Grandma's money. Had she kept it, it would
+    // have grown by HURDLE_RATE of everything you had at the opening bell (cash, lemons,
+    // gear at resale), idle cash included. The base is the one frozen at the bell, so
+    // the receipt's arithmetic always multiplies out to the charge next to it.
+    costRow('line', `Grandma's ${ratePct()}`, record.hurdleCharge, `${ratePct()} of $${record.chargedOn.toFixed(2)}`),
     {
       kind: 'final',
       label: 'Value created',
@@ -99,8 +100,13 @@ export function buildReceipt({ record, dailyRent, dailyWages }: ReceiptInput): R
   return rows;
 }
 
+/** The daily rate as shown to the player, e.g. "15%". Derived, never typed in by hand. */
+export function ratePct(): string {
+  return `${Math.round(HURDLE_RATE * 100)}%`;
+}
+
 export type ProfitSplit =
-  /** Profit above zero: how much of it the 5% line took and how much you kept. */
+  /** Profit above zero: how much of it Grandma's share took and how much you kept. */
   | { kind: 'split'; profit: number; taken: number; kept: number; takenPct: number; shortfall: number }
   /** No profit at all: nothing to split, so say honestly how far short of the line we are. */
   | { kind: 'loss'; short: number };

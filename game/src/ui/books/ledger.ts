@@ -19,7 +19,7 @@ export interface MeterShape {
 }
 
 /**
- * Profit vs the 5% line, on one shared scale. The scale leaves room for the line to sit
+ * Profit vs Grandma's daily rate, on one shared scale. The scale leaves room for the line to sit
  * well inside the bar track (at least 2.5x the charge, at least $4 wide) so tiny days do
  * not look huge. Percentages are honest proportions (no clamping to look nicer).
  */

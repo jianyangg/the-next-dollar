@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createSellerClient, SellerApiError } from './sellerClient';
+import { CLIENT_DEADLINE_MS, createSellerClient, SellerApiError } from './sellerClient';
 
 const RUN = '2f1c7a4e-9b3d-4c8a-a1e2-5d6f7a8b9c0d';
 const reply = (status: number, body: unknown) =>
@@ -37,5 +37,24 @@ describe('sellerClient', () => {
     });
     const client = createSellerClient({ runId: RUN, fetchImpl });
     await expect(client.close('d')).rejects.toMatchObject({ code: 'network', status: null });
+  });
+
+  it('gives up after the client deadline when the server never answers (the window must not freeze)', async () => {
+    vi.useFakeTimers();
+    try {
+      // A request that hangs until it is aborted, like a proxy holding a dead connection.
+      const fetchImpl = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          })
+      ) as unknown as typeof fetch;
+      const client = createSellerClient({ runId: RUN, fetchImpl });
+      const pending = expect(client.pitch('d')).rejects.toMatchObject({ code: 'timeout', status: null });
+      await vi.advanceTimersByTimeAsync(CLIENT_DEADLINE_MS);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

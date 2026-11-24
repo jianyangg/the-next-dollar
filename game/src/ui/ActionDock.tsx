@@ -1,6 +1,5 @@
-import type { ReactNode } from 'react';
 import { getNeighborhood } from '../core/neighborhoods';
-import { useNearbyPlotId, useNearbyTarget } from '../state/anchorStore';
+import { useNearbyTarget } from '../state/anchorStore';
 import { useGameStore } from '../state/gameStore';
 import { Key } from './kit/Money';
 import { StockTag } from './stand/StockTag';
@@ -8,32 +7,20 @@ import { useTutorialStep } from './TutorialBar';
 import './styles/stand.css';
 
 /**
- * Shown while walking (NOT behind the counter): a small black sign with one button per
- * thing the player is standing next to, each a Key bullet plus ONE verb ("[E] Lease"),
- * and a paper tag of stock numbers. The [E] key itself is handled by the world input
- * layer; these buttons are the mouse route to the same actions.
+ * Shown while walking (NOT behind the counter): the paper stock tag, plus a small sign
+ * for the two things that have no place in the world: "Back to <district>" in the
+ * market, and the always-available keys (Walk, Map) when nothing is nearby.
+ *
+ * The "[E] verb" for a nearby plot, stand, shop or seller lives ONLY on that object's
+ * world sign (WorldPrompts.tsx). Owner request (2026-11-24): showing it on the sign AND
+ * here was a duplicate prompt. The sign wins because a district has 2-3 plots and the
+ * sign sits on the one E acts on; a dock button can't say which.
  */
-
-/** One sign button: [E] + a verb. */
-function ActButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
-  return (
-    <button type="button" className="dock-act" onClick={onClick}>
-      <Key k="E" />
-      {children}
-    </button>
-  );
-}
-
 export function ActionDock() {
   const actions = useGameStore((s) => s.actions);
-  const stallKits = useGameStore((s) => s.economy.stallKits);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
   const lastBusinessNeighborhood = useGameStore((s) => s.lastBusinessNeighborhood);
   const nearby = useNearbyTarget();
-  // Which plot the player is next to (a district has 2-3), so the verb matches THAT plot.
-  const nearbyPlotId = useNearbyPlotId();
-  const nearbyPlotStatus = useGameStore((s) => (nearbyPlotId ? s.economy.plots[nearbyPlotId] : undefined));
-  const act = (): void => actions.interact(nearby, nearbyPlotId);
   const tutorialStep = useTutorialStep();
 
   const lastBusinessDistrict = getNeighborhood(lastBusinessNeighborhood);
@@ -47,22 +34,8 @@ export function ActionDock() {
         <StockTag withKits withPrice />
       </div>
 
-      {(nearby || backToBusiness || showKeysHint) && (
+      {(backToBusiness || showKeysHint) && (
         <div className="pt-sign dock-plate">
-          {nearby === 'plot-lease' && (
-            <ActButton onClick={act}>
-              {nearbyPlotStatus === 'leased' ? (stallKits >= 1 ? 'Build' : 'Buy kit') : 'Lease'}
-            </ActButton>
-          )}
-
-          {nearby === 'own-stand' && <ActButton onClick={act}>Open stand</ActButton>}
-
-          {nearby === 'seller-stand' && <ActButton onClick={act}>Talk</ActButton>}
-
-          {(nearby === 'market-stalls' || nearby === 'market-lemons' || nearby === 'market-pitchers') && (
-            <ActButton onClick={act}>Shop</ActButton>
-          )}
-
           {backToBusiness && (
             <button
               type="button"

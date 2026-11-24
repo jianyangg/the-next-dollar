@@ -6,16 +6,26 @@ import {
   getDailyHurdleCharge,
   getDailyWages,
   getMoneyInBusiness,
+  getWorth,
   SliceState,
 } from './sliceModel';
+import { type Tuning, TUNING } from './tuning';
 
 /**
  * TODAY VS THE LINE: what the day would score if the bell rang right now.
  *
- * The player's opponent each day is "the line": everything today must cover before
- * any value is created = rent + wages (paid in cash) + the 5% charge on ALL the money in
- * the business, idle cash included (an opportunity cost, never paid). `earned` is the gross profit from cups sold so far.
+ * The player's opponent each day is "the line": what today must earn to keep pace with
+ * Grandma's bank = rent + wages (paid in cash) + the hurdle rate (15%) x the money the
+ * player started today with (`openingWorth`: cash, lemons and gear at resale value;
+ * idle cash included). The 15% part is an opportunity cost: what the same money would
+ * have made in her bank today. It is never paid to anyone.
+ * `earned` is the gross profit from cups sold so far.
  * Value created today = earned - line. Positive = the day beats the line.
+ *
+ * The line is FROZEN at the opening bell: nothing the player does during the day moves
+ * the 15% part (hiring or leasing still adds wages or rent). A player who beats the
+ * line every day grows faster than 15% a day and so stays ahead of Grandma in the race
+ * (core/sliceModel.ts `getWorth` vs `grandmaWorth`).
  *
  * This is the ONE formula for that number. The live HUD meter, the Books tab and the
  * closing bell (closeDay below) all call it, so what the player watches during the day
@@ -25,7 +35,7 @@ export interface DayProjection {
   /** Revenue minus cost of the cups sold so far today. */
   earned: number;
   rentAndWages: number;
-  /** 5% of all money in the business (cash + stock + gear) right now. */
+  /** The hurdle rate x the money the player started today with (fixed all day). */
   hurdleCharge: number;
   /** rentAndWages + hurdleCharge: what `earned` has to beat. */
   line: number;
@@ -35,10 +45,10 @@ export interface DayProjection {
   valueCreated: number;
 }
 
-export function projectDay(s: SliceState): DayProjection {
+export function projectDay(s: SliceState, t: Tuning = TUNING): DayProjection {
   const earned = cents(s.dayRevenue - s.dayCogs);
-  const rentAndWages = cents(getDailyPlotRent(s) + getDailyWages(s));
-  const hurdleCharge = getDailyHurdleCharge(s);
+  const rentAndWages = cents(getDailyPlotRent(s, t) + getDailyWages(s, t));
+  const hurdleCharge = getDailyHurdleCharge(s, t);
   const line = cents(rentAndWages + hurdleCharge);
   return {
     earned,
@@ -50,7 +60,7 @@ export function projectDay(s: SliceState): DayProjection {
   };
 }
 
-/** Did a closed day beat the line? (Zero counts as beating it: the money earned its 5%.) */
+/** Did a closed day beat the line? (Zero counts as beating it: the money matched Grandma's bank.) */
 export const beatTheLine = (r: Pick<DayRecord, 'valueCreated'>): boolean => r.valueCreated >= 0;
 
 /**
@@ -58,20 +68,20 @@ export const beatTheLine = (r: Pick<DayRecord, 'valueCreated'>): boolean => r.va
  *
  * Economic-value accounting in one place:
  *   NOPAT          = revenue − cost of goods sold − (rent + wages)
- *   hurdle charge  = 5% of all money in the business (cash + inventory + equipment)
- *   value created  = NOPAT − hurdle charge   (positive means the money beat its 5% cost)
- *   return         = NOPAT / money in the business (floored at $1 so it never divides by 0),
- *                    so "return >= 5%" and "value created >= 0" are the same test.
+ *   hurdle charge  = hurdle rate x the money the day started with (`openingWorth`)
+ *   value created  = NOPAT − hurdle charge   (positive means the money out-earned Grandma's bank)
+ *   return         = NOPAT / that same money (floored at $1 so it never divides by 0),
+ *                    so "return >= the hurdle rate" and "value created >= 0" are the same test.
  *
  * Only rent and wages leave the cash box; the hurdle charge is an opportunity cost
- * that lowers value created but is not paid to anyone. (Moved unchanged from App.tsx.)
+ * that lowers value created but is not paid to anyone.
  */
-export function closeDay(cur: SliceState): { state: SliceState; record: DayRecord } | null {
+export function closeDay(cur: SliceState, t: Tuning = TUNING): { state: SliceState; record: DayRecord } | null {
   if (cur.day > cur.maxDays) return null;
 
-  const { rentAndWages, hurdleCharge, nopat, valueCreated } = projectDay(cur);
+  const { rentAndWages, hurdleCharge, nopat, valueCreated } = projectDay(cur, t);
   const cumulativeValue = cents(cur.totalValueCreated + valueCreated);
-  // Read BEFORE rent and wages leave the cash box: this is the base the 5% was charged on.
+  // The base of today's line: YOU at this morning's opening bell (frozen all day).
   const chargedOn = getMoneyInBusiness(cur);
   const roicPct = +((nopat / Math.max(1, chargedOn)) * 100).toFixed(1);
 
@@ -87,12 +97,15 @@ export function closeDay(cur: SliceState): { state: SliceState; record: DayRecor
     valueCreated,
     cumulativeValue,
     roicPct,
-    grade: computeDayGrade(roicPct),
+    grade: computeDayGrade(roicPct, t),
   };
 
+  const cashAfter = cents(cur.cash - rentAndWages);
   const state: SliceState = {
     ...cur,
-    cash: cents(cur.cash - rentAndWages),
+    cash: cashAfter,
+    // YOU at the bell, after rent and wages left the cash box: today's point in the race.
+    worthHistory: [...cur.worthHistory, getWorth({ ...cur, cash: cashAfter }, t)],
     dayCupsSold: 0,
     dayRevenue: 0,
     dayCogs: 0,
@@ -105,7 +118,21 @@ export function closeDay(cur: SliceState): { state: SliceState; record: DayRecor
   return { state, record };
 }
 
-/** Advance to the next morning. The day counter never passes the career length. */
-export function startNextDay(s: SliceState): SliceState {
-  return { ...s, day: Math.min(s.maxDays, s.day + 1) };
+/**
+ * Advance to the next morning. The day counter never passes the career length.
+ *
+ * This is also the OPENING BELL: the player's worth right now is written down as
+ * `openingWorth`, and the new day's line is charged on that number until the next bell.
+ */
+export function startNextDay(s: SliceState, t: Tuning = TUNING): SliceState {
+  return ringOpeningBell({ ...s, day: Math.min(s.maxDays, s.day + 1) }, t);
+}
+
+/**
+ * The opening bell on its own: write down YOU (`getWorth`) as the base of today's line.
+ * Every way a morning can begin goes through here (the normal next day above, and the
+ * dev panel's day jump), so the line is never charged on a stale number.
+ */
+export function ringOpeningBell(s: SliceState, t: Tuning = TUNING): SliceState {
+  return { ...s, openingWorth: getWorth(s, t) };
 }

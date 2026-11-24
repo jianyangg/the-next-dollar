@@ -1,0 +1,555 @@
+/*
+ * The three-step lemonade brew (BrewMinigame.tsx): squeeze, sweeten, stir.
+ * The sign frame and corner number reuse stand.css (.stand-gauge*); everything here
+ * is prefixed `brew-`. Colours come only from tokens.css:
+ *   lemon / juice = --title, --line;  pith / sugar = --sign;  seeds = --sign-dim;
+ *   "do this" zone = --gain-sign;  "bad" zone = --cost-sign;  glass / bowl = --sign-2.
+ * Pixel look: square corners, --px outlines, hard shadows, no blur.
+ */
+
+.brew-sign {
+  gap: var(--s-2);
+}
+
+/* ---------- Step pips: "1 Squeeze  2 Sweeten  3 Stir" ---------- */
+.brew-steps {
+  display: flex;
+  gap: var(--s-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+  letter-spacing: 1px;
+}
+.brew-step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+.brew-step-num {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--outline);
+  background: var(--sign-2);
+  font-size: var(--t-small);
+}
+.brew-step.is-now {
+  font-size: var(--t-title);
+}
+.brew-step.is-now .brew-step-num {
+  background: var(--title);
+}
+.brew-step.is-done {
+  color: var(--sign-dim);
+}
+.brew-step.is-done .brew-step-num {
+  background: var(--gain-sign);
+  color: var(--key-text);
+}
+.brew-step.is-todo {
+  color: var(--sign-dim);
+}
+
+/* ---------- Stage: the scene for the current step ---------- */
+.brew-stage {
+  position: relative;
+  height: 200px;
+  background: var(--sign-2);
+  border: var(--px) solid var(--outline);
+  overflow: hidden;
+  user-select: none;
+  touch-action: none; /* a finger held or circled here must not scroll the page */
+}
+.brew-stage.is-holdable {
+  cursor: pointer;
+}
+.brew-scene {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: var(--s-4);
+  padding: var(--s-3);
+}
+
+/* ---------- Lemons ---------- */
+.brew-lemon {
+  position: relative;
+  width: 96px;
+  height: 48px;
+  /* A lemon HALF: flat cut side down on the juicer, dome up. */
+  border-radius: 48px 48px 0 0;
+  background: var(--title);
+  border: var(--px) solid var(--outline);
+  border-bottom-width: 6px;
+  transform-origin: 50% 100%;
+}
+.brew-lemon.is-plump {
+  width: 104px;
+  height: 54px;
+}
+/* Dry: smaller, paler, with a crack. */
+.brew-lemon.is-dry {
+  width: 80px;
+  height: 36px;
+  background: var(--line-light);
+}
+.brew-lemon-crack {
+  position: absolute;
+  left: 30%;
+  top: 8px;
+  width: 30%;
+  height: var(--px);
+  background: var(--outline);
+  transform: rotate(-14deg);
+}
+/* Seedy: seeds showing through the skin. */
+.brew-lemon-seed {
+  position: absolute;
+  top: 16px;
+  width: 8px;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--sign-dim);
+}
+.brew-lemon-seed:nth-child(1) { left: 26%; }
+.brew-lemon-seed:nth-child(2) { left: 46%; top: 10px; }
+.brew-lemon-seed:nth-child(3) { left: 66%; }
+
+.brew-lemon.is-mini {
+  width: 36px;
+  height: 18px;
+  border-radius: 18px 18px 0 0;
+  border-width: 3px;
+}
+.brew-lemon.is-mini .brew-lemon-seed {
+  top: 4px;
+  width: 4px;
+  height: 6px;
+}
+.brew-lemon.is-mini .brew-lemon-crack {
+  top: 4px;
+}
+.brew-lemon.is-mini.is-used {
+  opacity: 0.3;
+}
+.brew-lemon.is-mini.is-now {
+  outline: 3px solid var(--key-act);
+  outline-offset: 3px;
+}
+
+/* ---------- 1. Squeeze ---------- */
+.brew-juicer {
+  position: relative;
+  width: 150px;
+  height: 172px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+.brew-juicer .brew-lemon.is-on {
+  position: absolute;
+  bottom: 96px;
+}
+/* The ridged cone the lemon is pressed onto. */
+.brew-reamer {
+  position: absolute;
+  bottom: 64px;
+  width: 0;
+  height: 0;
+  border-left: 30px solid transparent;
+  border-right: 30px solid transparent;
+  border-bottom: 34px solid var(--sign);
+  filter: drop-shadow(0 calc(-1 * var(--px)) 0 var(--outline));
+}
+.brew-dish {
+  position: absolute;
+  bottom: 48px;
+  width: 140px;
+  height: 18px;
+  background: var(--sign);
+  border: var(--px) solid var(--outline);
+}
+.brew-stream {
+  position: absolute;
+  bottom: 0;
+  width: 10px;
+  height: 48px;
+  background: var(--line);
+  border-left: 3px solid var(--line-dark);
+  border-right: 3px solid var(--line-dark);
+  animation: brew-drip 300ms steps(3) infinite;
+}
+@keyframes brew-drip {
+  from { clip-path: inset(0 0 30% 0); }
+  to { clip-path: inset(30% 0 0 0); }
+}
+/* Seeds and pith falling past the lemon when it is pressed too hard. */
+.brew-seeds {
+  position: absolute;
+  bottom: 66px;
+  width: 120px;
+  height: 40px;
+  pointer-events: none;
+}
+.brew-seeds > i {
+  position: absolute;
+  top: 0;
+  width: 8px;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--sign-dim);
+  border: 2px solid var(--outline);
+  animation: brew-fall 420ms linear infinite;
+}
+.brew-seeds > i:nth-child(1) { left: 8px; }
+.brew-seeds > i:nth-child(2) { left: 100px; animation-delay: 140ms; }
+.brew-seeds > i:nth-child(3) { left: 54px; animation-delay: 280ms; background: var(--sign); }
+@keyframes brew-fall {
+  from { transform: translateY(-8px); }
+  to { transform: translateY(36px); }
+}
+.brew-tag {
+  position: absolute;
+  top: 0;
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+  line-height: 1;
+}
+
+/* Vertical pressure gauge. */
+.brew-vgauge {
+  position: relative;
+  width: 44px;
+  height: 172px;
+  background: var(--sign);
+  border: var(--px) solid var(--outline);
+}
+.brew-vgauge-zone,
+.brew-vgauge-seeds {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+.brew-vgauge-zone {
+  background: var(--gain-sign);
+}
+.brew-vgauge-seeds {
+  top: 0;
+  background: var(--cost-sign);
+}
+.brew-vgauge-needle {
+  position: absolute;
+  left: -10px;
+  right: -10px;
+  height: 8px;
+  transform: translateY(50%);
+  background: var(--sign-text);
+  border: 2px solid var(--sign);
+  pointer-events: none;
+}
+
+.brew-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-3);
+}
+/* The glass collecting juice. */
+.brew-glass {
+  position: relative;
+  width: 72px;
+  height: 120px;
+  background: var(--sign);
+  border: var(--px) solid var(--outline);
+  border-top: 0;
+}
+.brew-glass-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--line);
+}
+.brew-queue {
+  display: flex;
+  gap: var(--s-2);
+}
+
+/* ---------- 2. Sweeten ---------- */
+.brew-pour {
+  position: relative;
+  width: 140px;
+  height: 172px;
+  flex: none;
+}
+/* The sugar bag tips over the pitcher while pouring. */
+.brew-bag {
+  position: absolute;
+  top: 0;
+  left: 54px;
+  width: 52px;
+  height: 60px;
+  background: var(--sign);
+  border: var(--px) solid var(--outline);
+  transform-origin: 0 100%;
+  transition: transform var(--dur-panel) steps(2);
+}
+.brew-bag.is-pouring {
+  transform: rotate(-40deg);
+}
+.brew-sugar {
+  position: absolute;
+  top: 58px;
+  left: 54px;
+  width: 16px;
+  height: 46px;
+  visibility: hidden;
+}
+.brew-sugar.is-pouring {
+  visibility: visible;
+}
+.brew-sugar > i {
+  position: absolute;
+  left: 4px;
+  width: 8px;
+  height: 8px;
+  background: var(--sign);
+  border: 2px solid var(--outline);
+  animation: brew-fall 360ms linear infinite;
+}
+.brew-sugar > i:nth-child(2) { animation-delay: 120ms; }
+.brew-sugar > i:nth-child(3) { animation-delay: 240ms; }
+.brew-pitcher {
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  width: 110px;
+  height: 72px;
+  background: var(--sign);
+  border: var(--px) solid var(--outline);
+  border-top: 0;
+}
+.brew-pitcher-fill {
+  position: absolute;
+  inset: 30% 0 0 0;
+  background: var(--line);
+}
+
+/* Taste meter: sour face, the smile at the target, the too-sweet face. */
+.brew-taste {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 0 var(--s-5);
+}
+.brew-taste-faces {
+  position: relative;
+  height: 44px;
+}
+.brew-taste-faces > span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+}
+.brew-face {
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+.brew-face-skin {
+  fill: var(--title);
+  stroke: var(--outline);
+  stroke-width: 3;
+}
+.brew-face.is-sour .brew-face-skin { fill: var(--land); }
+.brew-face.is-sick .brew-face-skin { fill: var(--sticker); }
+.brew-face-ink { fill: var(--outline); }
+.brew-face-line {
+  fill: none;
+  stroke: var(--outline);
+  stroke-width: 3;
+}
+.brew-taste-bar {
+  position: relative;
+  height: 40px;
+  background: var(--sign);
+  border: var(--px) solid var(--outline);
+}
+.brew-taste-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--gain-sign);
+}
+.brew-taste-mark {
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  width: 8px;
+  transform: translateX(-50%);
+  background: var(--sign-text);
+  border: 2px solid var(--sign);
+  pointer-events: none;
+}
+.brew-offer {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+.brew-offer-word {
+  font-family: var(--f-display);
+  font-size: var(--t-title);
+  color: var(--cost-sign);
+  line-height: 1;
+}
+.brew-offer-track {
+  flex: 1;
+}
+.brew-offer-track > i {
+  background: var(--cost-sign);
+}
+
+/* ---------- 3. Stir ---------- */
+/* The pitcher from above. The pointer circles over it to stir. */
+.brew-bowl {
+  position: relative;
+  width: 172px;
+  height: 172px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--line);
+  border: var(--px) solid var(--outline);
+  box-shadow: inset 0 0 0 10px var(--sign);
+  cursor: grab;
+}
+.brew-grains {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.brew-grains > i {
+  position: absolute;
+  left: calc(50% - 4px);
+  top: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  background: var(--sign);
+  border: 2px solid var(--outline);
+  /* Each grain is rotated (inline `rotate`) then pushed out from the centre. */
+  transform: translateY(-34px);
+}
+.brew-grains > i:nth-child(3n) { transform: translateY(-52px); }
+.brew-grains > i:nth-child(3n + 1) { transform: translateY(-18px); }
+/* The spoon: a handle from the centre to the rim, rotated by the spoon angle. */
+.brew-spoon {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.brew-spoon > i {
+  position: absolute;
+  left: calc(50% - 7px);
+  top: 14px;
+  width: 14px;
+  height: calc(50% - 14px);
+  background: var(--sign-dim);
+  border: 3px solid var(--outline);
+  border-radius: 7px 7px 0 0;
+}
+.brew-quad {
+  position: absolute;
+  pointer-events: none;
+}
+.brew-sign .brew-quad .pt-key {
+  min-width: 36px;
+  height: 36px;
+  font-size: var(--t-small);
+  opacity: 0.45;
+}
+.brew-sign .brew-quad.is-next .pt-key {
+  opacity: 1;
+  transform: scale(1.2);
+}
+.brew-quad.is-top { top: -6px; left: 50%; transform: translateX(-50%); }
+.brew-quad.is-bottom { bottom: -6px; left: 50%; transform: translateX(-50%); }
+.brew-quad.is-left { left: -6px; top: 50%; transform: translateY(-50%); }
+.brew-quad.is-right { right: -6px; top: 50%; transform: translateY(-50%); }
+
+/* Rhythm: where the last quarter turn's tempo fell, and how steady you have been. */
+.brew-rhythm {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.brew-tempo {
+  position: relative;
+  height: 40px;
+  background: var(--cost-sign);
+  border: var(--px) solid var(--outline);
+}
+.brew-tempo-steady {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--gain-sign);
+}
+.brew-tempo-mark {
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  width: 8px;
+  transform: translateX(-50%);
+  background: var(--sign-text);
+  border: 2px solid var(--sign);
+  transition: left var(--dur-panel) ease-out;
+}
+.brew-tempo-words {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--f-display);
+  font-size: var(--t-body);
+  color: var(--sign-dim);
+}
+.brew-steady-track {
+  height: 20px;
+}
+.brew-steady-track > i {
+  background: var(--gain-sign);
+}
+
+/* ---------- Action line ---------- */
+.brew-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  min-height: 56px;
+  font-family: var(--f-display);
+  font-size: var(--t-title);
+}
+
+/* Decoration stops for players who asked for less motion. Gauges keep moving:
+   they are the game state, not decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .brew-stream,
+  .brew-seeds > i,
+  .brew-sugar > i {
+    animation: none;
+  }
+  .brew-sugar > i:nth-child(2) { top: 16px; }
+  .brew-sugar > i:nth-child(3) { top: 32px; }
+  .brew-seeds > i:nth-child(2) { top: 14px; }
+  .brew-seeds > i:nth-child(3) { top: 26px; }
+  .brew-bag,
+  .brew-tempo-mark {
+    transition: none;
+  }
+}

@@ -55,14 +55,14 @@ describe('litCustomers', () => {
 describe('StandWorkbench menu', () => {
   it('lists every action the old workbench offered', () => {
     renderStand();
-    for (const name of ['Brew', 'Serve', 'Price', 'Staff', 'Market', 'Sell stand', 'Leave']) {
+    for (const name of ['Brew', 'Hold to serve', 'Price', 'Staff', 'Market', 'Sell stand', 'Leave']) {
       expect(screen.getByRole('menuitem', { name: new RegExp(name) })).toBeTruthy();
     }
   });
 
   it('keeps Serve disabled with no brewed cups and no customers', () => {
     renderStand();
-    expect((screen.getByRole('menuitem', { name: /Serve/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('menuitem', { name: /Hold to serve/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('does not block F / Space / Esc: they reach the shortcut layer below', () => {

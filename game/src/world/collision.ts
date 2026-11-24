@@ -55,15 +55,23 @@ export interface Bounds {
 }
 
 /**
- * The area the player may stand in. handlePointerDown clamps clicks to
- * x in [-12.5, 12.5], z in [-2.68, 8.2] (CentralParkScene.ts:2901-2902) and the
- * per-frame movement clamps to the same numbers (CentralParkScene.ts:3019-3020).
+ * The area the player may stand in. Clicks (handlePointerDown -> findPath) and
+ * per-frame movement (moveWithSliding) both clamp to it, and the nav grid covers it.
+ *
+ * The street has TWO sidewalks separated by the east-west cross street (z 2.9..7.5):
+ *   - the FAR sidewalk (z < 2.9, away from the camera), and
+ *   - the NEAR sidewalk (z > 7.5, toward the camera).
+ * maxZ used to be 8.2, which left only 0.7 units of near sidewalk: no room for a stand.
+ * At 11.4 the near sidewalk holds, from the curb outward: the walker lane (z 7.75..8.2),
+ * a stand's customer line (down to z ~8.35), the stand itself (z 9.7..10.7, see
+ * SPOT_XZ in core/plots.ts) and a strip behind it wide enough for the
+ * player to walk around (the player's 0.3 radius margin leaves z ~11.0..11.4 open).
  */
 export const WALK_BOUNDS: Bounds = Object.freeze({
   minX: -12.5,
   maxX: 12.5,
   minZ: -2.68,
-  maxZ: 8.2,
+  maxZ: 11.4,
 });
 
 /** Player walk speed in world units per second (CentralParkScene.ts:3018). */
@@ -148,6 +156,70 @@ export function isOnRoad(p: Vec2): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Two sidewalks, crosswalks and walker lanes
+// ---------------------------------------------------------------------------
+
+/** Which side of the cross street a point is on: 'far' (z < its middle) or 'near'. */
+export type Sidewalk = 'far' | 'near';
+const CROSS_STREET_MID_Z = (CROSS_STREET_Z_MIN + CROSS_STREET_Z_MAX) / 2;
+
+export function sidewalkOf(z: number): Sidewalk {
+  return z < CROSS_STREET_MID_Z ? 'far' : 'near';
+}
+
+/**
+ * Which way a stand's counter faces, as a sign on the z axis:
+ *   +1  the front (where customers line up) faces +z, i.e. the camera. Far-sidewalk
+ *       stands: the walkers' lane runs in front of them, between stand and street.
+ *   -1  the front faces -z, i.e. the street. Near-sidewalk stands are turned around so
+ *       they still face the street and the walkers' lane on their own sidewalk.
+ * Everything placed "in front of" or "behind" a counter (queue spots, the vendor's spot,
+ * the collision nudge, the model's rotation) multiplies its z offset by this.
+ */
+export type StandFacing = 1 | -1;
+
+export function standFacing(pos: Pick<Vec2, 'z'>): StandFacing {
+  return sidewalkOf(pos.z) === 'far' ? 1 : -1;
+}
+
+/**
+ * Where strolling pedestrians walk: a band of z per sidewalk, each walker keeps one lane
+ * for life (a new random z inside the band on every respawn). The far band is the one the
+ * game was tuned with; the near band sits just past the near curb (z 7.5), in front of
+ * near-side stands' customer lines and on the near avenue crosswalk (z 7.7..9.5).
+ */
+export const WALKER_LANES: Readonly<Record<Sidewalk, { minZ: number; maxZ: number }>> = Object.freeze({
+  far: Object.freeze({ minZ: 0.4, maxZ: 1.85 }),
+  near: Object.freeze({ minZ: 7.75, maxZ: 8.2 }),
+});
+
+/**
+ * Painted zebra crossings (CentralParkScene.addAvenueAndCrosswalks draws its stripes
+ * from these numbers, and the path-finder treats the same areas as safe to cross):
+ *   - two across the avenue (north-south road, |x| < 2.8), centred on z = AVENUE_CROSSWALK_Z,
+ *     each AVENUE_CROSSWALK_HALF_DEPTH deep on either side of its centre;
+ *   - two across the cross street (east-west road), centred on x = +-CROSS_CROSSWALK_X,
+ *     CROSS_CROSSWALK_HALF_WIDTH wide on either side.
+ */
+export const AVENUE_CROSSWALKS: readonly { z: number; halfDepth: number }[] = Object.freeze([
+  { z: 1.3, halfDepth: 1.0 }, // far side of the intersection
+  { z: 8.6, halfDepth: 0.9 }, // near side of the intersection
+]);
+export const CROSS_CROSSWALK_X = 4.2;
+export const CROSS_CROSSWALK_HALF_WIDTH = 0.9;
+
+/** True on a painted crosswalk (only meaningful on a road; see isOnRoad). */
+export function isOnCrosswalk(p: Vec2): boolean {
+  const onAvenueCrossing =
+    Math.abs(p.x) < AVENUE_HALF_WIDTH && AVENUE_CROSSWALKS.some((c) => Math.abs(p.z - c.z) < c.halfDepth);
+  const onCrossStreetCrossing =
+    p.z > CROSS_STREET_Z_MIN &&
+    p.z < CROSS_STREET_Z_MAX &&
+    Math.abs(Math.abs(p.x) - CROSS_CROSSWALK_X) < CROSS_CROSSWALK_HALF_WIDTH;
+  return onAvenueCrossing || onCrossStreetCrossing;
+}
+
+// ---------------------------------------------------------------------------
 // Box construction
 // ---------------------------------------------------------------------------
 
@@ -181,13 +253,16 @@ export interface ColliderOptions {
  * Footprint of a stand counter, relative to the stand's position. The counter mesh is
  * 2.04 wide; the own stand's box is nudged +0.1 in x (the lemon crates sit on its right)
  * and the seller's -0.1 (its crates sit on the left), matching where the props really are.
+ * A near-sidewalk stand is the same model turned around (standFacing = -1), so its crates,
+ * and therefore the nudge, end up on the other side: the nudge is multiplied by the facing.
  */
 const OWN_STAND_BOX = { dx: 0.1, halfX: 1.3, halfZ: 0.5 } as const;
 const SELLER_STAND_BOX = { dx: -0.1, halfX: 1.35, halfZ: 0.54 } as const;
 
 /** The solid box of the player's built stand standing at `pos`. Exported for tests. */
 export function ownStandBox(pos: Vec2, id = 'own-stand'): Box {
-  return boxAt(id, pos.x + OWN_STAND_BOX.dx, pos.z, OWN_STAND_BOX.halfX, OWN_STAND_BOX.halfZ);
+  const dx = OWN_STAND_BOX.dx * standFacing(pos);
+  return boxAt(id, pos.x + dx, pos.z, OWN_STAND_BOX.halfX, OWN_STAND_BOX.halfZ);
 }
 
 /**
@@ -210,7 +285,7 @@ function standColliders(opts: ColliderOptions): Box[] {
   if (sellerStandShown(opts.neighborhood, opts.sellerPresent)) {
     const seller = sellerStandPos();
     boxes.push(
-      boxAt('seller-stand', seller.x + SELLER_STAND_BOX.dx, seller.z, SELLER_STAND_BOX.halfX, SELLER_STAND_BOX.halfZ)
+      boxAt('seller-stand', seller.x + SELLER_STAND_BOX.dx * standFacing(seller), seller.z, SELLER_STAND_BOX.halfX, SELLER_STAND_BOX.halfZ)
     );
   }
   return boxes;

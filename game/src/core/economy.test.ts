@@ -13,7 +13,15 @@ import { CENTRAL_PARK_DEAL, resolveSealedBid, toPublicView } from './deal';
 import * as P from './purchases';
 import { getDailyPlotRent } from './rent';
 import { applySale, applyWalkout, salePopLabel } from './sales';
-import { countOwnedStands, createInitialState, getDailyHurdleCharge, getDailyWages, SliceState } from './sliceModel';
+import {
+  countOwnedStands,
+  createInitialState,
+  getDailyHurdleCharge,
+  getDailyWages,
+  getWorth,
+  grandmaWorth,
+  SliceState,
+} from './sliceModel';
 import { SELLER_PLOT_ID } from './plots';
 
 /**
@@ -33,7 +41,7 @@ function tutorialStand(): SliceState {
   s = ok(P.signLease(s, CP));
   s = ok(P.buyStallKit(s)); // 30 − 12 = 18
   s = ok(P.buyPitcher(s)); // 18 − 10 = 8
-  s = ok(P.buyLemons(s)); // 8 − 5 = 3, +10 cups
+  s = ok(P.buyLemons(s)); // 8 − 5 = 3, +5 cups ($1 a cup)
   s = ok(P.buildStand(s, CP));
   return s;
 }
@@ -44,7 +52,7 @@ describe('purchases', () => {
     expect(s.cash).toBe(3);
     expect(s.inventoryValue).toBe(5);
     expect(s.equipmentValue).toBe(22); // kit 12 + pitcher 10
-    expect(s.cupsInStock).toBe(10);
+    expect(s.cupsInStock).toBe(5);
     expect(s.stallKits).toBe(0);
     expect(countOwnedStands(s)).toBe(1);
     expect(s.plots[CP]).toBe('built');
@@ -89,32 +97,33 @@ describe('purchases', () => {
     expect(leased.plots['columbia/corner']).toBe('empty');
   });
 
-  it('one worker per built stand, $3/day each from the bell; letting go stops the wage', () => {
+  it('one worker per built stand, $10/day each from the bell; letting go stops the wage', () => {
     const s = tutorialStand();
     expect(P.hireWorker(createInitialState(), CP)).toEqual({ ok: false, reason: 'no-built-stand' });
     const staffed = ok(P.hireWorker(s, CP));
     expect(staffed.cash).toBe(s.cash); // hiring itself is free
-    expect(getDailyWages(staffed)).toBe(3);
+    expect(getDailyWages(staffed)).toBe(10);
     expect(P.hireWorker(staffed, CP)).toEqual({ ok: false, reason: 'already-staffed' });
     expect(getDailyWages(ok(P.letWorkerGo(staffed, CP)))).toBe(0);
     expect(P.letWorkerGo(s, CP)).toEqual({ ok: false, reason: 'not-staffed' });
   });
 
-  it('a manager is still a headcount with a $5 wage', () => {
+  it('a manager is still a headcount, with a $20 wage', () => {
     const s = P.hireManager(createInitialState());
     expect(s.managers).toBe(1);
     expect(s.cash).toBe(30);
+    expect(getDailyWages(s)).toBe(20);
   });
 });
 
 describe('sales', () => {
-  it('sells one $3 cup that cost $0.50', () => {
+  it('sells one $3 cup that cost $1', () => {
     const s = applySale(tutorialStand(), 0.9, 1);
     expect(s.cash).toBe(6);
-    expect(s.cupsInStock).toBe(9);
-    expect(s.inventoryValue).toBe(4.5);
+    expect(s.cupsInStock).toBe(4);
+    expect(s.inventoryValue).toBe(4);
     expect(s.dayRevenue).toBe(3);
-    expect(s.dayCogs).toBe(0.5);
+    expect(s.dayCogs).toBe(1);
     expect(s.reviews).toEqual([{ id: 1, stars: 5, comment: 'Super quick & icy cold!' }]);
   });
 
@@ -137,12 +146,26 @@ describe('sales', () => {
 });
 
 describe('rent and day close', () => {
-  it('charges each leased or built plot its own rent (side $1 less, plaza $2 more)', () => {
-    let s = ok(P.signLease(tutorialStand(), 'broadway/corner'));
-    expect(getDailyPlotRent(s)).toBe(2 + 4); // Central Park corner $2 + Broadway corner $4
+  it('charges each leased or built plot its own rent (side 70% of the corner, plaza 140%)', () => {
+    // Cash-rich so the three Broadway permits ($60 each) can be paid.
+    let s = ok(P.signLease({ ...tutorialStand(), cash: 500 }, 'broadway/corner'));
+    expect(getDailyPlotRent(s)).toBe(4 + 18); // Central Park corner $4 + Broadway corner $18
     s = ok(P.signLease(s, 'broadway/side'));
     s = ok(P.signLease(s, 'broadway/plaza'));
-    expect(getDailyPlotRent(s)).toBe(2 + 4 + 3 + 6);
+    expect(getDailyPlotRent(s)).toBe(4 + 18 + 13 + 25); // side 18 x 0.7 = 12.6 -> 13; plaza 18 x 1.4 = 25.2 -> 25
+  });
+
+  it('signing a lease pays the district permit: free in Central Park, $60 on Broadway', () => {
+    expect(P.leaseFee('central-park/corner')).toBe(0);
+    expect(P.leaseFee('broadway/side')).toBe(60);
+    expect(P.leaseFee('fifth-ave/plaza')).toBe(150);
+    // $30 cannot pay a $60 permit: refused, nothing changes.
+    expect(P.signLease(createInitialState(), 'broadway/corner')).toEqual({ ok: false, reason: 'insufficient-cash' });
+    const before = { ...createInitialState(), cash: 100 };
+    const s = ok(P.signLease(before, 'broadway/corner'));
+    expect(s.cash).toBe(40);
+    expect(s.equipmentValue).toBe(60); // on the books it is something the business owns...
+    expect(getWorth(s)).toBe(40); // ...but it cannot be resold, so the player is $60 poorer at once
   });
 
   it("the bought seller stand's rent steps from $3 to $5 four days after the purchase", () => {
@@ -155,29 +178,35 @@ describe('rent and day close', () => {
   it('closes a day of 4 sales with one worker', () => {
     let s = ok(P.hireWorker(tutorialStand(), CP));
     for (let i = 1; i <= 4; i++) s = applySale(s, 0.9, i);
-    // revenue 12, cogs 2, rent 2 + wages 3 = 5 → NOPAT 5
-    // money in business = cash 15 + inventory 3 + equipment 22 = 40 → hurdle 2.00
-    // value created = 5 − 2 = 3.00; return = 5 / 40 = 12.5% → grade A
+    // revenue 12, cogs 4, rent 4 + wages 10 = 14 → NOPAT −6: four cups cannot carry a $10 worker
+    // the line's base = $30, the money the day opened with → hurdle 15% x 30 = 4.50
+    // value created = −6 − 4.50 = −10.50; return = −6 / 30 = −20% → grade D
     const closed = closeDay(s)!;
     expect(closed.record).toEqual({
       day: 1,
       cupsSold: 4,
       revenue: 12,
-      cogs: 2,
-      rentAndWages: 5,
-      nopat: 5,
-      hurdleCharge: 2,
-      chargedOn: 40,
-      valueCreated: 3,
-      cumulativeValue: 3,
-      roicPct: 12.5,
-      grade: 'A',
+      cogs: 4,
+      rentAndWages: 14,
+      nopat: -6,
+      hurdleCharge: 4.5,
+      chargedOn: 30,
+      valueCreated: -10.5,
+      cumulativeValue: -10.5,
+      roicPct: -20,
+      grade: 'D',
     });
-    expect(closed.state.cash).toBe(10); // 3 + 12 − 5; the hurdle is not paid in cash
+    expect(closed.state.cash).toBe(1); // 3 + 12 − 14; the hurdle is not paid in cash
     expect(closed.state.dayRevenue).toBe(0);
-    expect(closed.state.totalRent).toBe(5);
+    expect(closed.state.totalRent).toBe(14);
     expect(closed.state.dayHistory).toHaveLength(1);
-    expect(startNextDay(closed.state).day).toBe(2);
+    // YOU at the bell: cash 1 + 1 cup of lemons $1 + kit $8.40 + pitcher $7 (resale values).
+    expect(closed.state.worthHistory).toEqual([17.4]);
+    // The next opening bell writes that worth down as tomorrow's line base.
+    const next = startNextDay(closed.state);
+    expect(next.day).toBe(2);
+    expect(next.openingWorth).toBe(17.4);
+    expect(getDailyHurdleCharge(next)).toBe(2.61); // 15% x 17.40
   });
 
   it('will not close a day after the career ends, nor advance past it', () => {
@@ -196,10 +225,11 @@ describe('clock', () => {
   });
 
   it('pauses for overlays, before the first stand, and after the career', () => {
-    const base = { overlayOpen: false, day: 2, maxDays: 30, ownedStands: 1 };
+    const base = { overlayOpen: false, day: 2, maxDays: 30 };
     expect(isClockPaused(base)).toBe(false);
     expect(isClockPaused({ ...base, overlayOpen: true })).toBe(true);
-    expect(isClockPaused({ ...base, day: 1, ownedStands: 0 })).toBe(true);
+    // Day 1 runs from the moment the story ends, stand or no stand.
+    expect(isClockPaused({ ...base, day: 1 })).toBe(false);
     expect(isClockPaused({ ...base, day: 31 })).toBe(true);
   });
 
@@ -230,22 +260,48 @@ describe('today vs the line (projectDay)', () => {
     s = { ...s, dayRevenue: 9, dayCogs: 1.5 };
     const p = projectDay(s);
     expect(p.earned).toBe(7.5);
-    expect(p.rentAndWages).toBe(2); // Central Park corner rent
-    expect(p.hurdleCharge).toBe(2.85); // 5% of $57 (cash 30 + stock 5 + gear 22)
-    expect(p.line).toBe(4.85);
-    expect(p.valueCreated).toBe(2.65);
+    expect(p.rentAndWages).toBe(4); // Central Park corner rent
+    expect(p.hurdleCharge).toBe(4.5); // 15% of the $30 the day opened with
+    expect(p.line).toBe(8.5);
+    expect(p.valueCreated).toBe(-1);
     expect(closeDay(s)?.record.valueCreated).toBe(p.valueCreated);
   });
 
-  it('idle cash is charged: buying gear with cash leaves the line unchanged', () => {
+  it('the line is frozen at the opening bell: nothing done during the day moves the 15% part', () => {
     const s = createInitialState();
-    expect(getDailyHurdleCharge(s)).toBe(1.5); // 5% of $30 cash, before any purchase
-    expect(getDailyHurdleCharge(ok(P.buyPitcher(s)))).toBe(1.5); // $10 moved cash -> gear
+    expect(getDailyHurdleCharge(s)).toBe(4.5); // 15% of the $30 the run opens with (idle cash is charged)
+    expect(getDailyHurdleCharge(ok(P.buyPitcher(s)))).toBe(4.5); // spending does not move it
+    expect(getDailyHurdleCharge(applySale(tutorialStand(), 1, 1))).toBe(4.5); // nor does a sale
   });
 
   it('beatTheLine: zero counts as beating it, a cent short does not', () => {
     expect(beatTheLine({ valueCreated: 0 })).toBe(true);
     expect(beatTheLine({ valueCreated: -0.01 })).toBe(false);
+  });
+});
+
+describe('the race: You vs Grandma', () => {
+  it("Grandma's bank turns the $30 loan into $34.50 after a day and $1,986.35 after thirty", () => {
+    expect(grandmaWorth(0)).toBe(30);
+    expect(grandmaWorth(1)).toBe(34.5);
+    expect(grandmaWorth(10)).toBe(121.37);
+    expect(grandmaWorth(30)).toBe(1986.35);
+  });
+
+  it('YOU counts cash, lemons at cost and gear at what it would sell for', () => {
+    expect(getWorth(createInitialState())).toBe(30);
+    // Tutorial stand: cash 3 + lemons 5 + kit 8.40 + pitcher 7 = 23.40 (it cost 27).
+    expect(getWorth(tutorialStand())).toBe(23.4);
+  });
+
+  it('the price paid for a stand now matters: a higher bid leaves the player poorer', () => {
+    const rich = { ...createInitialState(), cash: 100 };
+    const atMinimum = resolveSealedBid(rich, CENTRAL_PARK_DEAL, 42);
+    const atAsking = resolveSealedBid(rich, CENTRAL_PARK_DEAL, 60);
+    if (atMinimum.kind !== 'won' || atAsking.kind !== 'won') throw new Error('both bids should win');
+    // Either way the stand is worth one kit ($8.40) if sold; the rest of the price is gone.
+    expect(getWorth(atMinimum.state)).toBe(66.4); // 100 − 42 + 8.40
+    expect(getWorth(atAsking.state)).toBe(48.4); // 100 − 60 + 8.40: $18 worse for the same stand
   });
 });
 

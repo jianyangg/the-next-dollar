@@ -1,4 +1,13 @@
 import * as THREE from 'three';
+import type { PitcherFill } from './tableStock';
+import {
+  characterPixels,
+  knockedOutPixels,
+  paintPixels,
+  portraitPixels,
+  type Accessory,
+  type CharacterFrame,
+} from './characterArt';
 
 function makeCanvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
   const canvas = document.createElement('canvas');
@@ -904,15 +913,21 @@ export function createParkBenchTexture(): THREE.CanvasTexture {
   return toPixelTexture(c);
 }
 
-export function createPitcherTexture(): THREE.CanvasTexture {
-  const [c, ctx] = makeCanvas(20, 24);
-  ctx.clearRect(0, 0, 20, 24);
+/** Paints one pixel-art rectangle; the pitcher and cup helpers below share it. */
+type PixelPainter = (x: number, y: number, w: number, h: number, col: string) => void;
 
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
+const painterFor =
+  (ctx: CanvasRenderingContext2D): PixelPainter =>
+  (x, y, w, h, col) => {
     ctx.fillStyle = col;
     ctx.fillRect(x, y, w, h);
   };
 
+/**
+ * The empty glass pitcher on a 20x24 canvas: shadow, dark outline, handle and the
+ * pale glass interior. Liquid is painted on top of this, then drawPitcherGleam.
+ */
+function drawPitcherGlass(px: PixelPainter): void {
   // Subtle base contact shadow
   px(4, 22, 10, 2, 'rgba(20, 26, 36, 0.25)');
 
@@ -935,6 +950,27 @@ export function createPitcherTexture(): THREE.CanvasTexture {
   px(4, 4, 9, 17, '#c7ebf8');
   px(3, 4, 2, 2, '#dff5fc'); // pouring spout highlight
   px(5, 3, 7, 1, '#ffffff'); // gleaming rim
+}
+
+/** Glass highlights painted last, over the liquid, so the pitcher still reads as glass. */
+function drawPitcherGleam(px: PixelPainter): void {
+  // Crisp vertical glass specular gleam along left side
+  px(5, 5, 1, 14, '#ffffff');
+  px(6, 6, 1, 6, 'rgba(255, 255, 255, 0.72)');
+  // Right edge cool glass refraction
+  px(12, 5, 1, 15, '#9ed2e6');
+
+  // Thick glass base reflection
+  px(5, 20, 7, 1, '#dff5fc');
+}
+
+/** The full, decorated lemonade pitcher used on the market stall and the seller's stand. */
+export function createPitcherTexture(): THREE.CanvasTexture {
+  const [c, ctx] = makeCanvas(20, 24);
+  ctx.clearRect(0, 0, 20, 24);
+  const px = painterFor(ctx);
+
+  drawPitcherGlass(px);
 
   // Bright golden lemonade liquid fill
   px(4, 9, 9, 11, '#f7cd2e');
@@ -957,14 +993,78 @@ export function createPitcherTexture(): THREE.CanvasTexture {
   px(5, 8, 3, 2, '#dff7ff');
   px(5, 8, 1, 1, '#ffffff');
 
-  // Crisp vertical glass specular gleam along left side
-  px(5, 5, 1, 14, '#ffffff');
-  px(6, 6, 1, 6, 'rgba(255, 255, 255, 0.72)');
-  // Right edge cool glass refraction
-  px(12, 5, 1, 15, '#9ed2e6');
+  drawPitcherGleam(px);
 
-  // Thick glass base reflection
-  px(5, 20, 7, 1, '#dff5fc');
+  return toPixelTexture(c);
+}
+
+/**
+ * The pitcher on the player's live stand, drawn at one of four fill levels so it shows
+ * how much lemonade is brewed and ready (world/tableStock.ts picks the level).
+ * The liquid always ends at the same bottom row (19); only its surface row moves up.
+ * 'empty' is the bare glass, so an empty pitcher reads as "nothing brewed".
+ */
+export function createPitcherFillTexture(fill: PitcherFill): THREE.CanvasTexture {
+  const [c, ctx] = makeCanvas(20, 24);
+  ctx.clearRect(0, 0, 20, 24);
+  const px = painterFor(ctx);
+
+  drawPitcherGlass(px);
+
+  // Surface row per level: full matches createPitcherTexture (row 9), then lower.
+  const SURFACE_ROW: Record<PitcherFill, number | null> = { full: 9, half: 13, low: 17, empty: null };
+  const top = SURFACE_ROW[fill];
+  if (top !== null) {
+    const bottom = 20; // one past the last liquid row
+    px(4, top, 9, bottom - top, '#f7cd2e'); // lemonade
+    px(4, Math.max(top, 17), 9, bottom - Math.max(top, 17), '#e3a617'); // deeper colour at the bottom
+    px(4, top, 9, 2, '#ffe96b'); // bright surface
+    // A lemon slice floating at the surface (rind round a pale centre), so even a
+    // low pitcher reads as lemonade rather than juice or tea.
+    px(6, top, 4, 2, '#d99014');
+    px(7, top, 2, 1, '#fffce0');
+  }
+
+  drawPitcherGleam(px);
+
+  return toPixelTexture(c);
+}
+
+/**
+ * One poured cup of lemonade (12x16), set on the live stand's counter, one per ready cup.
+ * A clear plastic cup, so the yellow lemonade inside is what you see: it reads as "filled"
+ * from across the street and cannot be mistaken for the white, EMPTY paper cup stacks
+ * beside it. Same flat style as the pitcher: dark outline, glass highlights, a straw.
+ */
+export function createLemonadeCupTexture(): THREE.CanvasTexture {
+  const [c, ctx] = makeCanvas(12, 16);
+  ctx.clearRect(0, 0, 12, 16);
+  const px = painterFor(ctx);
+
+  // Contact shadow
+  px(2, 15, 8, 1, 'rgba(20, 26, 36, 0.25)');
+
+  // Straw first, so the cup's rim is drawn over its foot: white with red stripes
+  px(7, 0, 2, 5, '#ffffff');
+  px(7, 1, 2, 1, '#e04b3a');
+  px(7, 3, 2, 1, '#e04b3a');
+
+  // Cup outline: wider at the rim, narrower at the base
+  const outline = '#22313f';
+  px(1, 4, 10, 2, outline);
+  px(2, 5, 8, 9, outline);
+  px(3, 14, 6, 1, outline);
+
+  // Clear glass interior, then lemonade filled to just under the rim
+  px(2, 5, 8, 1, '#c7ebf8');
+  px(3, 6, 6, 8, '#f7cd2e');
+  px(3, 12, 6, 2, '#e3a617'); // deeper colour at the bottom
+  px(3, 6, 6, 1, '#ffe96b'); // bright surface
+  px(6, 7, 2, 2, '#d4f3ff'); // ice cube
+
+  // Glass highlights
+  px(3, 7, 1, 6, '#ffffff');
+  px(8, 7, 1, 6, '#9ed2e6');
 
   return toPixelTexture(c);
 }
@@ -1021,274 +1121,13 @@ export const FOUNDER_CATALOG: FounderOption[] = [
   },
 ];
 
-interface HumanChibiStyle {
-  outline: string;
-  skin: string;
-  skinShade: string;
-  skinLight: string;
-  hair: string;
-  hairShade: string;
-  hairLight: string;
-  shirt: string;
-  shirtShade: string;
-  shirtLight: string;
-  shirtAccent: string;
-  pants: string;
-  shoe: string;
-  cheek: string;
-}
-
-const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
-  // Alex: warm chestnut spiky hair, sunny yellow-striped tee, jeans
-  squirrel: {
-    outline: '#2b2118',
-    skin: '#f8cca4',
-    skinShade: '#e3ac82',
-    skinLight: '#ffe2c7',
-    hair: '#7a4424',
-    hairShade: '#542c16',
-    hairLight: '#a66338',
-    shirt: '#f5c542',
-    shirtShade: '#d49d20',
-    shirtLight: '#ffe380',
-    shirtAccent: '#fff9e6',
-    pants: '#42638f',
-    shoe: '#6b422a',
-    cheek: '#f6a2a8',
-  },
-  // Maya: dark-brown bob with gold clip, coral cardigan, dark pants
-  shiba: {
-    outline: '#2b2118',
-    skin: '#f4c49c',
-    skinShade: '#dda379',
-    skinLight: '#ffdec2',
-    hair: '#472c22',
-    hairShade: '#2e1b14',
-    hairLight: '#6e4738',
-    shirt: '#eb6e5b',
-    shirtShade: '#c24d3c',
-    shirtLight: '#ff9685',
-    shirtAccent: '#fff6e8',
-    pants: '#343847',
-    shoe: '#52342c',
-    cheek: '#f79ea8',
-  },
-  // Leo: fluffy curly dark hair, varsity green/cream hoodie, sneakers
-  panda: {
-    outline: '#2b2118',
-    skin: '#e5b085',
-    skinShade: '#c98e63',
-    skinLight: '#f7cba4',
-    hair: '#332826',
-    hairShade: '#211918',
-    hairLight: '#54423f',
-    shirt: '#3f9e59',
-    shirtShade: '#2a753f',
-    shirtLight: '#68c480',
-    shirtAccent: '#f7f1de',
-    pants: '#36465e',
-    shoe: '#f2f4f7',
-    cheek: '#e8908e',
-  },
-  // Sam: blonde hair + navy NYC cap, teal jacket, jeans
-  penguin: {
-    outline: '#2b2118',
-    skin: '#fad0ab',
-    skinShade: '#e3af86',
-    skinLight: '#ffe6cf',
-    hair: '#e6b84c',
-    hairShade: '#b8892a',
-    hairLight: '#fae08c',
-    shirt: '#2e8a8a',
-    shirtShade: '#1e6363',
-    shirtLight: '#52b0b0',
-    shirtAccent: '#f5f7fa',
-    pants: '#3f5b82',
-    shoe: '#3a4252',
-    cheek: '#f7a6ad',
-  },
-  // Claire: warm auburn ponytail, Wall St. navy blazer + white collar, slacks
-  bunny: {
-    outline: '#2b2118',
-    skin: '#f7c9a3',
-    skinShade: '#dfa67d',
-    skinLight: '#ffe1c7',
-    hair: '#9c4328',
-    hairShade: '#6e2b18',
-    hairLight: '#c96240',
-    shirt: '#2c3d63',
-    shirtShade: '#1d2945',
-    shirtLight: '#445b8c',
-    shirtAccent: '#f7f8fc',
-    pants: '#2b3140',
-    shoe: '#382a26',
-    cheek: '#f59fa8',
-  },
-};
-
-// ============================================================================
-// SHOPKEEPERS: the seller and the three market vendors.
-//
-// Founders are what the PLAYER picks, so a vendor that wore a founder's face would
-// look like the player's twin. Vendors get their own faces and, more importantly, a
-// "this person runs a shop" read at a glance: a full-width shop apron in a bold colour
-// plus a different hat for each trade (visor, flat cap, bandana, straw hat).
-// ============================================================================
-
 /**
- * The shopkeeper looks. Each id names the trade, not a person.
- *   - 'broker', 'carpenter', 'glazier', 'grower': the seller and the three market vendors.
- *   - 'helper': a worker the PLAYER hired to staff one of their own stands. Dressed in the
- *     player's control blue (the same blue as the "this is you" chevron, MARKER_BLUE), so
- *     at a glance it reads "works for you" rather than "another business".
+ * The shopkeeper ids. Each id names the trade, not a person:
+ *   - 'broker': Dana Reyes, who sells the player new stands.
+ *   - 'grower' Rocco (lemons), 'carpenter' June (stall kits), 'glazier' Otis (pitchers).
+ *   - 'helper': a worker the PLAYER hired, dressed in the player's control blue (MARKER_BLUE).
  */
 export type VendorKind = 'broker' | 'carpenter' | 'glazier' | 'grower' | 'helper';
-
-type VendorHat = 'visor' | 'flatcap' | 'bandana' | 'straw';
-
-interface VendorStyle extends HumanChibiStyle {
-  hat: VendorHat;
-  hatMain: string;
-  hatLight: string;
-  hatDark: string;
-  apron: string;
-  apronShade: string;
-  /** Colour of the little chest emblem and the pocket stitching. */
-  apronTrim: string;
-}
-
-const VENDOR_STYLES: Record<VendorKind, VendorStyle> = {
-  // Stand broker (the seller): green visor, forest-green apron over a white shirt.
-  broker: {
-    outline: '#2b2118',
-    skin: '#d8a279',
-    skinShade: '#bd8460',
-    skinLight: '#ecbb94',
-    hair: '#2f2a2a',
-    hairShade: '#1e1a1a',
-    hairLight: '#4a4343',
-    shirt: '#f4f1e8',
-    shirtShade: '#d9d4c4',
-    shirtLight: '#ffffff',
-    shirtAccent: '#ffffff',
-    pants: '#3a3f4d',
-    shoe: '#2f2a28',
-    cheek: '#e8957f',
-    hat: 'visor',
-    hatMain: '#2f8f63',
-    hatLight: '#58b98a',
-    hatDark: '#1d6342',
-    apron: '#2f7d5b',
-    apronShade: '#1f5a41',
-    apronTrim: '#f2d36b',
-  },
-  // Stall-kit carpenter: tan flat cap, leather-brown apron with a tool pocket.
-  carpenter: {
-    outline: '#2b2118',
-    skin: '#f1c3a0',
-    skinShade: '#d9a37e',
-    skinLight: '#fddcc0',
-    hair: '#b4532a',
-    hairShade: '#8a3b1b',
-    hairLight: '#d97a4a',
-    shirt: '#8a5a3a',
-    shirtShade: '#6b4429',
-    shirtLight: '#a8754f',
-    shirtAccent: '#c9a27a',
-    pants: '#4a4036',
-    shoe: '#3a2c22',
-    cheek: '#f2a08f',
-    hat: 'flatcap',
-    hatMain: '#c9a269',
-    hatLight: '#e3c58f',
-    hatDark: '#8f6c3a',
-    apron: '#b9823f',
-    apronShade: '#8b5e27',
-    apronTrim: '#fff0c2',
-  },
-  // Glassware seller: white bandana with blue dots, cobalt apron.
-  glazier: {
-    outline: '#2b2118',
-    skin: '#8d5a3b',
-    skinShade: '#744529',
-    skinLight: '#a87350',
-    hair: '#1f1b1b',
-    hairShade: '#141111',
-    hairLight: '#3a3333',
-    shirt: '#dbe9f5',
-    shirtShade: '#b9cfe2',
-    shirtLight: '#f2f8fd',
-    shirtAccent: '#ffffff',
-    pants: '#2d3442',
-    shoe: '#262230',
-    cheek: '#c97a6a',
-    hat: 'bandana',
-    hatMain: '#f2f7ff',
-    hatLight: '#3f7fc4',
-    hatDark: '#c4d4e6',
-    apron: '#2f6fb0',
-    apronShade: '#214f82',
-    apronTrim: '#ffffff',
-  },
-  // Lemon grower: wide straw hat with a green band, sunny-yellow apron.
-  grower: {
-    outline: '#2b2118',
-    skin: '#f5d0b0',
-    skinShade: '#dcad88',
-    skinLight: '#ffe6cd',
-    hair: '#b7b2a6',
-    hairShade: '#948f84',
-    hairLight: '#d6d2c8',
-    shirt: '#fff6c8',
-    shirtShade: '#e6d9a0',
-    shirtLight: '#ffffff',
-    shirtAccent: '#ffffff',
-    pants: '#5a6b48',
-    shoe: '#5a4430',
-    cheek: '#f4a5a0',
-    hat: 'straw',
-    hatMain: '#e9cf7a',
-    hatLight: '#f7e7a6',
-    hatDark: '#58a55c',
-    apron: '#f2c230',
-    apronShade: '#c79a14',
-    apronTrim: '#58a55c',
-  },
-  // The player's hired worker: blue flat cap and blue apron (the player's control blue,
-  // #5aa9e6) over a plain white tee, so every staffed stand visibly belongs to the player.
-  helper: {
-    outline: '#2b2118',
-    skin: '#e8b48f',
-    skinShade: '#cc946d',
-    skinLight: '#f6cba9',
-    hair: '#5a3a24',
-    hairShade: '#3f2818',
-    hairLight: '#7a5236',
-    shirt: '#f7f4ec',
-    shirtShade: '#dcd6c6',
-    shirtLight: '#ffffff',
-    shirtAccent: '#ffffff',
-    pants: '#3a4250',
-    shoe: '#2f2a28',
-    cheek: '#eea08a',
-    hat: 'flatcap',
-    hatMain: '#5aa9e6',
-    hatLight: '#8cc6f0',
-    hatDark: '#3a7fb8',
-    apron: '#5aa9e6',
-    apronShade: '#3a7fb8',
-    apronTrim: '#ffffff',
-  },
-};
-
-/** Every drawable person: a founder (player) or a shopkeeper. */
-type CharacterId = FounderSpecies | VendorKind;
-
-const CHARACTER_STYLES: Record<CharacterId, HumanChibiStyle> = { ...HUMAN_CHIBI_STYLES, ...VENDOR_STYLES };
-
-function isVendorKind(id: CharacterId): id is VendorKind {
-  return id in VENDOR_STYLES;
-}
 
 /**
  * A resting pose for a character who is standing still. Both flags default to false,
@@ -1346,449 +1185,20 @@ export function moodForPatience(ratio: number): QueueMood {
   return ratio > 0.55 ? 'happy' : ratio > 0.28 ? 'neutral' : 'angry';
 }
 
-function drawRoundedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  col: string
-) {
-  ctx.fillStyle = col;
-  ctx.fillRect(x + 1, y, w - 2, h);
-  ctx.fillRect(x, y + 1, w, h - 2);
-}
+// ============================================================================
+// DRAWING. Every person is drawn by characterArt.ts (index-buffer parts, four shading
+// passes, one 65-colour palette). The functions below keep the public API the scene and the
+// UI already call and only wrap the result in a pixel-exact texture or data URL.
+// ============================================================================
 
-function drawFriendlyHumanHead(
-  ctx: CanvasRenderingContext2D,
-  species: CharacterId,
-  hx: number,
-  hy: number,
-  facing: 'down' | 'up' | 'left' | 'right',
-  eyesClosed = false
-) {
-  const s = CHARACTER_STYLES[species];
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  };
-
-  const faceShift = facing === 'left' ? -1 : facing === 'right' ? 1 : 0;
-
-  // --- BACK PONYTAIL (Claire) drawn behind head ---
-  if (species === 'bunny') {
-    const tailX = facing === 'left' ? hx + 16 : facing === 'right' ? hx - 2 : hx + 15;
-    drawRoundedRect(ctx, tailX, hy + 5, 6, 9, s.outline);
-    px(tailX + 1, hy + 6, 4, 7, s.hair);
-    px(tailX + 2, hy + 6, 2, 3, s.hairLight);
-    px(tailX + 1, hy + 11, 4, 2, s.hairShade);
-    // Gold hair tie
-    px(tailX + 1, hy + 6, 2, 2, '#f2c138');
-  }
-
-  // --- CLEAN ROUNDED CHIBI HEAD (18w x 16h) ---
-  // Soft warm dark-brown outline (#2b2118)
-  px(hx + 2, hy, 14, 16, s.outline);
-  px(hx + 1, hy + 1, 16, 14, s.outline);
-  px(hx, hy + 3, 18, 10, s.outline);
-
-  // Warm human skin fill
-  px(hx + 2, hy + 1, 14, 14, s.skin);
-  px(hx + 1, hy + 3, 16, 10, s.skin);
-  px(hx + 4, hy + 2, 10, 2, s.skinLight);
-  px(hx + 2, hy + 13, 14, 2, s.skinShade);
-
-  // --- BACK OF HEAD (facing === 'up') ---
-  if (facing === 'up') {
-    px(hx + 1, hy + 1, 16, 13, s.hair);
-    px(hx + 2, hy + 11, 14, 3, s.hairShade);
-    px(hx + 4, hy + 3, 10, 2, s.hairLight);
-    if (isVendorKind(species)) {
-      drawVendorHeadwear(ctx, VENDOR_STYLES[species], hx, hy, 'up', 0);
-    } else if (species === 'penguin') {
-      // Back of navy NYC cap with snapback strap
-      px(hx + 1, hy - 2, 16, 7, s.outline);
-      px(hx + 2, hy - 1, 14, 5, '#243c6b');
-      px(hx + 4, hy - 1, 10, 2, '#3d5e9c');
-      px(hx + 6, hy + 3, 6, 2, '#f5f2e8');
-    } else if (species === 'bunny') {
-      // Centered back ponytail
-      drawRoundedRect(ctx, hx + 6, hy + 7, 6, 9, s.outline);
-      px(hx + 7, hy + 8, 4, 7, s.hair);
-      px(hx + 8, hy + 8, 2, 3, s.hairLight);
-      px(hx + 7, hy + 7, 4, 2, '#f2c138');
-    }
-    return;
-  }
-
-  // --- TWO SYMMETRICAL FRIENDLY EYES (ALWAYS BOTH VISIBLE on down/left/right!) ---
-  const drawFriendlyEye = (ex: number, ey: number, pupilDx: number) => {
-    if (eyesClosed) {
-      // Blink: a skin-coloured lid over the eye with a dark lash line along its bottom edge.
-      px(ex, ey - 1, 3, 1, s.outline);
-      px(ex, ey, 3, 2, s.skin);
-      px(ex, ey + 2, 3, 1, s.outline);
-      return;
-    }
-    // Soft dark-brown top lash / frame
-    px(ex, ey - 1, 3, 1, s.outline);
-    // Crisp 3x4 white sclera
-    px(ex, ey, 3, 4, '#ffffff');
-    // Warm dark 2x3 pupil
-    px(ex + pupilDx, ey + 1, 2, 3, '#261e1c');
-    // Friendly 1px white sparkle glint in upper-left of pupil
-    px(ex + pupilDx, ey + 1, 1, 1, '#ffffff');
-  };
-
-  const leftEyeX = hx + 3 + faceShift;
-  const rightEyeX = hx + 12 + faceShift;
-  const eyeY = hy + 7;
-  const leftPupilDx = facing === 'left' ? 0 : 1;
-  const rightPupilDx = facing === 'right' ? 1 : 0;
-
-  drawFriendlyEye(leftEyeX, eyeY, leftPupilDx);
-  drawFriendlyEye(rightEyeX, eyeY, rightPupilDx);
-
-  // Soft rosy blush cheeks
-  px(hx + 2 + faceShift, hy + 11, 2, 1, s.cheek);
-  px(hx + 14 + faceShift, hy + 11, 2, 1, s.cheek);
-
-  // Cute small warm smile (never harsh black!)
-  px(hx + 7 + faceShift, hy + 12, 4, 1, '#8c5342');
-  px(hx + 8 + faceShift, hy + 13, 2, 1, '#b57360');
-
-  // --- DISTINCT HUMAN HAIRSTYLES ---
-  if (isVendorKind(species)) {
-    drawVendorHeadwear(ctx, VENDOR_STYLES[species], hx, hy, facing, faceShift);
-  } else if (species === 'squirrel') {
-    // ALEX: Warm chestnut spiky hair
-    px(hx + 1, hy - 2, 16, 7, s.outline);
-    px(hx + 4, hy - 4, 4, 3, s.outline);
-    px(hx + 10, hy - 3, 4, 2, s.outline);
-    px(hx, hy + 1, 18, 5, s.outline);
-    // Main hair fill
-    px(hx + 2, hy - 1, 14, 6, s.hair);
-    px(hx + 1, hy + 1, 16, 4, s.hair);
-    // Spiky top tufts
-    px(hx + 5, hy - 3, 2, 3, s.hair);
-    px(hx + 11, hy - 2, 2, 2, s.hair);
-    // Highlight band + spiky bangs
-    px(hx + 4, hy, 10, 2, s.hairLight);
-    px(hx + 3, hy + 4, 3, 2, s.hair);
-    px(hx + 8, hy + 4, 3, 2, s.hair);
-    px(hx + 13, hy + 4, 2, 2, s.hair);
-    // Sideburns
-    px(hx + 1, hy + 5, 2, 3, s.hairShade);
-    px(hx + 15, hy + 5, 2, 3, s.hairShade);
-  } else if (species === 'shiba') {
-    // MAYA: Cute dark-brown bob hair with gleaming gold hair clip
-    px(hx + 1, hy - 2, 16, 7, s.outline);
-    px(hx - 1, hy + 2, 4, 12, s.outline);
-    px(hx + 15, hy + 2, 4, 12, s.outline);
-    // Crown & side bob locks
-    px(hx + 2, hy - 1, 14, 6, s.hair);
-    px(hx + 1, hy + 1, 16, 4, s.hair);
-    px(hx, hy + 3, 3, 10, s.hair);
-    px(hx + 15, hy + 3, 3, 10, s.hair);
-    px(hx, hy + 10, 3, 3, s.hairShade);
-    px(hx + 15, hy + 10, 3, 3, s.hairShade);
-    // Soft swept bangs + shine
-    px(hx + 4, hy, 10, 2, s.hairLight);
-    px(hx + 3, hy + 4, 6, 2, s.hair);
-    px(hx + 11, hy + 4, 4, 2, s.hair);
-    // Cute gold hair clip on right temple
-    px(hx + 13, hy + 4, 3, 1, '#ffd43b');
-    px(hx + 14, hy + 3, 1, 1, '#fff3a8');
-  } else if (species === 'panda') {
-    // LEO: Fluffy curly dark hair
-    drawRoundedRect(ctx, hx, hy - 3, 18, 8, s.outline);
-    drawRoundedRect(ctx, hx + 3, hy - 5, 6, 5, s.outline);
-    drawRoundedRect(ctx, hx + 9, hy - 5, 6, 5, s.outline);
-    px(hx + 1, hy - 2, 16, 6, s.hair);
-    px(hx + 4, hy - 4, 4, 4, s.hair);
-    px(hx + 10, hy - 4, 4, 4, s.hair);
-    // Fluffy curl highlights
-    px(hx + 4, hy - 3, 2, 2, s.hairLight);
-    px(hx + 10, hy - 3, 2, 2, s.hairLight);
-    px(hx + 2, hy, 3, 2, s.hairLight);
-    px(hx + 13, hy, 3, 2, s.hairLight);
-    // Curly fringe bangs & side curls
-    px(hx + 2, hy + 4, 3, 2, s.hair);
-    px(hx + 7, hy + 4, 4, 2, s.hair);
-    px(hx + 13, hy + 4, 3, 2, s.hair);
-    px(hx + 1, hy + 5, 2, 3, s.hairShade);
-    px(hx + 15, hy + 5, 2, 3, s.hairShade);
-  } else if (species === 'penguin') {
-    // SAM: Golden blonde hair + crisp navy NYC baseball cap
-    // Blonde hair peeking under cap
-    px(hx + 1, hy + 4, 3, 4, s.hair);
-    px(hx + 14, hy + 4, 3, 4, s.hair);
-    px(hx + 4, hy + 4, 3, 2, s.hairLight);
-    px(hx + 11, hy + 4, 3, 2, s.hairLight);
-
-    // Navy NYC cap dome
-    const capMain = '#243c6b';
-    const capLight = '#3f62a3';
-    const capDark = '#182a4d';
-    px(hx + 1, hy - 3, 16, 7, s.outline);
-    px(hx + 2, hy - 2, 14, 5, capMain);
-    px(hx + 4, hy - 2, 10, 2, capLight);
-    // Gold NY badge
-    px(hx + 7 + faceShift, hy, 4, 2, '#ffd43b');
-    // Cap visor brim
-    px(hx, hy + 2, 18, 3, s.outline);
-    px(hx + 1, hy + 3, 16, 1, capDark);
-    px(hx + 3, hy + 2, 12, 1, capLight);
-  } else if (species === 'bunny') {
-    // CLAIRE: Warm auburn hair swept neatly back into ponytail
-    px(hx + 1, hy - 2, 16, 7, s.outline);
-    px(hx, hy + 1, 18, 5, s.outline);
-    px(hx + 2, hy - 1, 14, 6, s.hair);
-    px(hx + 1, hy + 1, 16, 4, s.hair);
-    px(hx + 4, hy, 10, 2, s.hairLight);
-    // Neat side-parted bangs
-    px(hx + 2, hy + 4, 8, 2, s.hair);
-    px(hx + 12, hy + 4, 4, 2, s.hair);
-    px(hx + 1, hy + 5, 2, 4, s.hairShade);
-    px(hx + 15, hy + 5, 2, 4, s.hairShade);
-  }
-}
-
-/**
- * Short hair plus the trade hat for a shopkeeper. Called after the face is drawn so the
- * hat overlaps the forehead the way a real hat would. `faceShift` slides details toward
- * the side the character is looking at (-1 left, +1 right, 0 front/back).
- */
-function drawVendorHeadwear(
-  ctx: CanvasRenderingContext2D,
-  s: VendorStyle,
-  hx: number,
-  hy: number,
-  facing: 'down' | 'up' | 'left' | 'right',
-  faceShift: number
-) {
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  };
-  const front = facing !== 'up';
-
-  // Short hair cap shared by every vendor (the hat sits on top of it).
-  px(hx + 1, hy - 1, 16, 7, s.outline);
-  px(hx, hy + 1, 18, 5, s.outline);
-  px(hx + 2, hy, 14, 6, s.hair);
-  px(hx + 1, hy + 2, 16, 3, s.hair);
-  if (front) {
-    px(hx + 3, hy + 4, 4, 2, s.hair);
-    px(hx + 11, hy + 4, 4, 2, s.hair);
-  }
-  px(hx + 1, hy + 5, 2, 3, s.hairShade);
-  px(hx + 15, hy + 5, 2, 3, s.hairShade);
-
-  if (s.hat === 'visor') {
-    // Open-top green visor: a band across the forehead and a short brim in front.
-    px(hx, hy + 1, 18, 5, s.outline);
-    px(hx + 1, hy + 2, 16, 3, s.hatMain);
-    px(hx + 3, hy + 2, 10, 1, s.hatLight);
-    if (front) {
-      px(hx + 1, hy + 5, 16, 2, s.outline);
-      px(hx + 2, hy + 5, 14, 1, s.hatDark);
-    }
-  } else if (s.hat === 'flatcap') {
-    // Newsboy flat cap: a soft dome with a stitched button and a small peak.
-    px(hx, hy - 3, 18, 8, s.outline);
-    px(hx + 1, hy - 2, 16, 6, s.hatMain);
-    px(hx + 3, hy - 2, 11, 2, s.hatLight);
-    px(hx + 8, hy - 4, 2, 2, s.outline);
-    px(hx + 8, hy - 3, 2, 1, s.hatDark);
-    if (front) {
-      px(hx + 2, hy + 4, 14, 3, s.outline);
-      px(hx + 3, hy + 4, 12, 2, s.hatDark);
-    }
-  } else if (s.hat === 'bandana') {
-    // White bandana with blue dots, knotted at the side (or at the back when seen from behind).
-    px(hx, hy - 2, 18, 8, s.outline);
-    px(hx + 1, hy - 1, 16, 6, s.hatMain);
-    px(hx + 4, hy, 2, 1, s.hatLight);
-    px(hx + 9, hy + 1, 2, 1, s.hatLight);
-    px(hx + 13, hy, 2, 1, s.hatLight);
-    px(hx + 6, hy + 3, 2, 1, s.hatLight);
-    px(hx + 11, hy + 3, 2, 1, s.hatLight);
-    px(hx + 1, hy + 4, 16, 1, s.hatDark);
-    if (front) {
-      const knotX = faceShift < 0 ? hx + 16 : hx - 2;
-      px(knotX, hy + 2, 4, 4, s.outline);
-      px(knotX + 1, hy + 3, 2, 2, s.hatMain);
-    } else {
-      px(hx + 7, hy + 5, 4, 4, s.outline);
-      px(hx + 8, hy + 5, 2, 3, s.hatMain);
-    }
-  } else {
-    // Wide straw hat: a tall crown, a coloured band, and a brim that shades the forehead.
-    px(hx + 3, hy - 5, 12, 6, s.outline);
-    px(hx + 4, hy - 4, 10, 4, s.hatMain);
-    px(hx + 5, hy - 4, 6, 1, s.hatLight);
-    px(hx + 4, hy - 1, 10, 1, s.hatDark);
-    px(hx - 3, hy + 1, 24, 4, s.outline);
-    px(hx - 2, hy + 2, 22, 2, s.hatMain);
-    px(hx - 2, hy + 3, 22, 1, s.hatLight);
-  }
-}
-
-/**
- * Draw one standing/walking character onto a 32x40 canvas. Shared by the founder sprite
- * (`createMascotSpriteTexture`) and the shopkeeper sprite (`createVendorSpriteTexture`) so
- * the two always have the same proportions, feet, arms and walk cycle.
- *
- * There is NO baked ground shadow in here: the scene already draws a soft contact-shadow
- * mesh under every character, and a second painted one made feet look doubled and heavy.
- */
-function drawCharacterSprite(
-  id: CharacterId,
+/** Map the scene's IdlePose flags onto a characterArt frame. */
+function frameOf(
   stepPhase: 0 | 1 | 2,
   facing: 'down' | 'up' | 'left' | 'right',
-  accessory: 'apron' | 'vest' | 'shop-apron' | 'none',
-  idle: IdlePose
-): THREE.CanvasTexture {
-  const [c, ctx] = makeCanvas(32, 40);
-  ctx.clearRect(0, 0, 32, 40);
-
-  const s = CHARACTER_STYLES[id];
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  };
-
-  const isSide = facing === 'left' || facing === 'right';
-  const dir = facing === 'left' ? -1 : 1;
-  // Walking frames hop UP 1px; the idle "exhale" sinks the upper body DOWN 1px.
-  const bob = idle.breathe ? 1 : stepPhase === 0 ? 0 : -1;
-
-  // --- STUBBY BOUNCY FEET (3-frame stride) ---
-  const leftFootY = stepPhase === 1 ? 32 : 34;
-  const rightFootY = stepPhase === 2 ? 32 : 34;
-  if (isSide) {
-    const stride = stepPhase === 1 ? 2 : stepPhase === 2 ? -2 : 0;
-    drawRoundedRect(ctx, 13 - stride, stepPhase === 2 ? 32 : 34, 6, 4, s.outline);
-    px(14 - stride, (stepPhase === 2 ? 32 : 34) + 1, 4, 2, shadeHex(s.shoe, 0.2));
-    drawRoundedRect(ctx, 13 + stride, stepPhase === 1 ? 32 : 34, 6, 4, s.outline);
-    px(14 + stride, (stepPhase === 1 ? 32 : 34) + 1, 4, 2, s.shoe);
-  } else {
-    drawRoundedRect(ctx, 9, leftFootY, 6, 4, s.outline);
-    px(10, leftFootY + 1, 4, 2, s.shoe);
-    drawRoundedRect(ctx, 17, rightFootY, 6, 4, s.outline);
-    px(18, rightFootY + 1, 4, 2, s.shoe);
-  }
-
-  // --- COMPACT CHIBI TORSO ---
-  const by = 24 + bob;
-  drawRoundedRect(ctx, 9, by, 14, 11, s.outline);
-  px(10, by + 1, 12, 7, s.shirt);
-  px(10, by + 1, 12, 1, s.shirtLight);
-  px(10, by + 7, 12, 1, s.shirtShade);
-  // Pants
-  px(10, by + 8, 12, 2, s.pants);
-
-  // Outfit-specific shirt details (founders only, and only when not covered by apron/vest)
-  if (accessory === 'none' && facing !== 'up' && !isVendorKind(id)) {
-    if (id === 'squirrel') {
-      // Sunny yellow-striped tee
-      px(10, by + 3, 12, 1, s.shirtAccent);
-      px(10, by + 5, 12, 1, s.shirtAccent);
-    } else if (id === 'shiba') {
-      // Coral cardigan open over cream shirt
-      px(14, by + 1, 4, 7, s.shirtAccent);
-    } else if (id === 'panda') {
-      // Varsity hoodie cream chest stripe & strings
-      px(12, by + 3, 8, 2, s.shirtAccent);
-      px(14, by + 1, 1, 3, s.shirtAccent);
-      px(17, by + 1, 1, 3, s.shirtAccent);
-    } else if (id === 'penguin') {
-      // Teal jacket zipper over white tee
-      px(14, by + 1, 4, 7, s.shirtAccent);
-      px(15, by + 1, 2, 7, '#cfd8e6');
-    } else if (id === 'bunny') {
-      // Crisp Wall St. navy blazer + white collar + gold accent
-      px(13, by + 1, 6, 5, s.shirtAccent);
-      px(15, by + 2, 2, 4, '#d9a938');
-    }
-  }
-
-  // --- ROLE ACCESSORIES (apron / vest / shopkeeper apron) ---
-  if (accessory === 'apron') {
-    if (facing === 'up') {
-      px(10, by + 5, 12, 1, '#fff9eb');
-      px(14, by + 5, 4, 2, '#e3d6bc');
-    } else {
-      const ax = isSide ? (dir > 0 ? 13 : 10) : 11;
-      const aw = isSide ? 8 : 10;
-      px(ax, by + 2, aw, 8, '#fff9eb');
-      px(ax, by + 2, 1, 8, '#e0d3b8');
-      px(ax + aw - 1, by + 2, 1, 8, '#e0d3b8');
-      px(10, by + 6, 12, 1, '#fff9eb');
-      // Pixel lemon emblem on apron
-      px(ax + Math.floor(aw / 2) - 1, by + 4, 3, 2, '#ffd43b');
-      px(ax + Math.floor(aw / 2), by + 3, 1, 1, '#58b342');
-    }
-  } else if (accessory === 'shop-apron' && isVendorKind(id)) {
-    // A bold, full-width bib apron in the trade colour: the quickest "shopkeeper" signal.
-    const v = VENDOR_STYLES[id];
-    if (facing === 'up') {
-      // Seen from behind: a waist band with a bow, and the neck strap across the shoulders.
-      px(10, by + 1, 12, 1, v.apronShade);
-      px(10, by + 5, 12, 2, v.apron);
-      px(14, by + 4, 4, 3, v.apronShade);
-    } else {
-      const ax = isSide ? (dir > 0 ? 13 : 10) : 11;
-      const aw = isSide ? 8 : 10;
-      px(ax + 1, by + 1, aw - 2, 1, v.apronShade); // neck strap
-      px(ax, by + 2, aw, 8, v.apron);
-      px(ax, by + 2, 1, 8, v.apronShade);
-      px(ax + aw - 1, by + 2, 1, 8, v.apronShade);
-      px(ax, by + 9, aw, 1, v.apronShade);
-      // Chest emblem in the trim colour.
-      px(ax + Math.floor(aw / 2) - 1, by + 3, 2, 2, v.apronTrim);
-      // Pocket with a stitched top edge.
-      px(ax + 2, by + 6, aw - 4, 3, v.apronShade);
-      px(ax + 2, by + 6, aw - 4, 1, v.apronTrim);
-    }
-  } else if (accessory === 'vest') {
-    const vestMain = '#237868';
-    const vestDark = '#175449';
-    if (facing === 'up') {
-      px(10, by + 1, 12, 7, vestMain);
-      px(10, by + 6, 12, 2, vestDark);
-    } else {
-      px(10, by + 1, 4, 7, vestMain);
-      px(18, by + 1, 4, 7, vestMain);
-      px(14, by + 1, 4, 7, '#fffdf5');
-      px(15, by + 2, 2, 1, '#e8584a'); // bowtie
-      px(13, by + 4, 1, 1, '#ffd43b');
-      px(13, by + 6, 1, 1, '#ffd43b');
-    }
-  }
-
-  // --- STUBBY ARMS / HANDS ---
-  const armSwing = stepPhase === 1 ? 1 : stepPhase === 2 ? -1 : 0;
-  if (isSide) {
-    const ax = 14 + (stepPhase === 1 ? -1 : stepPhase === 2 ? 1 : 0);
-    drawRoundedRect(ctx, ax, by + 2, 5, 6, s.outline);
-    px(ax + 1, by + 3, 3, 2, s.shirtLight);
-    px(ax + 1, by + 5, 3, 2, s.skin);
-  } else {
-    drawRoundedRect(ctx, 6, by + 2 + armSwing, 4, 6, s.outline);
-    px(7, by + 3 + armSwing, 2, 2, s.shirt);
-    px(7, by + 5 + armSwing, 2, 2, s.skin);
-
-    drawRoundedRect(ctx, 22, by + 2 - armSwing, 4, 6, s.outline);
-    px(23, by + 3 - armSwing, 2, 2, s.shirt);
-    px(23, by + 5 - armSwing, 2, 2, s.skin);
-  }
-
-  // --- FRIENDLY CHIBI HEAD (centered at x=7, y=9+bob) ---
-  drawFriendlyHumanHead(ctx, id, 7, 9 + bob, facing, idle.eyesClosed === true);
-
-  return toPixelTexture(c);
+  idle: IdlePose,
+  accessory: Accessory = 'none'
+): CharacterFrame {
+  return { stepPhase, facing, breathe: idle.breathe === true, blink: idle.eyesClosed === true, accessory };
 }
 
 /** A founder (the player's character). `idle` selects a standing-still frame. */
@@ -1799,12 +1209,12 @@ export function createMascotSpriteTexture(
   accessory: 'apron' | 'vest' | 'none' = 'none',
   idle: IdlePose = {}
 ): THREE.CanvasTexture {
-  return drawCharacterSprite(species, stepPhase, facing, accessory, idle);
+  return toPixelTexture(paintPixels(characterPixels(species, frameOf(stepPhase, facing, idle, accessory))));
 }
 
 /**
- * A shopkeeper: the stand seller ('broker') or one of the three Union Square vendors.
- * Always wears the full shop apron and the trade hat; never shares a face with a founder.
+ * A shopkeeper: Dana the stand seller ('broker'), the three Union Square vendors
+ * (Rocco 'grower', June 'carpenter', Otis 'glazier') or the player's hired worker ('helper').
  */
 export function createVendorSpriteTexture(
   kind: VendorKind,
@@ -1812,185 +1222,39 @@ export function createVendorSpriteTexture(
   facing: 'down' | 'up' | 'left' | 'right' = 'down',
   idle: IdlePose = {}
 ): THREE.CanvasTexture {
-  return drawCharacterSprite(kind, stepPhase, facing, 'shop-apron', idle);
+  return toPixelTexture(paintPixels(characterPixels(kind, frameOf(stepPhase, facing, idle))));
 }
 
-const mascotPortraitCache = new Map<FounderSpecies, string>();
+/**
+ * The stand manager (control-blue headset, vest and clipboard). The scene does not place a
+ * manager yet; this exists so the role has finished art in every facing when it does.
+ */
+export function createManagerSpriteTexture(
+  stepPhase: 0 | 1 | 2 = 0,
+  facing: 'down' | 'up' | 'left' | 'right' = 'down',
+  idle: IdlePose = {}
+): THREE.CanvasTexture {
+  return toPixelTexture(paintPixels(characterPixels('manager', frameOf(stepPhase, facing, idle))));
+}
 
-export function createMascotPortraitDataUrl(species: FounderSpecies): string {
-  const cached = mascotPortraitCache.get(species);
+const portraitCache = new Map<FounderSpecies | VendorKind, string>();
+
+/**
+ * A 32x32 head-and-shoulders portrait as a PNG data URL, for the HUD, modals and the map.
+ * Accepts a founder or a shopkeeper id (the vendor and seller portraits in the market and
+ * deal modals). Cached per id because the UI asks for the same faces on every render.
+ */
+export function createMascotPortraitDataUrl(id: FounderSpecies | VendorKind): string {
+  const cached = portraitCache.get(id);
   if (cached) return cached;
-
-  const [c, ctx] = makeCanvas(32, 32);
-  ctx.clearRect(0, 0, 32, 32);
-
-  const s = HUMAN_CHIBI_STYLES[species];
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
-    ctx.fillStyle = col;
-    ctx.fillRect(x, y, w, h);
-  };
-
-  // Peeking shoulders & collar at bottom of 32x32 portrait
-  drawRoundedRect(ctx, 9, 25, 14, 7, s.outline);
-  px(10, 26, 12, 6, s.shirt);
-  px(10, 26, 12, 1, s.shirtLight);
-  if (species === 'shiba' || species === 'penguin') {
-    px(14, 26, 4, 6, s.shirtAccent);
-  } else if (species === 'bunny') {
-    px(13, 26, 6, 5, s.shirtAccent);
-    px(15, 27, 2, 5, '#d9a938');
-  } else if (species === 'squirrel') {
-    px(10, 28, 12, 1, s.shirtAccent);
-  } else if (species === 'panda') {
-    px(12, 28, 8, 2, s.shirtAccent);
-  }
-
-  // Centered friendly human chibi head
-  drawFriendlyHumanHead(ctx, species, 7, 9, 'down');
-
-  const url = c.toDataURL('image/png');
-  mascotPortraitCache.set(species, url);
+  const url = paintPixels(portraitPixels(id)).toDataURL('image/png');
+  portraitCache.set(id, url);
   return url;
 }
 
+/** A founder flattened by a taxi: X eyes, dizzy skin, arms and feet flung out. 32x40. */
 export function createKnockedOutSpriteTexture(species: FounderSpecies): THREE.CanvasTexture {
-  const [c, ctx] = makeCanvas(32, 40);
-  ctx.clearRect(0, 0, 32, 40);
-
-  const s = HUMAN_CHIBI_STYLES[species];
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  };
-
-  // Dizzy pale greenish-blue KO skin palette
-  const koSkin = '#c4ded6';
-  const koSkinShade = '#9fc2b8';
-  const koSkinLight = '#ddf2ec';
-
-  // Splayed knocked-out shoes sticking out at the sides
-  drawRoundedRect(ctx, 6, 33, 6, 4, s.outline);
-  px(7, 34, 4, 2, s.shoe);
-  drawRoundedRect(ctx, 20, 33, 6, 4, s.outline);
-  px(21, 34, 4, 2, s.shoe);
-
-  // Slumped compact chibi torso
-  const by = 26;
-  drawRoundedRect(ctx, 9, by, 14, 10, s.outline);
-  px(10, by + 1, 12, 6, s.shirt);
-  px(10, by + 1, 12, 1, s.shirtLight);
-  px(10, by + 6, 12, 1, s.shirtShade);
-  px(10, by + 7, 12, 2, s.pants);
-
-  // Flopped arms splayed outward
-  drawRoundedRect(ctx, 4, by + 2, 6, 4, s.outline);
-  px(5, by + 3, 2, 2, koSkin);
-  px(7, by + 3, 2, 2, s.shirt);
-  drawRoundedRect(ctx, 22, by + 2, 6, 4, s.outline);
-  px(23, by + 3, 2, 2, s.shirt);
-  px(25, by + 3, 2, 2, koSkin);
-
-  // --- KNOCKED-OUT HEAD (same friendly chibi silhouette, dizzy greenish-blue skin) ---
-  const hx = 7;
-  const hy = 11;
-
-  // Back ponytail for Claire
-  if (species === 'bunny') {
-    drawRoundedRect(ctx, hx + 15, hy + 5, 6, 9, s.outline);
-    px(hx + 16, hy + 6, 4, 7, s.hair);
-    px(hx + 17, hy + 6, 2, 3, s.hairLight);
-    px(hx + 16, hy + 6, 2, 2, '#f2c138');
-  }
-
-  // Head outline & dizzy pale greenish-blue skin
-  px(hx + 2, hy, 14, 16, s.outline);
-  px(hx + 1, hy + 1, 16, 14, s.outline);
-  px(hx, hy + 3, 18, 10, s.outline);
-  px(hx + 2, hy + 1, 14, 14, koSkin);
-  px(hx + 1, hy + 3, 16, 10, koSkin);
-  px(hx + 4, hy + 2, 10, 2, koSkinLight);
-  px(hx + 2, hy + 13, 14, 2, koSkinShade);
-
-  // Crisp X X pixel eyes!
-  const drawXEye = (ex: number, ey: number) => {
-    px(ex, ey, 1, 1, s.outline);
-    px(ex + 2, ey, 1, 1, s.outline);
-    px(ex + 1, ey + 1, 1, 1, s.outline);
-    px(ex, ey + 2, 1, 1, s.outline);
-    px(ex + 2, ey + 2, 1, 1, s.outline);
-  };
-  drawXEye(hx + 3, hy + 7);
-  drawXEye(hx + 12, hy + 7);
-
-  // Cute mouth + little red tongue sticking out!
-  px(hx + 6, hy + 11, 6, 1, s.outline);
-  px(hx + 9, hy + 12, 3, 3, s.outline);
-  px(hx + 9, hy + 12, 2, 2, '#eb525a');
-  px(hx + 9, hy + 12, 1, 1, '#ff8f95');
-
-  // Re-apply species hairstyle cleanly over forehead
-  if (species === 'squirrel') {
-    px(hx + 1, hy - 2, 16, 7, s.outline);
-    px(hx + 4, hy - 4, 4, 3, s.outline);
-    px(hx + 10, hy - 3, 4, 2, s.outline);
-    px(hx, hy + 1, 18, 5, s.outline);
-    px(hx + 2, hy - 1, 14, 6, s.hair);
-    px(hx + 1, hy + 1, 16, 4, s.hair);
-    px(hx + 5, hy - 3, 2, 3, s.hair);
-    px(hx + 11, hy - 2, 2, 2, s.hair);
-    px(hx + 4, hy, 10, 2, s.hairLight);
-    px(hx + 3, hy + 4, 3, 2, s.hair);
-    px(hx + 8, hy + 4, 3, 2, s.hair);
-    px(hx + 13, hy + 4, 2, 2, s.hair);
-  } else if (species === 'shiba') {
-    px(hx + 1, hy - 2, 16, 7, s.outline);
-    px(hx - 1, hy + 2, 4, 12, s.outline);
-    px(hx + 15, hy + 2, 4, 12, s.outline);
-    px(hx + 2, hy - 1, 14, 6, s.hair);
-    px(hx + 1, hy + 1, 16, 4, s.hair);
-    px(hx, hy + 3, 3, 10, s.hair);
-    px(hx + 15, hy + 3, 3, 10, s.hair);
-    px(hx + 4, hy, 10, 2, s.hairLight);
-    px(hx + 3, hy + 4, 6, 2, s.hair);
-    px(hx + 11, hy + 4, 4, 2, s.hair);
-    px(hx + 13, hy + 4, 3, 1, '#ffd43b');
-  } else if (species === 'panda') {
-    drawRoundedRect(ctx, hx, hy - 3, 18, 8, s.outline);
-    drawRoundedRect(ctx, hx + 3, hy - 5, 6, 5, s.outline);
-    drawRoundedRect(ctx, hx + 9, hy - 5, 6, 5, s.outline);
-    px(hx + 1, hy - 2, 16, 6, s.hair);
-    px(hx + 4, hy - 4, 4, 4, s.hair);
-    px(hx + 10, hy - 4, 4, 4, s.hair);
-    px(hx + 4, hy - 3, 2, 2, s.hairLight);
-    px(hx + 10, hy - 3, 2, 2, s.hairLight);
-    px(hx + 2, hy + 4, 3, 2, s.hair);
-    px(hx + 7, hy + 4, 4, 2, s.hair);
-    px(hx + 13, hy + 4, 3, 2, s.hair);
-  } else if (species === 'penguin') {
-    px(hx + 1, hy + 4, 3, 4, s.hair);
-    px(hx + 14, hy + 4, 3, 4, s.hair);
-    px(hx + 1, hy - 3, 16, 7, s.outline);
-    px(hx + 2, hy - 2, 14, 5, '#243c6b');
-    px(hx + 4, hy - 2, 10, 2, '#3f62a3');
-    px(hx + 7, hy, 4, 2, '#ffd43b');
-    px(hx, hy + 2, 18, 3, s.outline);
-    px(hx + 1, hy + 3, 16, 1, '#182a4d');
-  } else if (species === 'bunny') {
-    px(hx + 1, hy - 2, 16, 7, s.outline);
-    px(hx, hy + 1, 18, 5, s.outline);
-    px(hx + 2, hy - 1, 14, 6, s.hair);
-    px(hx + 1, hy + 1, 16, 4, s.hair);
-    px(hx + 4, hy, 10, 2, s.hairLight);
-    px(hx + 2, hy + 4, 8, 2, s.hair);
-    px(hx + 12, hy + 4, 4, 2, s.hair);
-  }
-
-  // Tiny golden cartoon dizzy stars orbiting above head
-  px(6, 5, 2, 2, '#ffe066');
-  px(24, 4, 2, 2, '#ffe066');
-  px(15, 2, 2, 1, '#fff6b8');
-
-  return toPixelTexture(c);
+  return toPixelTexture(paintPixels(knockedOutPixels(species)));
 }
 
 export function createSoulSpriteTexture(): THREE.CanvasTexture {
@@ -2055,6 +1319,7 @@ export type UiIconKind =
   | 'coin'
   | 'lemon'
   | 'pitcher'
+  | 'cup'
   | 'book'
   | 'map'
   | 'sun'
@@ -2129,6 +1394,26 @@ export function createUiIconDataUrl(kind: UiIconKind): string {
     // Ice cube + specular streak
     px(6, 7, 3, 2, '#ffffff');
     px(4, 4, 1, 9, '#ffffff');
+  } else if (kind === 'cup') {
+    // One served cup of lemonade: a tapered paper cup, a lemon slice on the rim and
+    // a striped straw. Deliberately unlike the pitcher icon, so "a cup ready to sell"
+    // never reads as "a pitcher you own".
+    px(3, 4, 10, 1, outline); // rim
+    px(3, 5, 1, 9, outline);
+    px(12, 5, 1, 9, outline);
+    px(4, 14, 8, 1, outline);
+    px(4, 5, 8, 9, '#fffaf0'); // paper
+    px(4, 7, 8, 5, '#ffd83d'); // lemonade seen through the band
+    px(4, 11, 8, 1, '#e39c14');
+    px(5, 7, 2, 1, '#fff5a3');
+    px(4, 12, 8, 2, '#f3e6c8'); // cup foot shading
+    // Straw (red and white), leaning out of the cup
+    px(9, 1, 1, 4, '#d94a3a');
+    px(10, 0, 1, 2, '#d94a3a');
+    px(9, 2, 1, 1, '#ffffff');
+    // Lemon slice on the rim
+    px(1, 3, 3, 3, outline);
+    px(2, 3, 2, 2, '#ffd83d');
   } else if (kind === 'book') {
     // Accounting ledger book with gold clasp
     px(2, 1, 12, 14, outline);
@@ -2652,390 +1937,24 @@ export type DistrictPedestrianKind =
   | 'fifth-shopper'
   | 'village-artist';
 
-interface DistrictPedStyle {
-  skin: string;
-  skinShade: string;
-  skinLight: string;
-  hair: string;
-  hairShade: string;
-  hairLight: string;
-  shirt: string;
-  shirtShade: string;
-  shirtLight: string;
-  pants: string;
-  shoe: string;
-  cheek: string;
-}
-
-const DISTRICT_PED_STYLES: Record<DistrictPedestrianKind, DistrictPedStyle> = {
-  'park-dog-walker': {
-    skin: '#f7c9a2',
-    skinShade: '#dfa67c',
-    skinLight: '#ffe1c6',
-    hair: '#784829',
-    hairShade: '#522f18',
-    hairLight: '#a36840',
-    shirt: '#5a8252',
-    shirtShade: '#3d5e37',
-    shirtLight: '#7ea876',
-    pants: '#456185',
-    shoe: '#66432a',
-    cheek: '#f6a2a8',
-  },
-  'park-jogger': {
-    skin: '#e8b389',
-    skinShade: '#cc9266',
-    skinLight: '#facca6',
-    hair: '#2e2422',
-    hairShade: '#1c1514',
-    hairLight: '#4f3e3b',
-    shirt: '#2eb0a8',
-    shirtShade: '#1e857f',
-    shirtLight: '#5cd4cd',
-    pants: '#2e384d',
-    shoe: '#f05454',
-    cheek: '#ed9494',
-  },
-  'columbia-student': {
-    skin: '#f5c69e',
-    skinShade: '#dca177',
-    skinLight: '#ffe0c4',
-    hair: '#4a3123',
-    hairShade: '#2e1d14',
-    hairLight: '#734f3a',
-    shirt: '#9bddff', // Iconic Columbia Light Blue!
-    shirtShade: '#6eb8e0',
-    shirtLight: '#c7ecff',
-    pants: '#3a4a66',
-    shoe: '#f2f4f8',
-    cheek: '#f59fa8',
-  },
-  'fidi-suit': {
-    skin: '#f6c8a0',
-    skinShade: '#dea47a',
-    skinLight: '#ffe0c4',
-    hair: '#2b282b',
-    hairShade: '#1a181c',
-    hairLight: '#4d484d',
-    shirt: '#2e3340', // Sharp Wall St. charcoal suit
-    shirtShade: '#1c2029',
-    shirtLight: '#495063',
-    pants: '#242833',
-    shoe: '#1f1a18',
-    cheek: '#f09c9e',
-  },
-  'broadway-theater': {
-    skin: '#f2bf96',
-    skinShade: '#d69c72',
-    skinLight: '#ffd9ba',
-    hair: '#5c2d26',
-    hairShade: '#3d1b16',
-    hairLight: '#87463c',
-    shirt: '#3b2b42', // Stylish evening coat
-    shirtShade: '#261a2b',
-    shirtLight: '#5c4566',
-    pants: '#241e29',
-    shoe: '#2e2226',
-    cheek: '#f59aa6',
-  },
-  'fifth-shopper': {
-    skin: '#fad0ab',
-    skinShade: '#e3ae86',
-    skinLight: '#ffe6cf',
-    hair: '#d9a441',
-    hairShade: '#ad7c24',
-    hairLight: '#f5ce73',
-    shirt: '#e8c2c8', // Chic Fifth Ave pastel boutique coat
-    shirtShade: '#c49aa1',
-    shirtLight: '#fae1e5',
-    pants: '#3b3742',
-    shoe: '#3d2a30',
-    cheek: '#f79ead',
-  },
-  'village-artist': {
-    skin: '#f4c39b',
-    skinShade: '#dba076',
-    skinLight: '#ffddc2',
-    hair: '#3b2924',
-    hairShade: '#241714',
-    hairLight: '#61453d',
-    shirt: '#d47f35', // Cozy autumn knit sweater
-    shirtShade: '#a65c1e',
-    shirtLight: '#f0a35b',
-    pants: '#363b47',
-    shoe: '#543525',
-    cheek: '#f59da6',
-  },
-};
-
+/**
+ * A district passer-by (36x40). Drawn by characterArt.ts: every kind has a front, back and
+ * profile view, two walk frames and a standing frame.
+ */
 export function createDistrictPedestrianTexture(
   kind: DistrictPedestrianKind,
   stepPhase: 0 | 1 | 2 = 0,
   facing: 'down' | 'up' | 'left' | 'right' = 'down'
 ): THREE.CanvasTexture {
-  // Consistent 36x40 canvas so dog-walker's puppy & shopping bags fit cleanly without clipping
-  const [c, ctx] = makeCanvas(36, 40);
-  ctx.clearRect(0, 0, 36, 40);
+  return toPixelTexture(paintPixels(characterPixels(kind, { stepPhase, facing })));
+}
 
-  const s = DISTRICT_PED_STYLES[kind];
-  const outline = '#2b2118';
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  };
-
-  const isSide = facing === 'left' || facing === 'right';
-  const dir = facing === 'left' ? -1 : 1;
-  const faceShift = facing === 'left' ? -1 : facing === 'right' ? 1 : 0;
-  const bob = stepPhase === 0 ? 0 : -1;
-
-  // Shift dog walker slightly left so the cute golden dog trots neatly on the right!
-  const ox = kind === 'park-dog-walker' ? -2 : 2;
-
-  // --- BACKPACK BEHIND TORSO (Columbia Student on side/front) ---
-  if (kind === 'columbia-student' && isSide) {
-    const bpX = dir > 0 ? 5 + ox : 20 + ox;
-    drawRoundedRect(ctx, bpX, 24 + bob, 6, 9, outline);
-    px(bpX + 1, 25 + bob, 4, 7, '#b5743c');
-    px(bpX + 1, 25 + bob, 4, 2, '#d49557');
-    px(bpX + 2, 29 + bob, 2, 2, '#7d4a22');
-  }
-
-  // --- STUBBY BOUNCY FEET (3-frame stride) ---
-  const leftFootY = stepPhase === 1 ? 32 : 34;
-  const rightFootY = stepPhase === 2 ? 32 : 34;
-  if (isSide) {
-    const stride = stepPhase === 1 ? 2 : stepPhase === 2 ? -2 : 0;
-    drawRoundedRect(ctx, 13 + ox - stride, stepPhase === 2 ? 32 : 34, 6, 4, outline);
-    px(14 + ox - stride, (stepPhase === 2 ? 32 : 34) + 1, 4, 2, shadeHex(s.shoe, 0.2));
-    drawRoundedRect(ctx, 13 + ox + stride, stepPhase === 1 ? 32 : 34, 6, 4, outline);
-    px(14 + ox + stride, (stepPhase === 1 ? 32 : 34) + 1, 4, 2, s.shoe);
-  } else {
-    drawRoundedRect(ctx, 9 + ox, leftFootY, 6, 4, outline);
-    px(10 + ox, leftFootY + 1, 4, 2, s.shoe);
-    drawRoundedRect(ctx, 17 + ox, rightFootY, 6, 4, outline);
-    px(18 + ox, rightFootY + 1, 4, 2, s.shoe);
-  }
-
-  // --- COMPACT CHIBI TORSO ---
-  const by = 24 + bob;
-  drawRoundedRect(ctx, 9 + ox, by, 14, 11, outline);
-  px(10 + ox, by + 1, 12, 7, s.shirt);
-  px(10 + ox, by + 1, 12, 1, s.shirtLight);
-  px(10 + ox, by + 7, 12, 1, s.shirtShade);
-  px(10 + ox, by + 8, 12, 2, s.pants);
-
-  // Outfit-specific torso details
-  if (facing === 'up') {
-    if (kind === 'columbia-student') {
-      // Full chunky student backpack visible on back!
-      drawRoundedRect(ctx, 10 + ox, by + 1, 12, 9, outline);
-      px(11 + ox, by + 2, 10, 7, '#b5743c');
-      px(11 + ox, by + 2, 10, 2, '#d49557');
-      px(13 + ox, by + 5, 6, 3, '#8c5528');
-      px(15 + ox, by + 5, 2, 1, '#f2c138'); // zipper clasp
-    } else if (kind === 'broadway-theater') {
-      px(10 + ox, by + 1, 12, 2, '#d93848');
-    }
-  } else {
-    if (kind === 'columbia-student') {
-      // White hoodie drawstrings + backpack shoulder straps
-      px(11 + ox, by + 1, 2, 6, '#8c5528');
-      px(19 + ox, by + 1, 2, 6, '#8c5528');
-      px(14 + ox, by + 2, 1, 3, '#ffffff');
-      px(17 + ox, by + 2, 1, 3, '#ffffff');
-    } else if (kind === 'fidi-suit') {
-      // Crisp white dress shirt + Wall St. red/gold tie
-      px(13 + ox, by + 1, 6, 6, '#f8f9fc');
-      px(15 + ox, by + 2, 2, 5, '#d63644');
-      px(15 + ox, by + 3, 2, 1, '#f2c138');
-    } else if (kind === 'broadway-theater') {
-      // Dramatic crimson theater scarf
-      px(10 + ox, by + 1, 12, 2, '#d93848');
-      px(17 + ox, by + 3, 3, 4, '#d93848');
-      px(18 + ox, by + 3, 1, 4, '#ff6b78');
-    } else if (kind === 'park-jogger') {
-      // Sporty white racing stripe on tank top
-      px(12 + ox, by + 3, 8, 2, '#ffffff');
-    } else if (kind === 'park-dog-walker') {
-      // Cream sweater center under olive vest
-      px(14 + ox, by + 1, 4, 7, '#f7f0dc');
-    } else if (kind === 'fifth-shopper') {
-      // Gold boutique coat buttons
-      px(14 + ox, by + 2, 1, 1, '#f2c138');
-      px(14 + ox, by + 5, 1, 1, '#f2c138');
-      px(17 + ox, by + 2, 1, 1, '#f2c138');
-      px(17 + ox, by + 5, 1, 1, '#f2c138');
-    }
-  }
-
-  // --- STUBBY ARMS & DISTINCT NYC HAND PROPS ---
-  const armSwing = stepPhase === 1 ? 1 : stepPhase === 2 ? -1 : 0;
-  if (isSide) {
-    const ax = 14 + ox + (stepPhase === 1 ? -1 : stepPhase === 2 ? 1 : 0);
-    drawRoundedRect(ctx, ax, by + 2, 5, 6, outline);
-    px(ax + 1, by + 3, 3, 2, kind === 'park-jogger' ? s.skin : s.shirtLight);
-    px(ax + 1, by + 5, 3, 2, s.skin);
-  } else {
-    drawRoundedRect(ctx, 6 + ox, by + 2 + armSwing, 4, 6, outline);
-    px(7 + ox, by + 3 + armSwing, 2, 2, kind === 'park-jogger' ? s.skin : s.shirt);
-    px(7 + ox, by + 5 + armSwing, 2, 2, s.skin);
-
-    drawRoundedRect(ctx, 22 + ox, by + 2 - armSwing, 4, 6, outline);
-    px(23 + ox, by + 3 - armSwing, 2, 2, kind === 'park-jogger' ? s.skin : s.shirt);
-    px(23 + ox, by + 5 - armSwing, 2, 2, s.skin);
-  }
-
-  // Distinct hand-held district props!
-  if (kind === 'fidi-suit') {
-    // Leather Wall St. briefcase with gleaming brass clasp
-    const bx = isSide ? 15 + ox + (dir > 0 ? 1 : -4) : 23 + ox;
-    const byOff = by + 7 - armSwing;
-    drawRoundedRect(ctx, bx, byOff, 8, 6, outline);
-    px(bx + 1, byOff + 1, 6, 4, '#5e3922');
-    px(bx + 1, byOff + 1, 6, 1, '#855334');
-    px(bx + 3, byOff + 2, 2, 1, '#f2c138');
-  } else if (kind === 'fifth-shopper') {
-    // Two bright Fifth Ave luxury shopping bags!
-    // Left Tiffany-blue bag
-    const lx = isSide ? 11 + ox : 2 + ox;
-    px(lx + 1, by + 6 + armSwing, 4, 2, outline); // handle
-    drawRoundedRect(ctx, lx, by + 7 + armSwing, 6, 7, outline);
-    px(lx + 1, by + 8 + armSwing, 4, 5, '#64d2d6');
-    px(lx + 1, by + 8 + armSwing, 4, 1, '#a6f0f2');
-    // Right orange-gold boutique bag
-    const rx = isSide ? 17 + ox : 24 + ox;
-    px(rx + 1, by + 6 - armSwing, 4, 2, outline);
-    drawRoundedRect(ctx, rx, by + 7 - armSwing, 6, 7, outline);
-    px(rx + 1, by + 8 - armSwing, 4, 5, '#f08a38');
-    px(rx + 1, by + 8 - armSwing, 4, 1, '#ffba75');
-  } else if (kind === 'broadway-theater') {
-    // Bright yellow Broadway Playbill program in right hand
-    const pxX = isSide ? 16 + ox : 23 + ox;
-    px(pxX, by + 5 - armSwing, 5, 6, outline);
-    px(pxX + 1, by + 6 - armSwing, 3, 2, '#ffd43b');
-    px(pxX + 1, by + 8 - armSwing, 3, 2, '#22202b');
-  } else if (kind === 'village-artist') {
-    // Cozy NYC takeaway coffee cup in left hand
-    const cx = isSide ? 16 + ox : 3 + ox;
-    px(cx, by + 5 + armSwing, 4, 6, outline);
-    px(cx + 1, by + 6 + armSwing, 2, 4, '#f7f5ef');
-    px(cx + 1, by + 7 + armSwing, 2, 2, '#c88c50');
-    px(cx, by + 5 + armSwing, 4, 1, '#ffffff');
-  } else if (kind === 'park-dog-walker') {
-    // Red leash + CUTE LITTLE GOLDEN DOG trotting happily beside the walker!
-    const dogBob = stepPhase === 1 ? -1 : 0;
-    const dx = 24;
-    const dy = 28 + dogBob;
-
-    // Red diagonal leash from walker's hand to dog collar
-    ctx.fillStyle = '#d94848';
-    px(22, by + 6, 2, 1, '#d94848');
-    px(23, by + 7, 2, 1, '#d94848');
-    px(25, by + 8, 2, 1, '#d94848');
-
-    // Tiny ground shadow under dog
-    px(dx + 1, 37, 9, 2, 'rgba(30, 24, 22, 0.24)');
-
-    // Wagging golden tail
-    px(dx + 9, dy + 1 + (stepPhase === 2 ? -1 : 0), 2, 3, outline);
-    px(dx + 9, dy + 2 + (stepPhase === 2 ? -1 : 0), 1, 2, '#f2b84b');
-
-    // Plump little golden dog body
-    drawRoundedRect(ctx, dx + 2, dy + 3, 8, 5, outline);
-    px(dx + 3, dy + 4, 6, 3, '#e8a83e');
-    px(dx + 3, dy + 4, 5, 1, '#ffd073');
-
-    // Bouncy tiny dog paws
-    const paw1 = stepPhase === 1 ? 0 : 1;
-    const paw2 = stepPhase === 2 ? 0 : 1;
-    px(dx + 3, dy + 7 + paw1, 2, 2, outline);
-    px(dx + 7, dy + 7 + paw2, 2, 2, outline);
-
-    // Cute round golden puppy head + floppy ear + button nose
-    drawRoundedRect(ctx, dx, dy, 6, 6, outline);
-    px(dx + 1, dy + 1, 4, 4, '#f2b84b');
-    px(dx + 1, dy + 1, 3, 1, '#ffe094');
-    // Floppy darker-golden ear
-    px(dx + 4, dy + 2, 2, 3, '#b8761d');
-    // Tiny eye & nose + red collar
-    px(dx + 2, dy + 2, 1, 1, outline);
-    px(dx + 1, dy + 3, 1, 1, outline);
-    px(dx + 2, dy + 5, 4, 1, '#d94848');
-  }
-
-  // --- FRIENDLY CHIBI HEAD (18w x 16h, identical friendly style to founders!) ---
-  const hx = 7 + ox;
-  const hy = 9 + bob;
-
-  px(hx + 2, hy, 14, 16, outline);
-  px(hx + 1, hy + 1, 16, 14, outline);
-  px(hx, hy + 3, 18, 10, outline);
-  px(hx + 2, hy + 1, 14, 14, s.skin);
-  px(hx + 1, hy + 3, 16, 10, s.skin);
-  px(hx + 4, hy + 2, 10, 2, s.skinLight);
-  px(hx + 2, hy + 13, 14, 2, s.skinShade);
-
-  if (facing === 'up') {
-    px(hx + 1, hy + 1, 16, 13, s.hair);
-    px(hx + 2, hy + 11, 14, 3, s.hairShade);
-    px(hx + 4, hy + 3, 10, 2, s.hairLight);
-    if (kind === 'park-jogger') {
-      px(hx + 1, hy + 3, 16, 2, '#f05454');
-    } else if (kind === 'village-artist') {
-      drawRoundedRect(ctx, hx + 1, hy - 3, 16, 6, outline);
-      px(hx + 2, hy - 2, 14, 4, '#8c2d4b');
-    }
-    return toPixelTexture(c);
-  }
-
-  // Two symmetrical friendly eyes (ALWAYS both visible on front/left/right!)
-  const drawEye = (ex: number, ey: number, pupilDx: number) => {
-    px(ex, ey - 1, 3, 1, outline);
-    px(ex, ey, 3, 4, '#ffffff');
-    px(ex + pupilDx, ey + 1, 2, 3, '#261e1c');
-    px(ex + pupilDx, ey + 1, 1, 1, '#ffffff');
-  };
-  drawEye(hx + 3 + faceShift, hy + 7, facing === 'left' ? 0 : 1);
-  drawEye(hx + 12 + faceShift, hy + 7, facing === 'right' ? 1 : 0);
-
-  // Soft rosy blush & warm smile
-  px(hx + 2 + faceShift, hy + 11, 2, 1, s.cheek);
-  px(hx + 14 + faceShift, hy + 11, 2, 1, s.cheek);
-  px(hx + 7 + faceShift, hy + 12, 4, 1, '#8c5342');
-  px(hx + 8 + faceShift, hy + 13, 2, 1, '#b57360');
-
-  // --- HAIR & DISTINCT HEADWEAR ---
-  px(hx + 1, hy - 2, 16, 7, outline);
-  px(hx, hy + 1, 18, 5, outline);
-  px(hx + 2, hy - 1, 14, 6, s.hair);
-  px(hx + 1, hy + 1, 16, 4, s.hair);
-  px(hx + 4, hy, 10, 2, s.hairLight);
-  px(hx + 3, hy + 4, 4, 2, s.hair);
-  px(hx + 11, hy + 4, 4, 2, s.hair);
-  px(hx + 1, hy + 5, 2, 3, s.hairShade);
-  px(hx + 15, hy + 5, 2, 3, s.hairShade);
-
-  if (kind === 'park-jogger') {
-    // Vibrant sporty coral-red headband
-    px(hx, hy + 2, 18, 3, outline);
-    px(hx + 1, hy + 3, 16, 2, '#f05454');
-    px(hx + 4, hy + 3, 10, 1, '#ff8787');
-  } else if (kind === 'village-artist') {
-    // Cozy burgundy French artist beret tilted on top
-    drawRoundedRect(ctx, hx, hy - 4, 18, 6, outline);
-    px(hx + 1, hy - 3, 16, 4, '#8c2d4b');
-    px(hx + 3, hy - 3, 11, 2, '#b54567');
-    px(hx + 8, hy - 5, 2, 2, outline); // beret stem
-  } else if (kind === 'fifth-shopper') {
-    // Longer chic blonde bob framing face
-    px(hx - 1, hy + 3, 3, 9, outline);
-    px(hx + 16, hy + 3, 3, 9, outline);
-    px(hx, hy + 4, 2, 7, s.hair);
-    px(hx + 16, hy + 4, 2, 7, s.hair);
-  }
-
-  return toPixelTexture(c);
+/**
+ * The knocked-out frame for a passer-by (36x40, same canvas as their walking frames), so a
+ * taxi-struck suit still reads as the suit and not as one shared founder sprite.
+ */
+export function createPedestrianKnockedOutTexture(kind: DistrictPedestrianKind): THREE.CanvasTexture {
+  return toPixelTexture(paintPixels(knockedOutPixels(kind)));
 }
 
 

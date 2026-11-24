@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:all": "concurrently -k -n game,seller -c yellow,cyan \"vite\" \"wrangler dev\"",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "worker:dev": "wrangler dev",
@@ -42,6 +43,7 @@
     "@types/three": "^0.170.0",
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "^5.1.1",
+    "concurrently": "^10.0.7",
     "jsdom": "^31.0.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.3",

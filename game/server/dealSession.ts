@@ -18,7 +18,7 @@ import { Budget } from './budget.ts';
 import { SellerService, type AnswerOutcome, type PitchOutcome, type SellerCallContext } from './callSeller.ts';
 import type { Env } from './env.ts';
 import { isAgentEnabled } from './env.ts';
-import { VertexSellerModel } from './gemini.ts';
+import { OpenAISellerModel } from './openai.ts';
 import { consoleLogger } from './log.ts';
 import type { ConversationTurn } from './prompt.ts';
 import { DurableSpendStore } from './spendLedger.ts';
@@ -358,14 +358,10 @@ export function createSellerService(env: Env): SellerService {
     log: consoleLogger,
     // Built only when a call is actually allowed, so a disabled agent needs no credentials.
     getModel: () => {
-      if (!env.GOOGLE_VERTEX_PROJECT || !env.GOOGLE_VERTEX_LOCATION) {
-        throw new Error('GOOGLE_VERTEX_PROJECT and GOOGLE_VERTEX_LOCATION must be set');
-      }
-      return new VertexSellerModel({
-        project: env.GOOGLE_VERTEX_PROJECT,
-        location: env.GOOGLE_VERTEX_LOCATION,
-        ...(env.GOOGLE_VERTEX_API_KEY ? { apiKey: env.GOOGLE_VERTEX_API_KEY } : {}),
-      });
+      // No key = a configuration error, surfaced as a failed call (logged, the client
+      // shows the seller as unreachable). Never a made-up reply.
+      if (!env.OPENAI_API_KEY_2) throw new Error('OPENAI_API_KEY_2 must be set');
+      return new OpenAISellerModel({ apiKey: env.OPENAI_API_KEY_2 });
     },
   });
 }

@@ -1,5 +1,6 @@
 import { getPlot, SELLER_PLOT_ID, SELLER_RENT_AFTER, SELLER_RENT_BEFORE, SELLER_RENT_STEP_DAYS } from './plots';
 import type { SliceState } from './sliceModel';
+import { type Tuning, TUNING } from './tuning';
 
 /**
  * Daily rent the player owes: the rent of every plot they lease or have built on.
@@ -15,19 +16,24 @@ import type { SliceState } from './sliceModel';
  */
 export function getPlotRent(
   s: Pick<SliceState, 'day' | 'sellerStandSince'>,
-  plotId: string
+  plotId: string,
+  t: Tuning = TUNING
 ): number {
   if (plotId === SELLER_PLOT_ID) {
     const since = s.sellerStandSince;
-    return since !== null && s.day >= since + SELLER_RENT_STEP_DAYS ? SELLER_RENT_AFTER : SELLER_RENT_BEFORE;
+    const base = since !== null && s.day >= since + SELLER_RENT_STEP_DAYS ? SELLER_RENT_AFTER : SELLER_RENT_BEFORE;
+    return +(base * t.rentScale).toFixed(2);
   }
-  return getPlot(plotId).dailyRent;
+  return +(getPlot(plotId).dailyRent * t.rentScale).toFixed(2);
 }
 
-export function getDailyPlotRent(s: Pick<SliceState, 'plots' | 'day' | 'sellerStandSince'>): number {
+export function getDailyPlotRent(
+  s: Pick<SliceState, 'plots' | 'day' | 'sellerStandSince'>,
+  t: Tuning = TUNING
+): number {
   let total = 0;
   for (const [id, status] of Object.entries(s.plots)) {
-    if (status !== 'empty') total += getPlotRent(s, id);
+    if (status !== 'empty') total += getPlotRent(s, id, t);
   }
   return +total.toFixed(2);
 }

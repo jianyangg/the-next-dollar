@@ -3,7 +3,7 @@ import { lemonCupsLeft } from '../core/brewing';
 import * as Purchases from '../core/purchases';
 import { STALL_KIT_COST } from '../core/sliceModel';
 import { useGameStore } from '../state/gameStore';
-import { getPortraits } from './assets';
+import { getVendorPortraits } from './assets';
 import { PurchasePreviewView, ShopWindow, useExitRows, type ShopRow } from './shop/ShopWindow';
 import { previewPurchase } from './shop/preview';
 
@@ -21,7 +21,7 @@ import { previewPurchase } from './shop/preview';
 
 const money = (n: number) => `$${n}`;
 
-// --- Leo's lemons -----------------------------------------------------------
+// --- Rocco's lemons ---------------------------------------------------------
 
 function LemonModal() {
   const open = useGameStore((s) => s.activeModal === 'market-lemons');
@@ -49,9 +49,9 @@ function LemonModalBody() {
 
   return (
     <ShopWindow
-      title="Leo's Lemons"
+      title="Rocco's Lemons"
       menuLabel="Lemon shop"
-      portrait={{ src: getPortraits().panda, alt: 'Leo, the lemon vendor' }}
+      portrait={{ src: getVendorPortraits().grower, alt: 'Rocco, the lemon vendor' }}
       stats={[
         { label: 'CASH', value: `$${economy.cash.toFixed(2)}` },
         // Same "lemons" figure as the stand's stock tag: lemons not yet brewed.
@@ -63,7 +63,7 @@ function LemonModalBody() {
   );
 }
 
-// --- Claire's stall kits ----------------------------------------------------
+// --- June's stall kits ------------------------------------------------------
 
 function StallKitModal() {
   const open = useGameStore((s) => s.activeModal === 'market-stalls');
@@ -88,9 +88,9 @@ function StallKitModalBody() {
 
   return (
     <ShopWindow
-      title="Claire's Stall Kits"
+      title="June's Stall Kits"
       menuLabel="Stall kit shop"
-      portrait={{ src: getPortraits().bunny, alt: 'Claire, the carpentry vendor' }}
+      portrait={{ src: getVendorPortraits().carpenter, alt: 'June, the carpentry vendor' }}
       stats={[
         { label: 'CASH', value: `$${economy.cash.toFixed(2)}` },
         { label: 'KITS', value: String(economy.stallKits) },
@@ -101,7 +101,7 @@ function StallKitModalBody() {
   );
 }
 
-// --- Sam's pitchers ---------------------------------------------------------
+// --- Otis's pitchers --------------------------------------------------------
 
 function PitcherModal() {
   const open = useGameStore((s) => s.activeModal === 'market-pitchers');
@@ -141,9 +141,9 @@ function PitcherModalBody() {
 
   return (
     <ShopWindow
-      title="Sam's Pitchers"
+      title="Otis's Pitchers"
       menuLabel="Pitcher shop"
-      portrait={{ src: getPortraits().penguin, alt: 'Sam, the glassware vendor' }}
+      portrait={{ src: getVendorPortraits().glazier, alt: 'Otis, the glassware vendor' }}
       stats={[
         { label: 'CASH', value: `$${economy.cash.toFixed(2)}` },
         { label: 'OWN', value: String(economy.pitchers) },

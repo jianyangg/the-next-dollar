@@ -132,12 +132,13 @@ export function plotTarget(plot: Pick<PlotView, 'status'>): Exclude<NearbyTarget
  * The one word on a plot's sign.
  *   - empty:  its name from afar ("Corner" / "Side" / "Plaza", so the player can tell the
  *             plots apart), "Lease" up close (what E will do);
- *   - leased: "Build" near or far (building is the whole point of a leased plot);
+ *   - leased: "Build" from afar; up close "Build" with a stall kit in hand, "Buy kit"
+ *             without one (what E will actually do there);
  *   - built:  "Stand" from afar, "Open" up close.
  */
-export function plotSignWord(plot: Pick<PlotView, 'status' | 'label'>, near: boolean): string {
+export function plotSignWord(plot: Pick<PlotView, 'status' | 'label'>, near: boolean, stallKits = 0): string {
   if (plot.status === 'built') return near ? 'Open' : 'Stand';
-  if (plot.status === 'leased') return 'Build';
+  if (plot.status === 'leased') return near && stallKits < 1 ? 'Buy kit' : 'Build';
   return near ? 'Lease' : plot.label;
 }
 
@@ -147,6 +148,7 @@ export function plotSignWord(plot: Pick<PlotView, 'status' | 'label'>, near: boo
  */
 function PlotSign({ plot, near, onUse }: { plot: PlotView; near: boolean; onUse: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
+  const stallKits = useGameStore((s) => s.economy.stallKits);
   const hasPosition = usePlotAnchorKnown(plot.id);
 
   // Re-runs when the position first becomes known (the button only exists from then on).
@@ -172,7 +174,7 @@ function PlotSign({ plot, near, onUse }: { plot: PlotView; near: boolean; onUse:
       data-plot={plot.id}
     >
       {near && <Key k="E" />}
-      <span className="pt-disp world-sign-word">{plotSignWord(plot, near)}</span>
+      <span className="pt-disp world-sign-word">{plotSignWord(plot, near, stallKits)}</span>
     </button>
   );
 }
