@@ -1,7 +1,7 @@
 {
   // Browser game code (React + Three.js). Type-checked against the DOM library.
-  // The Worker (server/) gets its own config in Phase 5 so browser-only globals
-  // like `window` can never leak into server code, and vice versa.
+  // The Worker (server/) has its own config (tsconfig.worker.json) so browser-only globals
+  // like `window` cannot leak into server code. shared/ is checked here too because the browser imports it.
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "target": "ES2022",
@@ -20,5 +20,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "shared"]
 }
