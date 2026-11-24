@@ -1,13 +1,13 @@
 import { z } from 'zod';
 
 /**
- * Runtime (zod) description of the PUBLIC half of a deal, the only half the
- * server may ever receive or store.
+ * Runtime (zod) description of the PUBLIC half of a deal. The server owns its deals
+ * (shared/deals registry) and no longer accepts them from clients, so this schema is
+ * a safety net: a test parses every registered deal with it, proving each entry is
+ * well-formed and carries no `reservationPrice`.
  *
- * It mirrors `PublicDealView` in src/core/deal.ts. shared/ must not import from
- * src/ (the Worker project cannot see the browser code), so the shape is written
- * out here and shared/dealSchema.test.ts proves at compile time and at run time
- * that the two stay in step.
+ * It mirrors `PublicDealView` (shared/deals/types.ts); shared/dealSchema.test.ts
+ * proves at compile time and at run time that the two stay in step.
  *
  * Every object is `strictObject`: an unknown key is an error, not silently
  * dropped. That is what makes a stray `reservationPrice` a rejected request
@@ -51,32 +51,4 @@ export const publicDealViewSchema = z.strictObject({
   offBookFacts: z.array(offBookFactSchema).max(4),
 });
 
-/**
- * The seller's character. The client sends it with the pitch request because the
- * deal data (src/core/deal.ts) does not carry a persona yet.
- *
- * SECURITY: name, location and manner are pasted into the model's system prompt,
- * so a modified browser could use them to smuggle instructions. They are therefore
- * short and limited to ordinary letters, digits and light punctuation. The proper
- * fix is for the server to own personas and look them up by deal id; until then
- * this allow-list is the guard.
- */
-const personaText = (max: number) =>
-  z
-    .string()
-    .trim()
-    .min(1)
-    .max(max)
-    .regex(/^[\p{L}\p{N} .,'’&-]+$/u, "letters, digits and . , ' & - only");
-
-export const sellerPersonaSchema = z.strictObject({
-  /** Seller's name, e.g. "Miles". */
-  name: personaText(40),
-  /** Where the stand is, e.g. "Park Corner". */
-  location: personaText(60),
-  /** Way of talking, e.g. "warm, chatty". */
-  manner: personaText(60),
-});
-
-export type SellerPersona = z.infer<typeof sellerPersonaSchema>;
 export type PublicDealData = z.infer<typeof publicDealViewSchema>;

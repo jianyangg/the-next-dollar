@@ -1,10 +1,11 @@
-import type { PublicDealData, SellerPersona } from '../shared/dealSchema.ts';
+import type { PublicDealView, SellerPersona } from '../shared/deals/index.ts';
 import {
   ANSWER_INPUT_TOKEN_CEILING,
   CALL_DEADLINE_MS,
   CONFIG_VERSION,
   OUTPUT_TOKEN_CEILING,
   PITCH_INPUT_TOKEN_CEILING,
+  MAX_ATTEMPTS_PER_CALL,
   PROMPT_VERSION,
   RETRY_MIN_REMAINING_MS,
 } from '../shared/limits.ts';
@@ -32,16 +33,24 @@ import { validateSellerReply } from './validator.ts';
 
 export interface SellerCallContext {
   dealId: string;
-  deal: PublicDealData;
+  deal: PublicDealView;
   persona: SellerPersona;
+  /**
+   * How many more paid model attempts this deal may make, over its whole lifetime
+   * (MAX_MODEL_CALLS_PER_DEAL minus what it already used). The caller owns the
+   * counter; this service only obeys it: at 0 the model is not called at all, at 1
+   * the silent retry is skipped.
+   */
+  modelCallsRemaining: number;
 }
 
+/** `modelCalls` = how many model attempts this call actually made (0, 1 or 2), for the caller's lifetime counter. */
 export type PitchOutcome =
-  | { source: 'model'; text: string; questionsEnabled: true }
+  | { source: 'model'; text: string; questionsEnabled: true; modelCalls: number }
   /** Template: the AI was off, over budget, or failed. Questions are disabled. */
-  | { source: 'template'; text: string; questionsEnabled: false };
+  | { source: 'template'; text: string; questionsEnabled: false; modelCalls: number };
 
-export type AnswerOutcome = { source: 'model' | 'neutral'; text: string };
+export type AnswerOutcome = { source: 'model' | 'neutral'; text: string; modelCalls: number };
 
 export interface SellerServiceDeps {
   /** Called lazily, only after the gate passes, so a disabled agent needs no credentials. */
@@ -69,33 +78,36 @@ export class SellerService {
   }
 
   async pitch(ctx: SellerCallContext): Promise<PitchOutcome> {
-    const template = (): PitchOutcome => ({
+    const template = (modelCalls: number): PitchOutcome => ({
       source: 'template',
       text: buildTemplatePitch(ctx.deal, ctx.persona),
       questionsEnabled: false,
+      modelCalls,
     });
 
-    const skip = await this.gate();
+    const skip = await this.gate(ctx);
     if (skip) {
       this.logSkipped(ctx, 'pitch', skip, 'template');
-      return template();
+      return template(0);
     }
 
     const prompt = buildSellerPrompt({ deal: ctx.deal, persona: ctx.persona });
-    const text = await this.callWithRetry(ctx, 'pitch', prompt, PITCH_INPUT_TOKEN_CEILING, 'template');
-    return text === null ? template() : { source: 'model', text, questionsEnabled: true };
+    const result = await this.callWithRetry(ctx, 'pitch', prompt, PITCH_INPUT_TOKEN_CEILING, 'template');
+    return result.text === null
+      ? template(result.calls)
+      : { source: 'model', text: result.text, questionsEnabled: true, modelCalls: result.calls };
   }
 
   async answer(
     ctx: SellerCallContext,
     conversation: { pitch: string; history: ConversationTurn[]; question: string },
   ): Promise<AnswerOutcome> {
-    const neutral = (): AnswerOutcome => ({ source: 'neutral', text: NEUTRAL_ANSWER });
+    const neutral = (modelCalls: number): AnswerOutcome => ({ source: 'neutral', text: NEUTRAL_ANSWER, modelCalls });
 
-    const skip = await this.gate();
+    const skip = await this.gate(ctx);
     if (skip) {
       this.logSkipped(ctx, 'answer', skip, 'neutral');
-      return neutral();
+      return neutral(0);
     }
 
     const prompt = buildSellerPrompt({
@@ -105,13 +117,16 @@ export class SellerService {
       history: conversation.history,
       question: conversation.question,
     });
-    const text = await this.callWithRetry(ctx, 'answer', prompt, ANSWER_INPUT_TOKEN_CEILING, 'neutral');
-    return text === null ? neutral() : { source: 'model', text };
+    const result = await this.callWithRetry(ctx, 'answer', prompt, ANSWER_INPUT_TOKEN_CEILING, 'neutral');
+    return result.text === null ? neutral(result.calls) : { source: 'model', text: result.text, modelCalls: result.calls };
   }
 
   /** Returns why the model must not be called, or null if it may be. */
-  private async gate(): Promise<'agent-disabled' | 'spend-cap-reached' | null> {
+  private async gate(ctx: SellerCallContext): Promise<'agent-disabled' | 'spend-cap-reached' | 'model-call-ceiling' | null> {
     if (!this.deps.enabled) return 'agent-disabled';
+    // Per-deal ceiling (MAX_MODEL_CALLS_PER_DEAL): checked before the budget read so a
+    // deal that is out of calls costs nothing, not even a ledger round trip.
+    if (ctx.modelCallsRemaining <= 0) return 'model-call-ceiling';
     try {
       if (await this.deps.budget.isExhausted()) return 'spend-cap-reached';
     } catch (error) {
@@ -126,7 +141,7 @@ export class SellerService {
   private logSkipped(
     ctx: SellerCallContext,
     kind: 'pitch' | 'answer',
-    reason: 'agent-disabled' | 'spend-cap-reached',
+    reason: 'agent-disabled' | 'spend-cap-reached' | 'model-call-ceiling',
     fallbackUsed: 'template' | 'neutral',
   ): void {
     this.deps.log({
@@ -141,8 +156,9 @@ export class SellerService {
   }
 
   /**
-   * Up to two attempts inside one deadline. Returns the accepted text, or null if
-   * every attempt failed (the caller then substitutes its fallback).
+   * Up to two attempts inside one deadline (fewer if the deal's call ceiling is close).
+   * Returns the accepted text, or null if every attempt failed (the caller then
+   * substitutes its fallback), plus how many model attempts were made.
    */
   private async callWithRetry(
     ctx: SellerCallContext,
@@ -150,7 +166,7 @@ export class SellerService {
     prompt: { system: string; user: string },
     inputCeiling: number,
     fallback: 'template' | 'neutral',
-  ): Promise<string | null> {
+  ): Promise<{ text: string | null; calls: number }> {
     let model: SellerModel;
     try {
       model = this.deps.getModel();
@@ -158,7 +174,7 @@ export class SellerService {
       // Misconfiguration (e.g. missing Vertex project). Log loudly, then use the
       // fallback so the player is not stuck; the operator sees the error in logs.
       console.error('could not create the seller model', error);
-      return null;
+      return { text: null, calls: 0 };
     }
     const startedAt = this.now();
     const controller = new AbortController();
@@ -175,7 +191,8 @@ export class SellerService {
     let accepted: string | null = null;
 
     try {
-      for (let attempt = 1; attempt <= 2 && accepted === null; attempt++) {
+      const maxAttempts = Math.min(MAX_ATTEMPTS_PER_CALL, ctx.modelCallsRemaining);
+      for (let attempt = 1; attempt <= maxAttempts && accepted === null; attempt++) {
         const remaining = this.deadlineMs - (this.now() - startedAt);
         // The retry is only worth starting if a useful amount of time is left.
         if (attempt === 2 && remaining < RETRY_MIN_REMAINING_MS) break;
@@ -195,7 +212,7 @@ export class SellerService {
     if (last && accepted === null) last.fallbackUsed = fallback;
     for (const line of attempts) this.deps.log(line);
 
-    return accepted;
+    return { text: accepted, calls: attempts.length };
   }
 
   private async oneAttempt(

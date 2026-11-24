@@ -1,5 +1,5 @@
+import { PUBLIC_DEALS, type PublicDealView } from '../../shared/deals/index';
 import { cents } from './money';
-import { NeighborhoodId } from './neighborhoods';
 import { SliceState } from './sliceModel';
 
 /**
@@ -18,69 +18,22 @@ import { SliceState } from './sliceModel';
  * across SELLER_PERIODS, SELLER_ASK, SELLER_HIDDEN_MIN and the keyword answers in
  * `answerSellerQuestion`. Every number and fact is copied from there unchanged.
  */
-export interface BookPeriod {
-  label: string;
-  sales: number;
-  lemons: number;
-  managerWage: number;
-  rent: number;
-  profit: number;
-}
-
-export interface OffBookFact {
-  /** Stable id so the validator and the post-purchase reveal can point at it. */
-  id: string;
-  /** What the topic is, used to match a player's direct question. */
-  topic: 'staffing' | 'lease' | 'reason-for-selling';
-  /** The true statement, in plain words. */
-  statement: string;
-  /** Every number the statement contains, so validators can whitelist them. */
-  figures: number[];
-}
-
-export interface PublicDealView {
-  id: string;
-  neighborhood: NeighborhoodId;
-  askingPrice: number;
-  books: BookPeriod[];
-  offBookFacts: OffBookFact[];
-}
-
 export interface Deal extends PublicDealView {
   /** Hidden minimum the seller accepts. Engine-only. */
   reservationPrice: number;
 }
 
+// The public types live in shared/ (the server owns them); re-exported so existing imports keep working.
+export type { BookPeriod, OffBookFact, PublicDealView } from '../../shared/deals/index';
+
+/**
+ * The public half (books, asking price, off-book facts) comes from the server's
+ * registry in shared/deals, so the Worker and the game cannot drift apart. The hidden
+ * minimum is added here, in src/core only: the server never imports this file.
+ */
 export const CENTRAL_PARK_DEAL: Deal = {
-  id: 'central-park-seller-1',
-  neighborhood: 'central-park',
-  askingPrice: 60,
+  ...PUBLIC_DEALS['central-park-seller-1'].deal,
   reservationPrice: 42,
-  books: [
-    { label: '2 periods ago', sales: 14, lemons: 5, managerWage: 0, rent: 3, profit: 6 },
-    { label: 'Last period', sales: 15, lemons: 5, managerWage: 0, rent: 3, profit: 7 },
-    { label: 'Latest', sales: 16, lemons: 5, managerWage: 0, rent: 3, profit: 8 },
-  ],
-  offBookFacts: [
-    {
-      id: 'owner-unpaid-labour',
-      topic: 'staffing',
-      statement: 'The owner runs the stand personally, so manager pay is $0 on the books.',
-      figures: [0],
-    },
-    {
-      id: 'lease-rent-step-up',
-      topic: 'lease',
-      statement: 'The lease renews in 4 days and rent rises from $3 to $5 a day on renewal.',
-      figures: [4, 3, 5],
-    },
-    {
-      id: 'moving-to-brooklyn',
-      topic: 'reason-for-selling',
-      statement: 'The seller is moving to Brooklyn next week and does not want to commute uptown.',
-      figures: [],
-    },
-  ],
 };
 
 /** Strip the hidden minimum before handing a deal to the UI or the seller agent. */

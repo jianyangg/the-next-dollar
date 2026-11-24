@@ -1,4 +1,4 @@
-import type { PublicDealData, SellerPersona } from '../shared/dealSchema.ts';
+import type { PublicDealView, SellerPersona } from '../shared/deals/index.ts';
 
 /**
  * The fallback texts (CONFIGURATION.md A8). No model is involved, so they cannot
@@ -46,15 +46,17 @@ function shuffled<T>(items: T[], rand: () => number): T[] {
  * at the catch (A8: "never volunteers off-book facts"). A test runs it through the
  * real validator for many deal ids.
  *
- * Example output: "Park Corner stand for sale, $60. Latest profit: $8 a day.
+ * Example output: "A brownstone corner by Central Park stand for sale, $60. Latest profit: $8 a day.
  * Latest sales: $16 a day. The books are below."
  */
-export function buildTemplatePitch(deal: PublicDealData, persona: SellerPersona): string {
+export function buildTemplatePitch(deal: PublicDealView, persona: SellerPersona): string {
+  // Persona locations are lower-case phrases ("a brownstone corner by Central Park"); capitalise for a sentence start.
+  const where = persona.location.charAt(0).toUpperCase() + persona.location.slice(1);
   const rand = seededRandom(deal.id);
   const first = deal.books[0];
   const latest = deal.books[deal.books.length - 1];
   // Schema guarantees at least one period; this guard keeps the compiler honest too.
-  if (!first || !latest) return `${persona.location} stand for sale, $${deal.askingPrice}. The books are below.`;
+  if (!first || !latest) return `${where} stand for sale, $${deal.askingPrice}. The books are below.`;
 
   const facts: string[] = [
     `Latest sales: $${latest.sales} a day.`,
@@ -66,5 +68,5 @@ export function buildTemplatePitch(deal: PublicDealData, persona: SellerPersona)
   }
 
   const chosen = shuffled(facts, rand).slice(0, 2);
-  return [`${persona.location} stand for sale, $${deal.askingPrice}.`, ...chosen, 'The books are below.'].join(' ');
+  return [`${where} stand for sale, $${deal.askingPrice}.`, ...chosen, 'The books are below.'].join(' ');
 }

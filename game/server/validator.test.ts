@@ -102,6 +102,55 @@ describe('validator: banned phrases (A7.4)', () => {
   });
 });
 
+describe('validator: normalisation and the ASCII-only rule', () => {
+  it('rejects a banned word hidden with a zero-width space', () => {
+    expect(reasonOf(answer('I can offer a dis​count today.'))).toBe('banned-phrase');
+  });
+
+  it.each([
+    ['ZWJ', '‍'],
+    ['ZWNJ', '‌'],
+    ['BOM', '﻿'],
+    ['right-to-left mark', '‏'],
+    ['bidi override', '‮'],
+  ])('rejects a banned word hidden with a %s', (_name, hidden) => {
+    expect(reasonOf(answer(`This is a bar${hidden}gain for you.`))).toBe('banned-phrase');
+  });
+
+  it('rejects full-width letters spelling a banned word (NFKC folds them to ASCII first)', () => {
+    expect(answer('I can offer a ｄｉｓｃｏｕｎｔ today.')).toMatchObject({ ok: false, reason: 'banned-phrase' });
+  });
+
+  it('rejects a Cyrillic look-alike (U+0456) in a banned word', () => {
+    // "dіscount" renders like "discount" but is not ASCII, so it never matches /discount/ ...
+    expect(answer('I can offer a dіscount today.')).toMatchObject({ ok: false, reason: 'non-ascii-letters', detail: 'U+0456' });
+  });
+
+  it('rejects any non-ASCII letter, such as an accented e, and non-ASCII digits', () => {
+    expect(reasonOf(answer('A café on the corner.'))).toBe('non-ascii-letters');
+    expect(reasonOf(answer('Sales were ١٤ a day.'))).toBe('non-ascii-letters'); // Arabic-Indic 14
+  });
+
+  it('accepts the allow-list: curly quotes, en and em dash, star (an ellipsis becomes "...")', () => {
+    const v = answer('It’s “prime” – truly — a ★ corner…');
+    expect(v).toEqual({ ok: true, text: 'It’s “prime” – truly — a ★ corner...' });
+  });
+
+  it('returns the NORMALISED text on success (invisible characters removed, full-width folded)', () => {
+    const v = answer('Sa​les ｈit $16 a day.');
+    expect(v).toEqual({ ok: true, text: 'Sales hit $16 a day.' });
+  });
+
+  it('treats a reply made only of invisible characters as empty', () => {
+    expect(reasonOf(answer('​‍﻿'))).toBe('empty');
+  });
+
+  it('checks numbers and the volunteer guard on the normalised text too', () => {
+    expect(reasonOf(answer('Sales hit $1​8 a day.'))).toBe('number-not-in-books');
+    expect(reasonOf(pitch('The le​ase renews soon.'))).toBe('volunteered-off-book');
+  });
+});
+
 describe('validator: order of checks', () => {
   it('reports the number problem before the banned phrase when both exist', () => {
     expect(reasonOf(answer('A discount to $18!'))).toBe('number-not-in-books');

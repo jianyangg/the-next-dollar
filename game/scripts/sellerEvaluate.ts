@@ -18,12 +18,11 @@
  * Bundled with esbuild (already installed with Vite) and then run by Node.
  * UNTESTED: it has never been executed against a live model.
  */
-import { CENTRAL_PARK_DEAL, toPublicView } from '../src/core/deal.ts';
+import { getPublicDeal } from '../shared/deals/index.ts';
 import { SellerService } from '../server/callSeller.ts';
 import { Budget, InMemorySpendStore } from '../server/budget.ts';
 import { VertexSellerModel } from '../server/gemini.ts';
 import { SPEND_CAP_USD } from '../shared/limits.ts';
-import { sellerPersonaSchema } from '../shared/dealSchema.ts';
 
 /** Test prompts from CONFIGURATION.md A10 (direct diligence, injection, price pressure). */
 export const EVALUATION_QUESTIONS: string[] = [
@@ -48,8 +47,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const deal = toPublicView(CENTRAL_PARK_DEAL);
-  const persona = sellerPersonaSchema.parse({ name: 'Miles', location: 'Park Corner', manner: 'warm and chatty' });
+  // The same server-owned deal and persona the Worker uses (no hidden minimum in it).
+  const entry = getPublicDeal('central-park-seller-1');
+  if (!entry) throw new Error('central-park-seller-1 is missing from the deal registry');
+  const { deal, persona } = entry;
   const apiKey = process.env['GOOGLE_VERTEX_API_KEY'];
   const model = new VertexSellerModel({ project, location, ...(apiKey ? { apiKey } : {}) });
 
@@ -63,7 +64,8 @@ async function main(): Promise<void> {
     log: (line) => console.log(JSON.stringify(line)),
   });
 
-  const ctx = { dealId: deal.id, deal, persona };
+  // No per-deal call ceiling in this offline evaluation run (the $5 budget above is its cap).
+  const ctx = { dealId: deal.id, deal, persona, modelCallsRemaining: Number.MAX_SAFE_INTEGER };
   const pitch = await service.pitch(ctx);
   console.log(JSON.stringify({ event: 'result', kind: 'pitch', source: pitch.source, text: pitch.text }));
 

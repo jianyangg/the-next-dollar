@@ -12,6 +12,12 @@ export interface Env {
   /** One SpendLedgerDO for the whole Worker (the single running cost tally). */
   SPEND_LEDGER: DurableObjectNamespace;
 
+  /**
+   * Optional per-IP rate limiter (Workers Rate Limiting binding, `[[ratelimits]]` in
+   * wrangler.toml). Absent in tests and in setups that rate-limit with a WAF rule instead.
+   */
+  RATE_LIMITER?: RateLimit;
+
   // Vertex AI settings. OPEN QUESTION (CONFIGURATION.md open question 4): how a
   // Worker authenticates to Vertex is unproven. See server/gemini.ts.
   GOOGLE_VERTEX_PROJECT?: string;
