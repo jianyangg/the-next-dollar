@@ -2,5 +2,9 @@
   // Solution-style root: it compiles nothing itself and only points at the
   // per-environment projects. `tsc -b` type-checks each one with its own globals.
   "files": [],
-  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }]
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" },
+    { "path": "./tsconfig.worker.json" }
+  ]
 }

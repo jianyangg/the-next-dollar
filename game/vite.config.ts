@@ -7,6 +7,9 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
+    // In development the browser talks to the seller-agent Worker (`npm run worker:dev`)
+    // through the same origin, so no CORS setup is needed. Production serves /api from the Worker.
+    proxy: { '/api': 'http://127.0.0.1:8787' },
   },
   test: {
     // Most game rules are pure functions, so the fast Node environment is the default.

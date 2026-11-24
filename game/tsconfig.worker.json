@@ -1,0 +1,25 @@
+{
+  // Cloudflare Worker code (server/) plus the code it shares with the browser (shared/).
+  // No DOM library: `window` and `document` must be type errors here. Workers globals
+  // (Request, Response, DurableObject, ...) come from @cloudflare/workers-types.
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    // Relative imports carry a .ts extension so the same files also run directly
+    // under Node (scripts/sellerEvaluate.ts) without a bundler.
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["server", "shared"]
+}

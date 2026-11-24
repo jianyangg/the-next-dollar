@@ -1,0 +1,41 @@
+# Cloudflare Worker for the seller agent (docs/CONFIGURATION.md, Part A).
+# Local:  npm run worker:dev   (serves http://127.0.0.1:8787; Vite proxies /api to it)
+# Check:  npx wrangler deploy --dry-run
+# NEVER deploy without the student's approval (CONFIGURATION.md Part B, Tech Lead).
+
+name = "the-next-dollar-seller"
+main = "server/index.ts"
+compatibility_date = "2026-11-01"
+# Node-style APIs that the Google SDK expects. Whether Vertex auth works on a Worker
+# at all is CONFIGURATION.md open question 4; see server/gemini.ts.
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Kill switch (A12). Anything other than the exact string "true" keeps the AI seller
+# OFF: every deal then gets the template pitch and no questions. Flip to "true" only
+# after the Vertex spike works and the student approves live calls.
+AGENT_ENABLED = "false"
+# Non-secret Vertex settings. Fill in after the spike (see server/gemini.ts):
+# GOOGLE_VERTEX_PROJECT = "your-gcp-project-id"
+# GOOGLE_VERTEX_LOCATION = "us-central1"
+
+# Secrets are NEVER written in this file. Create them from a terminal (the student
+# does this; agents must not create secrets):
+#   npx wrangler secret put GOOGLE_VERTEX_API_KEY     # only if the spike chooses Vertex express mode
+# For local development put the same names in game/.dev.vars (git-ignored), e.g.:
+#   AGENT_ENABLED=true
+#   GOOGLE_VERTEX_API_KEY=...
+
+[[durable_objects.bindings]]
+name = "DEAL_SESSION"
+class_name = "DealSessionDO"
+
+[[durable_objects.bindings]]
+name = "SPEND_LEDGER"
+class_name = "SpendLedgerDO"
+
+# Durable Object classes must be declared in a migration before they can be used.
+# SQLite-backed storage is Cloudflare's current default for new classes.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DealSessionDO", "SpendLedgerDO"]

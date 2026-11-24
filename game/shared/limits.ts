@@ -1,0 +1,66 @@
+/**
+ * Limits and versions for the seller agent, shared by the browser and the Worker.
+ * Every value is copied from docs/CONFIGURATION.md (Part A); the section is noted
+ * beside each one so a reviewer can check the number against its source.
+ *
+ * This file must stay free of DOM and Workers globals and of heavy imports,
+ * because the browser bundle imports it too.
+ */
+
+/** A5/A6: the player may ask at most three questions per deal. */
+export const MAX_QUESTIONS = 3;
+/** A7.5: each question is at most 200 characters. */
+export const MAX_QUESTION_CHARS = 200;
+/** A7.1: a pitch or answer is at most 80 words. */
+export const MAX_REPLY_WORDS = 80;
+/** A9: hard deadline for one pitch or one answer, across all attempts. */
+export const CALL_DEADLINE_MS = 6000;
+/**
+ * A7 says "one silent retry if within the 6-second budget" but not how much time
+ * must be left. 1.5 s is OUR choice: the midterm's average call took 3.5 s, so a
+ * retry started with less than this left would almost surely be cut off anyway
+ * and would only add cost. Not from the document; flagged in the Phase 5 report.
+ */
+export const RETRY_MIN_REMAINING_MS = 1500;
+/** A9: spending cap for the final's seller agent, in US dollars. */
+export const SPEND_CAP_USD = 5;
+
+/** A13 versions, logged with every call so results can be traced to a setup. */
+export const PROMPT_VERSION = 'seller-prompt-v1';
+export const CONFIG_VERSION = 'seller-config-v1';
+
+/**
+ * A5 model settings.
+ *
+ * OPEN: the document names the model "Gemini 3.8 Flash". Vertex model ids are
+ * lower-case slugs; 'gemini-3.8-flash' is our best reading of that name and has
+ * NOT been checked against Vertex's model list. Verify before the first live call.
+ */
+export const MODEL_CONFIG = {
+  model: 'gemini-3.8-flash',
+  temperature: 1.0,
+  /** A5 "Thinking: low". gemini.ts maps this string to the SDK's ThinkingLevel enum. */
+  thinking: 'low',
+  /** A5: about 80 words of text plus thinking. */
+  maxOutputTokens: 400,
+} as const;
+
+/** A9 prices: Google's listed prices used in the midterm (estimates, not billing records). */
+export const PRICE_USD_PER_MILLION_INPUT_TOKENS = 0.75;
+export const PRICE_USD_PER_MILLION_OUTPUT_TOKENS = 3.75;
+
+/**
+ * A9 token ceilings. Used only to charge the budget for a call that timed out:
+ * the Gemini SDK warns that aborting a request client-side does NOT stop the
+ * service, so an aborted call is still billed and we cannot see its token counts.
+ */
+export const PITCH_INPUT_TOKEN_CEILING = 2000;
+export const ANSWER_INPUT_TOKEN_CEILING = 3000;
+export const OUTPUT_TOKEN_CEILING = 400;
+
+/**
+ * How long an unfinished deal conversation is kept if the client never calls
+ * `close` (tab closed, crash). Our choice: A4 only says "cleared when the deal
+ * closes". 24 hours keeps abandoned conversations from living forever.
+ */
+export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;

@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "worker:dev": "wrangler dev",
+    "seller:evaluate": "esbuild scripts/sellerEvaluate.ts --bundle --platform=node --format=esm --packages=external --outfile=node_modules/.tmp/sellerEvaluate.mjs --log-level=warning && node node_modules/.tmp/sellerEvaluate.mjs",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
