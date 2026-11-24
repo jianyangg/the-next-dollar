@@ -8,7 +8,7 @@ import {
   SUNSET_PROGRESS,
   sunArcPosition,
 } from './clock';
-import { closeDay, startNextDay } from './dayEnd';
+import { beatTheLine, closeDay, projectDay, startNextDay } from './dayEnd';
 import { CENTRAL_PARK_DEAL, resolveSealedBid, toPublicView } from './deal';
 import * as P from './purchases';
 import { getDailyPlotRent } from './rent';
@@ -194,6 +194,26 @@ describe('clock', () => {
     expect(sunArcPosition(1).up).toBe(false);
     // The sun's sideways position is the clock itself.
     expect(sunArcPosition(0.25).x).toBe(0.25);
+  });
+});
+
+describe('today vs the line (projectDay)', () => {
+  it('is the same arithmetic the closing bell books', () => {
+    let s = { ...createInitialState(), cupsInStock: 10, inventoryValue: 5, equipmentValue: 22 };
+    s = { ...s, plots: { ...s.plots, 'central-park': 'built' as const }, ownedStands: 1 };
+    s = { ...s, dayRevenue: 9, dayCogs: 1.5 };
+    const p = projectDay(s);
+    expect(p.earned).toBe(7.5);
+    expect(p.rentAndWages).toBe(2); // Central Park rent
+    expect(p.hurdleCharge).toBe(1.35); // 5% of $27 tied up
+    expect(p.line).toBe(3.35);
+    expect(p.valueCreated).toBe(4.15);
+    expect(closeDay(s)?.record.valueCreated).toBe(p.valueCreated);
+  });
+
+  it('beatTheLine: zero counts as beating it, a cent short does not', () => {
+    expect(beatTheLine({ valueCreated: 0 })).toBe(true);
+    expect(beatTheLine({ valueCreated: -0.01 })).toBe(false);
   });
 });
 

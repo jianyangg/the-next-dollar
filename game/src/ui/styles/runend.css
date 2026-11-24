@@ -1,0 +1,29 @@
+/* Run ending (RunEndModal.tsx): the 30-day verdict, above every other window. */
+.runend-scrim { z-index: var(--z-top); }
+
+.runend-window {
+  width: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+.runend-title { margin: 0; font-size: var(--t-title); }
+
+.runend-verdict {
+  font-size: var(--t-giant);
+  line-height: 1.05;
+  text-align: center;
+}
+
+.pt-paper.runend-score {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5);
+}
+.runend-row { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s-4); }
+.runend-label { font-size: var(--t-read); font-weight: 800; color: var(--ink-dim); }
+.runend-big { font-size: var(--t-giant); }
+.runend-mid { font-size: var(--t-title); color: var(--ink); }
+
+.runend-new { align-self: stretch; justify-content: center; }

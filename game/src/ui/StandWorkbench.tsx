@@ -7,7 +7,7 @@ import { getNeighborhood } from '../core/neighborhoods';
 import { useQueueLength } from '../state/anchorStore';
 import { type GameState, useGameStore } from '../state/gameStore';
 import { BrewStep } from './BrewMinigame';
-import { getConversionProb } from './format';
+import { getConversionProb } from '../core/demand';
 import { type CursorMenuItem, CursorMenu } from './kit/CursorMenu';
 import { Key } from './kit/Money';
 import { PriceCustomers } from './stand/PriceCustomers';

@@ -4,12 +4,12 @@ import { type ReactNode, useMemo, useState } from 'react';
 import {
   getDailyHurdleCharge,
   getDailyWages,
-  getDayNopat,
   getInvestedCapital,
   getTotalEquity,
   HURDLE_RATE,
   STALL_KIT_COST,
 } from '../core/sliceModel';
+import { projectDay } from '../core/dayEnd';
 import { PITCHER_COST, STAND_DIVEST_PROCEEDS, USED_PITCHER_RESALE } from '../core/purchases';
 import { getDailyPlotRent } from '../core/rent';
 import { getNeighborhood } from '../core/neighborhoods';
@@ -95,9 +95,10 @@ function BooksDrawerBody() {
   // Derived financial metrics (all from the engine's own functions)
   const investedCap = getInvestedCapital(state);
   const dailyHurdle = getDailyHurdleCharge(state);
-  const liveNopat = getDayNopat(state);
-  const projectedNopat = +(liveNopat - estRent - dailyWages).toFixed(2);
-  const projectedEva = +(projectedNopat - dailyHurdle).toFixed(2);
+  // Same formula as the HUD meter and the closing bell (core/dayEnd.ts projectDay).
+  const today = projectDay(state);
+  const projectedNopat = today.nopat;
+  const projectedEva = today.valueCreated;
 
   const totalAssets = +(state.cash + state.inventoryValue + state.equipmentValue).toFixed(2);
   const totalEquity = getTotalEquity(state);
@@ -150,7 +151,8 @@ function BooksDrawerBody() {
             <Ledger>
               <Row label="Sales" formal="revenue" value={`$${state.dayRevenue.toFixed(2)}`} tone="gain" />
               <Row label="Lemons used" formal="COGS" value={`-$${state.dayCogs.toFixed(2)}`} tone="cost" />
-              <Row label="Profit before rent" formal="NOPAT" value={`$${liveNopat.toFixed(2)}`} />
+              {/* Before rent and wages this is gross profit; "NOPAT" is the figure after them (below). */}
+              <Row label="Profit before rent" formal="gross profit" value={`$${today.earned.toFixed(2)}`} />
               <Row label="Rent per day" formal="estimate" value={`-$${estRent.toFixed(2)}`} tone="cost" />
               {dailyWages > 0 && (
                 <Row

@@ -1,6 +1,7 @@
 import { AnimatePresence, useReducedMotion } from 'motion/react';
 import * as m from 'motion/react-m';
 import { useMemo, useRef } from 'react';
+import { beatTheLine } from '../core/dayEnd';
 import { getDailyPlotRent } from '../core/rent';
 import { getNeighborhood } from '../core/neighborhoods';
 import { getRunSeed } from '../core/runRandom';
@@ -8,7 +9,7 @@ import { getDailyWages, getInvestedCapital, HURDLE_RATE } from '../core/sliceMod
 import type { DayRecord } from '../core/sliceModel';
 import { INPUT_PRIORITY } from '../state/input';
 import { useGameStore } from '../state/gameStore';
-import { buildReceipt, gradeTone, splitProfit } from './books/receipt';
+import { buildReceipt, splitProfit } from './books/receipt';
 import type { ReceiptRow, Tone } from './books/receipt';
 import { useReveal } from './books/useReveal';
 import { fmtSignedMoney } from './format';
@@ -19,7 +20,13 @@ import { ValueTrajectoryStrip } from './ValueTrajectoryStrip';
 import './styles/eod.css';
 
 /**
- * 8:00 PM closing bell: the end-of-day receipt, printed on PAPER over a dark scrim.
+ * Closing bell: the day's VERDICT first, then the receipt that explains it.
+ *
+ * The day has one goal (beat the line: rent + wages + the 5% charge), so the screen
+ * leads with one beat: "BEAT THE LINE" in green or "MISSED THE LINE" in red, a stamp
+ * that slams down when the receipt finishes printing, and the run's tally of days
+ * beaten. The old letter grade is gone: it was S on almost every day (it graded the
+ * return, which is far above 20% on any normal day), so it carried no information.
  *
  * The gate subscribes only to the closed-day record (non-null while the screen shows);
  * the body mounts when it exists. The gate hands the record to the body as a PROP (not a
@@ -65,7 +72,9 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
       return;
     }
     advanced.current = true;
-    actions.startNextDay();
+    // After the last day there is no next morning: show the final results instead.
+    if (lastDay) actions.finishRun();
+    else actions.startNextDay();
   };
 
   // A modal: blocking, so WASD and friends never move the player behind the receipt.
@@ -81,14 +90,20 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
   );
 
   const lastDay = eodRecord.day >= maxDays;
-  const tone = gradeTone(eodRecord.grade);
+  const won = beatTheLine(eodRecord);
+  const tone = won ? 'gain' : 'cost';
+  // Days beaten so far, from the run's own history (this day is already in it).
+  const history = useGameStore((s) => s.economy.dayHistory);
+  const daysBeaten = history.filter(beatTheLine).length;
 
   return (
     <m.div className="pt-scrim" {...backdropMotion}>
       <m.div className="eodr-frame" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="eodr-card" role="dialog" aria-label={`Day ${eodRecord.day} closed`}>
           <header className="eodr-head">
-            <h2 className="pt-disp eodr-title">DAY {eodRecord.day} CLOSED</h2>
+            <h2 className={`pt-disp eodr-title ${won ? 'pt-gain-sign' : 'pt-cost-sign'}`}>
+              {won ? 'BEAT THE LINE' : 'MISSED THE LINE'}
+            </h2>
             <span className="eodr-where">
               {neighborhood.name} · Day {eodRecord.day} of {maxDays}
             </span>
@@ -136,11 +151,17 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
           </section>
 
           <aside className="eodr-side">
-            <div className={`pt-stamp eodr-stamp is-${tone} ${stage.stamped ? '' : 'is-pre'}`} aria-label={`Grade ${eodRecord.grade}`}>
-              {eodRecord.grade}
+            <div className={`pt-stamp eodr-stamp is-${tone} ${stage.stamped ? '' : 'is-pre'}`} aria-label={won ? 'Day won' : 'Day missed'}>
+              {won ? 'WON' : 'MISSED'}
             </div>
 
             <div className="pt-paper eodr-run">
+              <div className="eodr-tally" aria-label={`Days beaten ${daysBeaten} of ${eodRecord.day}`}>
+                <span className="eodr-run-label">Days beaten</span>
+                <span className="pt-disp eodr-tally-num">
+                  {daysBeaten}/{eodRecord.day}
+                </span>
+              </div>
               <div className="eodr-run-label">Total so far ({maxDays} days)</div>
               <div className={`pt-disp eodr-run-big ${eodRecord.cumulativeValue >= 0 ? 'pt-gain-paper' : 'pt-cost-paper'}`}>
                 {fmtSignedMoney(eodRecord.cumulativeValue)}
@@ -150,10 +171,14 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
 
             <button type="button" className="pt-btn eodr-next" onClick={advance}>
               <Key k="E" />
-              <span>{lastDay ? 'KEEP PLAYING' : 'NEXT DAY'}</span>
+              <span>{lastDay ? 'FINAL RESULTS' : 'NEXT DAY'}</span>
             </button>
-            {/* Run seed lets a playtester report this exact run (replay with ?seed=N). */}
-            <div className="eodr-seed">Run seed {getRunSeed()}</div>
+            {/* Run seed (to replay a run with ?seed=N) is a testing tool, so it shows only in
+                dev builds opened with ?dev. `import.meta.env.DEV` is a compile-time constant,
+                so production bundles drop this line entirely. */}
+            {import.meta.env.DEV && new URLSearchParams(window.location.search).has('dev') && (
+              <div className="eodr-seed">Run seed {getRunSeed()}</div>
+            )}
           </aside>
         </div>
       </m.div>

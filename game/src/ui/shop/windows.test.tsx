@@ -20,6 +20,7 @@ import { dispatchKeyDown, resetInputRouterForTests } from '../../state/input';
 import { resetGameStore, useGameStore } from '../../state/gameStore';
 import { FounderModal } from '../FounderModal';
 import { IntroStory } from '../IntroStory';
+import { newRunUrl, RunEndModal } from '../RunEndModal';
 import { ManhattanMapModal } from '../ManhattanMapModal';
 import { MarketModals } from '../MarketModals';
 import { PlotLeaseModal } from '../PlotLeaseModal';
@@ -110,6 +111,26 @@ describe('opening story', () => {
     expect(screen.queryByText('Close')).toBeNull();
     act(() => screen.getByText('Replay intro').click());
     expect(useGameStore.getState().introOpen).toBe(true);
+  });
+});
+
+describe('run ending', () => {
+  it('gives the 30-day verdict from the run total and the days beaten', () => {
+    const history = [{ valueCreated: 5 }, { valueCreated: -1 }, { valueCreated: 2 }] as never;
+    useGameStore.setState({
+      runOver: true,
+      economy: { ...createInitialState(), totalValueCreated: 6, dayHistory: history },
+    });
+    render(wrap(<RunEndModal />));
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('You beat the line');
+    expect(text).toContain('+$6.00');
+    expect(text).toContain('2/3');
+  });
+
+  it('a new run drops the seed but keeps dev mode', () => {
+    expect(newRunUrl('/', '?seed=42&dev')).toBe('/?dev');
+    expect(newRunUrl('/play', '?seed=42')).toBe('/play');
   });
 });
 

@@ -12,6 +12,7 @@ import { IntroStory } from './ui/IntroStory';
 import { MapModalHost } from './ui/MapModalHost';
 import { MarketModals } from './ui/MarketModals';
 import { PlotLeaseModal } from './ui/PlotLeaseModal';
+import { RunEndModal } from './ui/RunEndModal';
 import { SellerDealModal } from './ui/SellerDealModal';
 import { TravelTransition } from './ui/TravelTransition';
 import { TutorialBar } from './ui/TutorialBar';
@@ -114,6 +115,9 @@ export function App() {
 
       {/* 8:00 PM Closing Bell — End-of-Day Scorecard Modal */}
       <EndOfDayModal />
+
+      {/* After day 30: the run's verdict and New run */}
+      <RunEndModal />
 
       {/* 2.5D Manhattan Island Map Modal */}
       <MapModalHost />

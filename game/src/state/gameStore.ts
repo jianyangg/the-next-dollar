@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { applyBrewOutcome, type BrewKind, type BrewTier, pickChallenge, type StirKey } from '../core/brewing';
 import { advanceClock, type ClockSpeed, isClockPaused } from '../core/clock';
-import { closeDay as closeBooks, startNextDay as advanceToNextDay } from '../core/dayEnd';
+import { beatTheLine, closeDay as closeBooks, projectDay, startNextDay as advanceToNextDay } from '../core/dayEnd';
 import { CENTRAL_PARK_DEAL, CENTRAL_PARK_DEAL_ID, resolveSealedBid, toPublicView } from '../core/deal';
 import { type BrewGameState, initGame, pressGame, pressStirKey, stepGame } from '../core/minigames';
 import { getNeighborhood, type NeighborhoodId } from '../core/neighborhoods';
@@ -95,6 +95,11 @@ export interface GameData {
   clockSpeed: ClockSpeed;
   /** The closing-bell scorecard; non-null while the end-of-day modal is showing. */
   eodRecord: DayRecord | null;
+  /**
+   * The 30-day career is over: the last day's receipt was closed and the final results
+   * screen is showing. Nothing runs after this; the only way on is a new run.
+   */
+  runOver: boolean;
 
   // --- stand (what happens behind the counter) ---
   workingAtStand: boolean;
@@ -230,6 +235,8 @@ export interface GameActions {
   tickClock: (realDtSeconds: number) => void;
   closeDay: () => void;
   startNextDay: () => void;
+  /** Close the last day's receipt and show the final results (instead of a next day). */
+  finishRun: () => void;
 
   // seller deal (each forwards to the deal machine, which enforces the rules)
   askSeller: (question: string) => void;
@@ -269,6 +276,7 @@ export function createInitialGameData(): GameData {
     timeProgress: 0,
     clockSpeed: 1,
     eodRecord: null,
+    runOver: false,
     workingAtStand: false,
     brewedCups: 0,
     brewGame: null,
@@ -319,7 +327,8 @@ export const selectClockPaused = (s: GameData): boolean =>
       s.booksOpen ||
       s.activeModal !== null ||
       s.mapOpen ||
-      s.eodRecord !== null,
+      s.eodRecord !== null ||
+      s.runOver,
     day: s.economy.day,
     maxDays: s.economy.maxDays,
     ownedStands: s.economy.ownedStands,
@@ -507,13 +516,24 @@ export const useGameStore = create<GameState>()(
         const s = get();
         const reviewId = s.nextReviewId;
         const nextCombo = s.combo + 1;
+        const wasBelowLine = projectDay(s.economy).valueCreated < 0;
         patch({ nextReviewId: reviewId + 1, combo: nextCombo, cashPulseKey: s.cashPulseKey + 1 }, 'saleCounters');
         commitEconomy(applySale(s.economy, patienceRatio, reviewId), 'applySale', {
           brewedCups: Math.max(0, s.brewedCups - 1),
         });
-        soundEngine.playCoin(nextCombo);
         getScene()?.burstSaleSparkles(nextCombo);
         pushSalePop(salePopLabel(s.economy.pricePerCup, nextCombo), nextCombo);
+
+        // THE MOMENT OF THE DAY: this sale pushed today's earnings past the line (rent +
+        // wages + the 5% charge). It gets its own sound and note instead of the usual
+        // coin, so beating the line feels like the goal it is. If a later purchase
+        // raises the line again, the next crossing celebrates again.
+        if (wasBelowLine && projectDay(get().economy).valueCreated >= 0) {
+          soundEngine.playLineCrossed();
+          pushToast('Beat the line!', 'positive', 'own-stand');
+        } else {
+          soundEngine.playCoin(nextCombo);
+        }
         return nextCombo;
       };
 
@@ -1018,7 +1038,14 @@ export const useGameStore = create<GameState>()(
             brewedCups: 0,
             eodRecord: closed.record,
           });
-          soundEngine.playDayEnd();
+          // A won day and a lost day must not sound the same.
+          if (beatTheLine(closed.record)) soundEngine.playDayEnd();
+          else soundEngine.playDayLost();
+        },
+
+        finishRun: () => {
+          soundEngine.playClick();
+          patch({ eodRecord: null, runOver: true }, 'finishRun');
         },
 
         startNextDay: () => {

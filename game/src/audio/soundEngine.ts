@@ -17,7 +17,12 @@ export interface SoundEngine {
   playClick(): void;
   playBuy(): void;
   playReject(): void;
+  /** Closing bell on a day that beat the 5% line (bright fanfare). */
   playDayEnd(): void;
+  /** Closing bell on a day that missed the line: a short falling "wah-wah", clearly a loss. */
+  playDayLost(): void;
+  /** The moment today's earnings pass the line during play: a rising "level up" run. */
+  playLineCrossed(): void;
   playTravel(): void;
   playHonkKo(): void;
   playPerfect(): void;
@@ -551,6 +556,52 @@ class WebAudioSoundEngine implements SoundEngine {
           attack: 0.03,
           duration: 0.56,
           gain: 0.11,
+        });
+      });
+    } catch {
+      // Ignore safely.
+    }
+  }
+
+  public playDayLost(): void {
+    const ctx = this.getActiveSfxContext();
+    if (!ctx || !this.sfxGain) return;
+    try {
+      const now = ctx.currentTime;
+      // Falling minor steps (E4 -> D#4 -> D4 -> C#4), the last one held: "missed it".
+      const notes = [329.63, 311.13, 293.66, 277.18];
+      notes.forEach((freq, i) => {
+        const isLast = i === notes.length - 1;
+        this.playTone(ctx, this.sfxGain!, {
+          type: 'square',
+          freq,
+          start: now + i * 0.2,
+          attack: 0.01,
+          duration: isLast ? 0.6 : 0.18,
+          gain: 0.12,
+        });
+      });
+    } catch {
+      // Ignore safely.
+    }
+  }
+
+  public playLineCrossed(): void {
+    const ctx = this.getActiveSfxContext();
+    if (!ctx || !this.sfxGain) return;
+    try {
+      const now = ctx.currentTime;
+      // Fast rising C-major run ending an octave up (C5 E5 G5 C6 E6): "level up".
+      const notes = [523.25, 659.25, 783.99, 1046.5, 1318.51];
+      notes.forEach((freq, i) => {
+        const isLast = i === notes.length - 1;
+        this.playTone(ctx, this.sfxGain!, {
+          type: 'square',
+          freq,
+          start: now + i * 0.05,
+          attack: 0.004,
+          duration: isLast ? 0.4 : 0.07,
+          gain: isLast ? 0.16 : 0.12,
         });
       });
     } catch {

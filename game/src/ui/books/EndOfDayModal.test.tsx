@@ -91,7 +91,33 @@ describe('EndOfDayModal', () => {
     }
     expect(text).toContain('Money tied up');
     expect(text).not.toMatch(/NOPAT|EVA|ROIC/);
-    expect(screen.getByLabelText('Grade S')).toBeTruthy();
+    // The verdict leads: this record's +$16.85 beat the line.
+    expect(text).toContain('BEAT THE LINE');
+    expect(screen.getByLabelText('Day won')).toBeTruthy();
+    expect(text).not.toContain('Run seed'); // a testing tool, not shown to players
     fireEvent.click(screen.getByRole('button', { name: /next day/i }));
+  });
+
+  it('a day below the line says so in red, with the missed stamp', () => {
+    useGameStore.setState({ eodRecord: { ...useGameStore.getState().eodRecord!, valueCreated: -1.4 } });
+    render(<EndOfDayModal />);
+    act(() => void vi.advanceTimersByTime(5000));
+    expect(document.body.textContent).toContain('MISSED THE LINE');
+    expect(screen.getByLabelText('Day missed')).toBeTruthy();
+  });
+
+  it('on the last day the button opens the final results instead of a next day', () => {
+    const finishRun = vi.fn();
+    const startNextDay = vi.fn();
+    const s = useGameStore.getState();
+    useGameStore.setState({
+      eodRecord: { ...s.eodRecord!, day: s.economy.maxDays },
+      actions: { ...s.actions, finishRun, startNextDay },
+    });
+    render(<EndOfDayModal />);
+    press('e'); // skip the printing
+    press('e');
+    expect(finishRun).toHaveBeenCalledTimes(1);
+    expect(startNextDay).not.toHaveBeenCalled();
   });
 });

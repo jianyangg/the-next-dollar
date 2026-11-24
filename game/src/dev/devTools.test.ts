@@ -17,6 +17,8 @@ vi.mock('../audio/soundEngine', () => {
       playBrew: noop,
       playPerfect: noop,
       playDayEnd: noop,
+      playDayLost: noop,
+      playLineCrossed: noop,
       playTravel: noop,
       playHonkKo: noop,
     },

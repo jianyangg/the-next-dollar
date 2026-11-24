@@ -18,6 +18,8 @@ vi.mock('../audio/soundEngine', () => {
       playBrew: vi.fn(),
       playPerfect: vi.fn(),
       playDayEnd: vi.fn(),
+      playDayLost: vi.fn(),
+      playLineCrossed: vi.fn(),
       playTravel: vi.fn(),
       playHonkKo: vi.fn(),
     },
@@ -33,7 +35,14 @@ import { createInitialState, type SliceState } from '../core/sliceModel';
 import { anchorStore, resetAnchorStore } from './anchorStore';
 import { registerScene } from './sceneBridge';
 import type { SellerClient } from '../deal/sellerClient';
-import { resetGameStore, setSellerClientForTests, TRAVEL_COVER_MS, TRAVEL_REVEAL_MS, useGameStore } from './gameStore';
+import {
+  resetGameStore,
+  selectClockPaused,
+  setSellerClientForTests,
+  TRAVEL_COVER_MS,
+  TRAVEL_REVEAL_MS,
+  useGameStore,
+} from './gameStore';
 
 const store = () => useGameStore.getState();
 const actions = () => useGameStore.getState().actions;
@@ -385,6 +394,56 @@ describe('navigation', () => {
     expect(store().workingAtStand).toBe(true);
     actions().handleEscape();
     expect(store().workingAtStand).toBe(false);
+  });
+});
+
+describe('the line and the ending', () => {
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) =>
+      setTimeout(() => cb(performance.now() + 10_000), 16)
+    );
+    vi.stubGlobal('cancelAnimationFrame', (id: ReturnType<typeof setTimeout>) => clearTimeout(id));
+    registerScene({ serveFrontCustomer: () => ({ patienceRatio: 1 }), burstSaleSparkles: () => {} } as unknown as Parameters<typeof registerScene>[0]);
+    anchorStore.setState({ queue: [1, 2, 3, 4].map((id) => ({ id })) } as never);
+  });
+  afterEach(() => {
+    registerScene(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('the sale that pushes today past the line plays the crossing sting once, not a coin', () => {
+    // Built Central Park stand: line = $2 rent + 5% of $27 tied up = $3.35. At $3 a cup
+    // minus $0.50 lemons, cup 1 earns $2.50 (below), cup 2 makes $5.00 (past the line).
+    useGameStore.setState({ workingAtStand: true, brewedCups: 3, economy: tutorialEconomyFromCore() });
+    setEconomy({ equipmentValue: 22, inventoryValue: 5 });
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(50);
+    expect(soundEngine.playLineCrossed).not.toHaveBeenCalled();
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(50);
+    expect(soundEngine.playLineCrossed).toHaveBeenCalledTimes(1);
+    expect(store().toasts.some((t) => t.text === 'Beat the line!')).toBe(true);
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(50);
+    expect(soundEngine.playLineCrossed).toHaveBeenCalledTimes(1); // already past it
+  });
+
+  it('a day that missed the line rings the losing bell', () => {
+    useGameStore.setState({ economy: tutorialEconomyFromCore() }); // rent due, no sales
+    actions().closeDay();
+    expect(store().eodRecord?.valueCreated).toBeLessThan(0);
+    expect(soundEngine.playDayLost).toHaveBeenCalledTimes(1);
+    expect(soundEngine.playDayEnd).not.toHaveBeenCalled();
+  });
+
+  it('finishRun ends the run: receipt closed, results open, clock paused', () => {
+    useGameStore.setState({ eodRecord: { day: 30 } as never, timeProgress: 0.3 });
+    actions().finishRun();
+    expect(store().eodRecord).toBeNull();
+    expect(store().runOver).toBe(true);
+    actions().tickClock(1);
+    // tickClock itself advances; the LOOP checks selectClockPaused, which must say paused.
+    expect(selectClockPaused(store())).toBe(true);
   });
 });
 

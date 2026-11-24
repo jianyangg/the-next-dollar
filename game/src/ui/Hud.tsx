@@ -5,13 +5,15 @@ import { useGameStore } from '../state/gameStore';
 import { getIcons, getPortraits } from './assets';
 import { fmtSignedMoney } from './format';
 import { CountUp, Key } from './kit/Money';
+import { LineMeter } from './LineMeter';
 import { SunArc } from './SunArc';
 import './styles/hud.css';
 
 /**
  * The heads-up display: three "sign plates" bolted over the 3D scene.
  *   top-left     founder portrait, Day N/30, place name, sun-arc clock (+ 1x/2x speed)
- *   top-right    cash (big, counts up) and the running "Value created"
+ *   top-right    cash (big, counts up), the live "today vs the line" meter (the day's
+ *                goal) and the run's total value created (the 30-day score)
  *   bottom-right [M] Map, [B] Books and a sound toggle
  *
  * The star rating is not here on purpose: a game HUD shows a few things at a glance, and
@@ -105,8 +107,9 @@ export function Hud() {
           <img src={icons.coin} alt="" className="hud-coin" />
           <CountUp value={cash} format={fmtCash} className="pt-disp hud-cash-num" />
         </div>
+        <LineMeter />
         <div className="hud-value">
-          <span className="hud-value-label">Value created</span>
+          <span className="hud-value-label">Total</span>
           <CountUp
             value={totalValueCreated}
             format={fmtSignedMoney}

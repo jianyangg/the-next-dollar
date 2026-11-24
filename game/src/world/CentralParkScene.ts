@@ -115,6 +115,14 @@ interface Pedestrian {
   speed: number;
   animTimer: number;
   canBuy: boolean;
+  /**
+   * True once this walker has looked at the stand's price on the current pass and
+   * decided (buy or not). Reset when they respawn as a new walker, so each pass is one
+   * roll against the buy chance, never one roll per frame.
+   */
+  decidedAtStand: boolean;
+  /** Seconds left showing an annoyed face after walking past because of the price. */
+  passTimer: number;
   boughtCooldown: number;
   state: 'strolling' | 'walking-to-slot' | 'queued' | 'leaving';
   queueSlot: number;
@@ -382,6 +390,12 @@ export class CentralParkScene {
   private vehicles: TrafficVehicle[] = [];
   private pitcherSprites: THREE.Sprite[] = [];
   private standOpen = true;
+  /**
+   * Chance (0..1) that a walker reaching the stand buys at today's price in this
+   * district (core/demand.ts getConversionProb, pushed in by connectScene). Starts at 0
+   * and is set before the first frame; a stand never sells on a made-up chance.
+   */
+  private buyChance = 0;
   private rafId = 0;
   private clock = new THREE.Clock();
   private elapsedTime = 0;
@@ -514,6 +528,11 @@ export class CentralParkScene {
 
   public setStandOpen(open: boolean): void {
     this.standOpen = open;
+  }
+
+  /** The buy chance for the current price and district (see `buyChance`). */
+  public setBuyChance(chance: number): void {
+    this.buyChance = THREE.MathUtils.clamp(chance, 0, 1);
   }
 
   public setPlotState(status: PlotStatus): void {
@@ -3192,6 +3211,8 @@ export class CentralParkScene {
         speed: a.speed,
         animTimer: this.rng.cosmetic() * 5,
         canBuy: true,
+        decidedAtStand: false,
+        passTimer: 0,
         boughtCooldown: idx === 0 ? 0.5 : 1.5 + idx * 0.7,
         state: 'strolling',
         queueSlot: -1,
@@ -3229,6 +3250,8 @@ export class CentralParkScene {
     ped.state = 'strolling';
     ped.queueSlot = -1;
     ped.boughtCooldown = 1.2 + this.rng.gameplay() * 2.5;
+    ped.decidedAtStand = false;
+    ped.passTimer = 0;
     ped.careful = this.rng.cosmetic() < 0.8;
     ped.koTimer = 0;
     ped.soulSprite.visible = false;
@@ -3761,11 +3784,21 @@ export class CentralParkScene {
         this.plotStatus === 'built' &&
         this.standOpen &&
         ped.canBuy &&
+        !ped.decidedAtStand &&
         ped.boughtCooldown <= 0 &&
         this.queue.length < QUEUE_SLOTS.length &&
         this.queueJoinCooldown <= 0 &&
         Math.abs(ped.x - OWN_STAND_POS.x) < 2.6
       ) {
+        // PRICE DECIDES: one roll per pass against the buy chance for today's price.
+        // Rolled only when there is room in line, so a full line never counts as a
+        // "no" to the price. A walker who passes shows a short annoyed face, so the
+        // player can SEE that the price, not luck, cost them the sale.
+        ped.decidedAtStand = true;
+        if (this.rng.gameplay() >= this.buyChance) {
+          ped.passTimer = 1.4;
+          continue;
+        }
         ped.queueSlot = this.queue.length;
         ped.state = 'walking-to-slot';
         ped.patience = QUEUE_MAX_PATIENCE;
@@ -3794,10 +3827,15 @@ export class CentralParkScene {
     // chosen from how much patience is left. Runs after the loop so every `continue`
     // path above is covered, and only swaps the texture when the mood actually changes.
     for (const ped of this.pedestrians) {
-      const show = ped.state === 'queued' && ped.koTimer <= 0;
+      if (ped.passTimer > 0) ped.passTimer = Math.max(0, ped.passTimer - dt);
+      const passing = ped.passTimer > 0 && ped.state === 'strolling';
+      const show = (ped.state === 'queued' || passing) && ped.koTimer <= 0;
       ped.moodSprite.visible = show;
       if (!show) continue;
-      const mood = moodForPatience(THREE.MathUtils.clamp(ped.patience / ped.maxPatience, 0, 1));
+      // Walking past over the price = the angry face; in line = patience decides.
+      const mood = passing
+        ? 'angry'
+        : moodForPatience(THREE.MathUtils.clamp(ped.patience / ped.maxPatience, 0, 1));
       if (mood !== ped.mood) {
         ped.mood = mood;
         const mat = ped.moodSprite.material as THREE.SpriteMaterial;

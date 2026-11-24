@@ -16,7 +16,7 @@ import { dispatchKeyDown, INPUT_PRIORITY, pushInputLayer, resetInputRouterForTes
 import { resetAnchorStore } from '../../state/anchorStore';
 import { resetGameStore, useGameStore } from '../../state/gameStore';
 import { getNeighborhood } from '../../core/neighborhoods';
-import { getConversionProb } from '../format';
+import { getConversionProb } from '../../core/demand';
 import { StandWorkbench } from '../StandWorkbench';
 import { litCustomers } from './PriceCustomers';
 

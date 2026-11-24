@@ -24,7 +24,7 @@
   align-items: baseline;
   gap: var(--s-4);
 }
-.eodr-title { margin: 0; font-size: var(--t-hero); color: var(--sign-text); }
+.eodr-title { margin: 0; font-size: var(--t-hero); } /* colour: the verdict's gain/cost class */
 .eodr-where { font-size: var(--t-body); color: var(--sign-dim); }
 
 /* ---- Receipt rows ---- */
@@ -81,9 +81,10 @@
 .eodr-side { display: flex; flex-direction: column; gap: var(--s-5); }
 .pt-stamp.eodr-stamp {
   align-self: center;
-  width: 132px;
-  height: 132px;
-  font-size: 84px;
+  width: auto;
+  height: auto;
+  padding: var(--s-2) var(--s-4);
+  font-size: var(--t-giant);
   transition: transform var(--dur-stamp) var(--ease-stamp), opacity var(--dur-stamp);
 }
 .pt-stamp.eodr-stamp.is-gain { color: var(--gain-sign); }
@@ -94,6 +95,9 @@
 
 .pt-paper.eodr-run { padding: var(--s-3) var(--s-4) var(--s-4); margin-bottom: var(--s-2); }
 .eodr-run-label { font-size: var(--t-body); font-weight: 800; color: var(--ink-dim); }
+/* "Days beaten 4/7": the run's win tally, right above the money total. */
+.eodr-tally { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--s-2); }
+.eodr-tally-num { font-size: var(--t-title); color: var(--ink); }
 .eodr-run-big { font-size: var(--t-giant); line-height: 1.05; margin-bottom: var(--s-2); }
 .eodr-next { align-self: stretch; }
 .eodr-seed { font-size: var(--t-small); color: var(--sign-dim); text-align: right; }

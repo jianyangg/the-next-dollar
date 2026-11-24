@@ -1,4 +1,6 @@
 import { cosmeticRandom, gameplayRandom } from '../core/runRandom';
+import { getConversionProb } from '../core/demand';
+import { getNeighborhood } from '../core/neighborhoods';
 import { CentralParkScene } from '../world/CentralParkScene';
 import { publishAnchors } from './anchorStore';
 import { selectCurrentPlotStatus, selectStandOpen, useGameStore } from './gameStore';
@@ -86,6 +88,13 @@ export function connectScene(container: HTMLElement): () => void {
     useGameStore.subscribe((s) => s.timeProgress, (v) => scene.setTimeOfDay(v), {
       fireImmediately: true,
     }),
+
+    // Price -> demand: the same chance the price menu shows (core/demand.ts).
+    useGameStore.subscribe(
+      (s) => getConversionProb(s.economy.pricePerCup, getNeighborhood(s.neighborhoodId).priceSensitivity),
+      (chance) => scene.setBuyChance(chance),
+      { fireImmediately: true }
+    ),
   ];
 
   return () => {

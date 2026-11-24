@@ -1,6 +1,8 @@
 /**
  * Ten pixel customers standing for "out of 10 passers-by, how many buy at this price".
- * Same number as the old "72%" text (getConversionProb), drawn instead of written.
+ * Same number as the old "72%" text (core/demand.ts getConversionProb), drawn instead of
+ * written. The 3D scene rolls against the SAME number when a walker reaches the stand,
+ * so the people lit here are a true preview of how many will buy.
  */
 
 /** How many of the 10 figures are lit: the buy chance rounded to the nearest tenth. */

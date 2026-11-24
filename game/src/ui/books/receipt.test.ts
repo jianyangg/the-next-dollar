@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DayRecord } from '../../core/sliceModel';
-import { buildReceipt, cupsNote, gradeTone, splitProfit } from './receipt';
+import { buildReceipt, cupsNote, splitProfit } from './receipt';
 
 const record = (over: Partial<DayRecord> = {}): DayRecord => ({
   day: 4,
@@ -85,14 +85,5 @@ describe('splitProfit', () => {
 
   it('does not draw a bar when there is no profit', () => {
     expect(splitProfit(record({ nopat: -1, hurdleCharge: 2, valueCreated: -3 }))).toEqual({ kind: 'loss', short: 3 });
-  });
-});
-
-describe('gradeTone', () => {
-  it('maps grades to colours', () => {
-    expect(gradeTone('S')).toBe('gain');
-    expect(gradeTone('B')).toBe('gain');
-    expect(gradeTone('C')).toBe('flat');
-    expect(gradeTone('D')).toBe('cost');
   });
 });

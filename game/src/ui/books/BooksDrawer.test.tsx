@@ -32,7 +32,9 @@ describe('BooksDrawer', () => {
   it('shows income figures first, with formal terms in brackets', () => {
     render(<BooksDrawer />);
     expect(screen.getByText('Sales')).toBeTruthy();
-    expect(document.body.textContent).toContain('(NOPAT)');
+    // Revenue minus lemons is gross profit; NOPAT is only the figure after rent and wages.
+    expect(document.body.textContent).toContain('(gross profit)');
+    expect(document.body.textContent).toContain('(projected NOPAT)');
     expect(document.body.textContent).toContain('$9.00');
   });
 

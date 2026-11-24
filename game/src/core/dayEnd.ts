@@ -10,7 +10,51 @@ import {
 } from './sliceModel';
 
 /**
- * Closing the books at the 8:00 PM bell.
+ * TODAY VS THE LINE: what the day would score if the bell rang right now.
+ *
+ * The player's opponent each day is "the line": everything today must cover before
+ * any value is created = rent + wages (paid in cash) + the 5% charge on money tied up
+ * (an opportunity cost, never paid). `earned` is the gross profit from cups sold so far.
+ * Value created today = earned - line. Positive = the day beats the line.
+ *
+ * This is the ONE formula for that number. The live HUD meter, the Books tab and the
+ * closing bell (closeDay below) all call it, so what the player watches during the day
+ * is exactly what the receipt will say at the bell.
+ */
+export interface DayProjection {
+  /** Revenue minus cost of the cups sold so far today. */
+  earned: number;
+  rentAndWages: number;
+  /** 5% of money tied up in stock and equipment right now. */
+  hurdleCharge: number;
+  /** rentAndWages + hurdleCharge: what `earned` has to beat. */
+  line: number;
+  /** earned - rent - wages (NOPAT). */
+  nopat: number;
+  /** earned - line. */
+  valueCreated: number;
+}
+
+export function projectDay(s: SliceState): DayProjection {
+  const earned = cents(s.dayRevenue - s.dayCogs);
+  const rentAndWages = cents(getDailyPlotRent(s) + getDailyWages(s));
+  const hurdleCharge = getDailyHurdleCharge(s);
+  const line = cents(rentAndWages + hurdleCharge);
+  return {
+    earned,
+    rentAndWages,
+    hurdleCharge,
+    line,
+    nopat: cents(earned - rentAndWages),
+    valueCreated: cents(earned - line),
+  };
+}
+
+/** Did a closed day beat the line? (Zero counts as beating it: the money earned its 5%.) */
+export const beatTheLine = (r: Pick<DayRecord, 'valueCreated'>): boolean => r.valueCreated >= 0;
+
+/**
+ * Closing the books at the closing bell.
  *
  * Economic-value accounting in one place:
  *   NOPAT          = revenue − cost of goods sold − (rent + wages)
@@ -24,10 +68,7 @@ import {
 export function closeDay(cur: SliceState): { state: SliceState; record: DayRecord } | null {
   if (cur.day > cur.maxDays) return null;
 
-  const rentAndWages = cents(getDailyPlotRent(cur) + getDailyWages(cur));
-  const hurdleCharge = getDailyHurdleCharge(cur);
-  const nopat = cents(cur.dayRevenue - cur.dayCogs - rentAndWages);
-  const valueCreated = cents(nopat - hurdleCharge);
+  const { rentAndWages, hurdleCharge, nopat, valueCreated } = projectDay(cur);
   const cumulativeValue = cents(cur.totalValueCreated + valueCreated);
   const invested = getInvestedCapital(cur);
   const roicPct = +((nopat / Math.max(1, invested)) * 100).toFixed(1);

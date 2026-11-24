@@ -80,6 +80,29 @@
 .hud-cash { display: flex; align-items: center; gap: var(--s-2); }
 .hud-coin { width: 40px; height: 40px; image-rendering: pixelated; }
 .hud-cash-num { font-size: var(--t-hero); }
+/* Live "today vs the line" meter (LineMeter.tsx). */
+.hud-line { display: flex; align-items: center; gap: var(--s-2); transform-origin: right center; }
+.hud-line-label { font-size: var(--t-body); color: var(--sign-dim); }
+.hud-line-track {
+  position: relative;
+  width: 140px;
+  height: 20px;
+  background: var(--sign-2);
+  border: 3px solid var(--outline);
+}
+.hud-line-fill { position: absolute; left: 0; top: 0; bottom: 0; }
+.hud-line-fill.is-cost { background: var(--cost-sign); }
+.hud-line-fill.is-gain { background: var(--gain-sign); }
+/* THE LINE marker: a hazard-striped post standing over the track. */
+.hud-line-mark {
+  position: absolute;
+  top: -7px;
+  bottom: -7px;
+  width: 10px;
+  margin-left: -5px;
+  border: 2px solid var(--outline);
+}
+.hud-line-num { font-size: var(--t-big); min-width: 92px; text-align: right; }
 .hud-value { display: flex; align-items: baseline; gap: var(--s-2); }
 .hud-value-label { font-size: var(--t-body); color: var(--sign-dim); }
 .hud-value-num { font-size: var(--t-big); }

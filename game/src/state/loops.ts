@@ -109,7 +109,7 @@ export function handleGameKeyDown(e: KeyboardEvent): boolean {
   }
 
   const nothingOverlaying =
-    !s.activeModal && !s.mapOpen && !s.founderModalOpen && !s.eodRecord && !s.introOpen && !s.travel;
+    !s.activeModal && !s.mapOpen && !s.founderModalOpen && !s.eodRecord && !s.introOpen && !s.travel && !s.runOver;
   if (k === 'b') {
     e.preventDefault();
     actions.toggleBooks();

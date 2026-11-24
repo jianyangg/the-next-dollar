@@ -1,5 +1,5 @@
 import { cents } from '../../core/money';
-import { HURDLE_RATE, type DayGrade, type DayRecord } from '../../core/sliceModel';
+import { HURDLE_RATE, type DayRecord } from '../../core/sliceModel';
 import { fmtSignedMoney } from '../format';
 
 /**
@@ -120,7 +120,4 @@ export function splitProfit(record: Pick<DayRecord, 'nopat' | 'hurdleCharge' | '
 }
 
 /** Grade stamp colour on the dark scrim: good grades green, the worst grade red, middle neutral. */
-export function gradeTone(grade: DayGrade): Tone {
-  if (grade === 'S' || grade === 'A' || grade === 'B') return 'gain';
-  return grade === 'D' ? 'cost' : 'flat';
-}
+
