@@ -70,8 +70,8 @@ export const WALK_BOUNDS: Bounds = Object.freeze({
 export const PLAYER_SPEED = 4.6;
 
 // ---------------------------------------------------------------------------
-// Anchor positions. The scene keeps its own THREE.Vector3 copies, so these must
-// be kept in sync by hand (a later integration step should import these instead).
+// Anchor positions. CentralParkScene derives its THREE.Vector3 copies from these,
+// so this file is the single source of truth for where the stands are.
 // ---------------------------------------------------------------------------
 export const OWN_STAND_POS: Vec2 = { x: 5.6, z: -1.6 }; // CentralParkScene.ts:131
 export const SELLER_STAND_POS: Vec2 = { x: -5.8, z: -1.6 }; // CentralParkScene.ts:132

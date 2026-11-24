@@ -1,6 +1,20 @@
 import * as THREE from 'three';
 import { playStep } from '../audio/soundEngine';
 import { PostFx } from './postfx';
+import {
+  MARKET_LEMONS_POS as MARKET_LEMONS_XZ,
+  MARKET_PITCHERS_POS as MARKET_PITCHERS_XZ,
+  MARKET_STALLS_POS as MARKET_STALLS_XZ,
+  OWN_STAND_POS as OWN_STAND_XZ,
+  SELLER_STAND_POS as SELLER_STAND_XZ,
+  getColliders,
+  hasTraffic,
+  PLAYER_SPEED,
+  moveWithSliding,
+  type Box,
+} from './collision';
+import { buildGrid, findPath, type NavGrid } from './pathfinding';
+import { followRoute, replaceWaypoints, routeGoal, startRoute, type RouteState } from './routeFollower';
 import { type FxQuality, resolveFxQuality } from './postfxQuality';
 import type { Random } from '../core/rng';
 import { NeighborhoodId, getNeighborhood } from '../core/neighborhoods';
@@ -130,12 +144,14 @@ export interface SceneCallbacks {
   onInteract: (target: NearbyTarget) => void;
 }
 
-const OWN_STAND_POS = new THREE.Vector3(5.6, 0, -1.6);
-const SELLER_STAND_POS = new THREE.Vector3(-5.8, 0, -1.6);
+// Rendering copies (THREE.Vector3, y = 0) of the anchors. The x/z values come
+// from collision.ts so the visible stands and their collision boxes cannot drift apart.
+const OWN_STAND_POS = new THREE.Vector3(OWN_STAND_XZ.x, 0, OWN_STAND_XZ.z);
+const SELLER_STAND_POS = new THREE.Vector3(SELLER_STAND_XZ.x, 0, SELLER_STAND_XZ.z);
 
-const MARKET_STALLS_POS = new THREE.Vector3(-4.3, 0, -1.3);
-const MARKET_PITCHERS_POS = new THREE.Vector3(0.0, 0, -1.3);
-const MARKET_LEMONS_POS = new THREE.Vector3(4.3, 0, -1.3);
+const MARKET_STALLS_POS = new THREE.Vector3(MARKET_STALLS_XZ.x, 0, MARKET_STALLS_XZ.z);
+const MARKET_PITCHERS_POS = new THREE.Vector3(MARKET_PITCHERS_XZ.x, 0, MARKET_PITCHERS_XZ.z);
+const MARKET_LEMONS_POS = new THREE.Vector3(MARKET_LEMONS_XZ.x, 0, MARKET_LEMONS_XZ.z);
 
 const QUEUE_MAX_PATIENCE = 16;
 const QUEUE_SLOTS: Array<{ x: number; z: number }> = [
@@ -202,7 +218,12 @@ export class CentralParkScene {
   private streetlampLights: THREE.PointLight[] = [];
 
   private playerPos = new THREE.Vector3(3.6, 0, 0.8);
-  private playerTarget: THREE.Vector3 | null = null;
+  /** Click-to-walk route (null = not following one). Waypoints come from findPath. */
+  private route: RouteState | null = null;
+  /** Solid boxes for the current neighborhood + plot status (props included). Rebuilt by rebuildNavigation. */
+  private colliders: Box[] = [];
+  /** A* grid over `colliders`; cached because building it is much costlier than querying it. */
+  private navGrid: NavGrid | null = null;
   private playerFacing: 'down' | 'up' | 'left' | 'right' = 'down';
   private playerSpecies: FounderSpecies = 'squirrel';
   private workingAtStand = false;
@@ -379,6 +400,7 @@ export class CentralParkScene {
 
   public setPlotState(status: PlotStatus): void {
     this.plotStatus = status;
+    this.rebuildNavigation();
     this.emptyPlotGroup.visible = status === 'empty';
     this.leasedPlotGroup.visible = status === 'leased';
     this.ownStandGroup.visible = status === 'built';
@@ -451,9 +473,24 @@ export class CentralParkScene {
     this.queue = [];
   }
 
+  /**
+   * Recompute colliders + nav grid. Called whenever the neighborhood or plot
+   * status changes, the only inputs that alter what blocks the player. Any route
+   * planned against the old obstacles is dropped (it may now cross a wall).
+   */
+  private rebuildNavigation(): void {
+    this.colliders = getColliders({
+      neighborhood: this.currentNeighborhood,
+      plotStatus: this.plotStatus,
+      includeProps: true,
+    });
+    this.navGrid = buildGrid(this.colliders, { hasTraffic: hasTraffic(this.currentNeighborhood) });
+    this.route = null;
+  }
+
   public setWorkingAtStand(working: boolean): void {
     this.workingAtStand = working;
-    this.playerTarget = null;
+    this.route = null;
     this.keys.clear();
 
     if (working) {
@@ -481,6 +518,7 @@ export class CentralParkScene {
 
   public setNeighborhood(id: NeighborhoodId): void {
     this.currentNeighborhood = id;
+    this.rebuildNavigation();
     const isMarket = id === 'market';
 
     // Toggle distinct 3D neighborhood geometry groups
@@ -3025,7 +3063,7 @@ export class CentralParkScene {
     const k = e.key.toLowerCase();
     if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
       this.keys.add(k);
-      this.playerTarget = null;
+      this.route = null; // manual steering overrides click-to-walk
     } else if (k === 'e' || (k === ' ' && !this.workingAtStand)) {
       const nearby = this.getNearbyTarget();
       if (nearby) {
@@ -3048,11 +3086,18 @@ export class CentralParkScene {
     this.raycaster.setFromCamera(ndc, this.camera);
     const hit = new THREE.Vector3();
     if (this.raycaster.ray.intersectPlane(this.groundPlane, hit)) {
-      hit.x = THREE.MathUtils.clamp(hit.x, -12.5, 12.5);
-      hit.z = THREE.MathUtils.clamp(hit.z, -2.68, 8.2);
-      this.playerTarget = hit;
+      // findPath clamps to WALK_BOUNDS and snaps blocked clicks to the nearest open spot.
+      this.planRoute({ x: hit.x, z: hit.z });
     }
   };
+
+  /** Ask the path-finder for a route to `goal`; no route at all when it is unreachable. */
+  private planRoute(goal: { x: number; z: number }): void {
+    this.route = null;
+    if (!this.navGrid) return;
+    const result = findPath(this.playerPos, goal, this.navGrid);
+    if (result.kind === 'path') this.route = startRoute(this.playerPos, result.waypoints);
+  }
 
   private getNearbyTarget(): NearbyTarget {
     if (this.currentNeighborhood === 'market') {
@@ -3150,54 +3195,50 @@ export class CentralParkScene {
       if (this.keys.has('a') || this.keys.has('arrowleft')) dx -= 1;
       if (this.keys.has('d') || this.keys.has('arrowright')) dx += 1;
 
-      if (dx === 0 && dz === 0 && this.playerTarget) {
-        const diffX = this.playerTarget.x - this.playerPos.x;
-        const diffZ = this.playerTarget.z - this.playerPos.z;
-        const dist = Math.hypot(diffX, diffZ);
-        if (dist > 0.15) {
-          dx = diffX / dist;
-          dz = diffZ / dist;
-        } else {
-          this.playerTarget = null;
+      // Resolve this frame's step. Keys win over a click route; both go through
+      // moveWithSliding so stands and props block, and `moved` says if we truly moved.
+      let moved = false;
+      if (dx !== 0 || dz !== 0) {
+        const len = Math.hypot(dx, dz);
+        dx /= len;
+        dz /= len;
+        const step = moveWithSliding(
+          this.playerPos,
+          { x: dx * PLAYER_SPEED * dt, z: dz * PLAYER_SPEED * dt },
+          this.colliders
+        );
+        moved = step.moved;
+        this.playerPos.x = step.pos.x;
+        this.playerPos.z = step.pos.z;
+      } else if (this.route) {
+        let r = followRoute({ ...this.route, pos: { x: this.playerPos.x, z: this.playerPos.z } }, dt, this.colliders);
+        if (r.status === 'needs-repath') {
+          // Something now blocks the route (e.g. a stand was built on it): re-plan once.
+          const goal = routeGoal(r);
+          const replan = goal && this.navGrid ? findPath(r.pos, goal, this.navGrid) : null;
+          r = replan?.kind === 'path' ? replaceWaypoints(r, replan.waypoints) : { ...r, status: 'failed' };
         }
+        moved = r.moved;
+        this.playerPos.x = r.pos.x;
+        this.playerPos.z = r.pos.z;
+        if (r.dir) {
+          dx = r.dir.x;
+          dz = r.dir.z;
+        }
+        this.route = r.status === 'following' ? r : null;
       }
 
-      const moving = dx !== 0 || dz !== 0;
-      if (moving) {
-        const len = Math.hypot(dx, dz) || 1;
-        const speed = 4.6;
-        const nextX = THREE.MathUtils.clamp(this.playerPos.x + (dx / len) * speed * dt, -12.5, 12.5);
-        const nextZ = THREE.MathUtils.clamp(this.playerPos.z + (dz / len) * speed * dt, -2.68, 8.2);
-
-        let blocked = false;
-        if (this.currentNeighborhood === 'market') {
-          for (const stallPos of [MARKET_STALLS_POS, MARKET_PITCHERS_POS, MARKET_LEMONS_POS]) {
-            if (Math.abs(nextX - stallPos.x) < 1.25 && Math.abs(nextZ - stallPos.z) < 0.5) {
-              blocked = true;
-              break;
-            }
-          }
-        } else {
-          const blockedOwn =
-            this.plotStatus === 'built' &&
-            Math.abs(nextX - (OWN_STAND_POS.x + 0.1)) < 1.3 &&
-            Math.abs(nextZ - OWN_STAND_POS.z) < 0.5;
-          const blockedSeller =
-            Math.abs(nextX - (SELLER_STAND_POS.x - 0.1)) < 1.35 && Math.abs(nextZ - SELLER_STAND_POS.z) < 0.54;
-          blocked = blockedOwn || blockedSeller;
-        }
-
-        if (!blocked) {
-          this.playerPos.x = nextX;
-          this.playerPos.z = nextZ;
-        }
-
+      // Face the pressed/route direction even when blocked (turning toward a wall is natural).
+      if (dx !== 0 || dz !== 0) {
         if (Math.abs(dx) > Math.abs(dz)) {
           this.playerFacing = dx < 0 ? 'left' : 'right';
         } else {
           this.playerFacing = dz < 0 ? 'up' : 'down';
         }
+      }
 
+      // Walk animation and footsteps only when we really changed position (no moon-walking at a wall).
+      if (moved) {
         this.playerAnimTimer += dt * 7.8;
         const stepIdx = Math.floor(this.playerAnimTimer) % 2 === 0 ? 1 : 2;
         this.stepSoundCooldown -= dt;
@@ -3284,7 +3325,7 @@ export class CentralParkScene {
           Math.abs(this.playerPos.z - v.group.position.z) < v.halfZ
         ) {
           this.koTimer = 1.4;
-          this.playerTarget = null;
+          this.route = null;
           this.soulSprite.visible = true;
           this.callbacks.onTaxiHit?.();
         }
