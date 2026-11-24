@@ -5,11 +5,12 @@ import { useGameStore } from '../state/gameStore';
 import { getIcons, getPortraits } from './assets';
 import { fmtSignedMoney } from './format';
 import { CountUp, Key } from './kit/Money';
+import { SunArc } from './SunArc';
 import './styles/hud.css';
 
 /**
  * The heads-up display: three "sign plates" bolted over the 3D scene.
- *   top-left     founder portrait, Day N/30, place name, clock bar (+ 1x/2x speed)
+ *   top-left     founder portrait, Day N/30, place name, sun-arc clock (+ 1x/2x speed)
  *   top-right    cash (big, counts up) and the running "Value created"
  *   bottom-right [M] Map, [B] Books and a sound toggle
  *
@@ -92,9 +93,7 @@ export function Hud() {
           </div>
           <div className="hud-place">{neighborhood.shortName}</div>
           <div className="hud-clock" aria-label={`Day ${day} clock ${clockLabel}`}>
-            <div className="pt-track hud-clock-track">
-              <i style={{ width: `${dayClockPct}%` }} />
-            </div>
+            <SunArc pct={dayClockPct} />
             <span className="pt-num hud-clock-time">{clockLabel}</span>
           </div>
         </div>

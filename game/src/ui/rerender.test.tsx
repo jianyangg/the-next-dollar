@@ -72,6 +72,7 @@ describe('per-frame brew mini-game state', () => {
     act(() => {
       const s = useGameStore.getState();
       useGameStore.setState({
+        introOpen: false,
         founderModalOpen: false,
         workingAtStand: true,
         booksOpen: true,

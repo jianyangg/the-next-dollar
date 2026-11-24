@@ -51,8 +51,12 @@
 }
 .world-sign:hover { background: var(--sign-2); }
 .world-sign:focus-visible { outline: var(--px) solid var(--accent); outline-offset: 2px; }
-/* A market sign you are not standing at stays still and a little quieter. */
-.world-sign.is-idle { animation: none; }
+/* A sign you are not standing at stays still and a little quieter: no key bullet, no bob. */
+.world-sign.is-idle { animation: none; opacity: 0.72; }
+/* Signs that cannot be used from afar (disabled) also let clicks fall through to the street,
+   so clicking the ground under one still walks you there. */
+.world-sign:disabled { pointer-events: none; cursor: default; }
+.world-sign.is-nearby { opacity: 1; }
 .world-sign-word { font-size: var(--t-big); }
 .world-sign-icon { width: 28px; height: 28px; image-rendering: pixelated; }
 /* The seller's asking price: a small paper tag on the sign. */

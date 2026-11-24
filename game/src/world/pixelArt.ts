@@ -533,425 +533,6 @@ export function createTreeSpriteTexture(variant: 'summer' | 'autumn' = 'summer')
   return toPixelTexture(c);
 }
 
-export type CharacterRole = 'player' | 'seller' | 'jogger' | 'office' | 'walker';
-
-export interface CharacterPalette {
-  hair: string;
-  skin: string;
-  shirt: string;
-  pants: string;
-  accent?: string;
-  role?: CharacterRole;
-}
-
-export function createChibiSpriteTexture(
-  palette: CharacterPalette,
-  stepPhase: 0 | 1 | 2 = 0,
-  facing: 'down' | 'up' | 'left' | 'right' = 'down',
-  role?: CharacterRole
-): THREE.CanvasTexture {
-  const [c, ctx] = makeCanvas(32, 40);
-  ctx.clearRect(0, 0, 32, 40);
-
-  const px = (x: number, y: number, w: number, h: number, col: string) => {
-    ctx.fillStyle = col;
-    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
-  };
-
-  const resolvedRole: CharacterRole | undefined = role ?? palette.role;
-
-  // Derived JRPG HD-2D color ramps
-  const outline = '#1b1724';
-  const hairBase = palette.hair;
-  const hairDark = shadeHex(hairBase, 0.34, 0.35);
-  const hairLight = tintHex(hairBase, 0.24, 0.35);
-  const hairSpec = tintHex(hairBase, 0.45, 0.4);
-
-  const skinBase = palette.skin;
-  const skinShade = shadeHex(skinBase, 0.16, 0.1);
-  const skinLight = tintHex(skinBase, 0.18, 0.2);
-  const cheekBlush = '#f29b9b';
-
-  const shirtBase = palette.shirt;
-  const shirtDark = shadeHex(shirtBase, 0.28, 0.25);
-  const shirtLight = tintHex(shirtBase, 0.2, 0.25);
-
-  const pantsBase = palette.pants;
-  const pantsDark = shadeHex(pantsBase, 0.3, 0.25);
-  const pantsLight = tintHex(pantsBase, 0.15, 0.15);
-
-  const accentBase = palette.accent ?? '#f5c542';
-  const accentDark = shadeHex(accentBase, 0.26, 0.2);
-  const accentLight = tintHex(accentBase, 0.24, 0.3);
-
-  const isSide = facing === 'left' || facing === 'right';
-  const dir = facing === 'left' ? -1 : 1; // +1 for right/down/up, -1 for left
-  const bob = stepPhase === 0 ? 0 : -1;
-
-  // Ground contact shadow (crisp oval)
-  px(8, 37, 16, 2, 'rgba(18, 16, 28, 0.30)');
-  px(10, 36, 12, 1, 'rgba(18, 16, 28, 0.20)');
-  px(10, 39, 12, 1, 'rgba(18, 16, 28, 0.16)');
-
-  // --- LEGS & SHOES (lively 3-frame stride) ---
-  const shoeMain = resolvedRole === 'jogger' ? '#e84a5f' : resolvedRole === 'office' ? '#241c1a' : '#3d2c22';
-  const shoeHighlight = resolvedRole === 'jogger' ? '#ffffff' : '#63493a';
-  const shoeSole = resolvedRole === 'jogger' ? '#f7f8fa' : '#1b1724';
-
-  if (isSide) {
-    // Side-profile legs with horizontal stride spread
-    const stride = stepPhase === 1 ? 2 : stepPhase === 2 ? -2 : 0;
-    const backX = 14 - stride;
-    const frontX = 14 + stride;
-    const backY = stepPhase === 2 ? 29 : 30;
-    const frontY = stepPhase === 1 ? 29 : 30;
-
-    // Back leg
-    px(backX - 1, backY, 6, 8, outline);
-    px(backX, backY, 4, 5, pantsDark);
-    px(backX, backY + 5, 4, 2, shadeHex(shoeMain, 0.25));
-    px(backX + (dir > 0 ? 0 : -1), backY + 6, 5, 1, shoeSole);
-
-    // Front leg
-    px(frontX - 1, frontY, 6, 8, outline);
-    px(frontX, frontY, 4, 5, pantsBase);
-    px(frontX + (dir > 0 ? 1 : 0), frontY, 2, 4, pantsLight);
-    px(frontX + (dir > 0 ? 0 : -1), frontY + 5, 5, 2, shoeMain);
-    px(frontX + (dir > 0 ? 2 : 0), frontY + 5, 2, 1, shoeHighlight);
-    px(frontX + (dir > 0 ? 0 : -1), frontY + 7, 5, 1, shoeSole);
-  } else {
-    // Front / Back view legs with alternating lift
-    const leftLift = stepPhase === 1 ? -2 : 0;
-    const rightLift = stepPhase === 2 ? -2 : 0;
-    const leftY = 30 + leftLift;
-    const rightY = 30 + rightLift;
-
-    // Left leg
-    px(9, leftY, 6, 8, outline);
-    px(10, leftY, 4, 5, pantsBase);
-    px(10, leftY, 1, 4, pantsLight);
-    px(13, leftY, 1, 5, pantsDark);
-    px(10, leftY + 5, 4, 2, shoeMain);
-    px(10, leftY + 5, 2, 1, shoeHighlight);
-    px(9, leftY + 7, 6, 1, shoeSole);
-
-    // Right leg
-    px(17, rightY, 6, 8, outline);
-    px(18, rightY, 4, 5, pantsBase);
-    px(18, rightY, 1, 4, pantsLight);
-    px(21, rightY, 1, 5, pantsDark);
-    px(18, rightY + 5, 4, 2, shoeMain);
-    px(19, rightY + 5, 2, 1, shoeHighlight);
-    px(17, rightY + 7, 6, 1, shoeSole);
-  }
-
-  // --- TORSO & LAYERED CLOTHING ---
-  const ty = 19 + bob;
-  if (isSide) {
-    // Side torso
-    px(10, ty, 12, 12, outline);
-    px(11, ty + 1, 10, 10, shirtBase);
-    px(11, ty + 1, 3, 9, dir > 0 ? shirtDark : shirtLight);
-    px(18, ty + 1, 3, 9, dir > 0 ? shirtLight : shirtDark);
-    // Belt / hem
-    px(11, ty + 9, 10, 2, pantsDark);
-  } else {
-    // Front / back torso
-    px(8, ty, 16, 12, outline);
-    px(9, ty + 1, 14, 10, shirtBase);
-    // Side contour shading & top shoulder highlight
-    px(9, ty + 1, 2, 9, shirtDark);
-    px(21, ty + 1, 2, 9, shirtDark);
-    px(11, ty + 1, 10, 2, shirtLight);
-    // Collar / neckline (front)
-    if (facing === 'down') {
-      px(13, ty + 1, 6, 2, skinShade);
-      px(14, ty + 1, 4, 1, skinBase);
-    }
-    // Waistband / belt
-    px(9, ty + 9, 14, 2, pantsDark);
-    px(14, ty + 9, 4, 1, accentBase);
-  }
-
-  // --- ROLE-SPECIFIC CLOTHING OVERLAYS ---
-  if (resolvedRole === 'player') {
-    // Crisp white/cream lemonade apron with pocket & neck strap
-    const apronMain = '#fff8e7';
-    const apronShade = '#e2d6bc';
-    if (!isSide) {
-      if (facing === 'down') {
-        px(11, ty + 2, 10, 9, apronMain);
-        px(11, ty + 2, 1, 9, apronShade);
-        px(20, ty + 2, 1, 9, apronShade);
-        // Apron waist tie & front pocket
-        px(9, ty + 7, 14, 1, apronMain);
-        px(13, ty + 8, 6, 3, apronShade);
-        px(14, ty + 8, 4, 2, '#fffdf5');
-        // Tiny lemon badge on chest
-        px(15, ty + 4, 2, 2, '#ffd43b');
-      } else {
-        // Back apron ties
-        px(10, ty + 7, 12, 1, apronMain);
-        px(14, ty + 7, 4, 2, apronShade);
-        px(15, ty + 8, 2, 2, apronMain);
-      }
-    } else {
-      const ax = dir > 0 ? 15 : 11;
-      px(ax, ty + 3, 6, 8, apronMain);
-      px(ax, ty + 8, 6, 1, apronShade);
-    }
-  } else if (resolvedRole === 'seller') {
-    // Tailored entrepreneur vest over shirt
-    const vestMain = accentBase;
-    const vestDark = accentDark;
-    const vestLight = accentLight;
-    if (!isSide) {
-      px(9, ty + 1, 5, 9, vestMain);
-      px(18, ty + 1, 5, 9, vestMain);
-      px(9, ty + 1, 1, 9, vestDark);
-      px(22, ty + 1, 1, 9, vestDark);
-      px(10, ty + 1, 2, 2, vestLight);
-      px(20, ty + 1, 2, 2, vestLight);
-      if (facing === 'down') {
-        // Crisp collared shirt center & vest buttons
-        px(14, ty + 2, 4, 7, '#f8f4e8');
-        px(13, ty + 4, 1, 1, '#fff3b0');
-        px(13, ty + 7, 1, 1, '#fff3b0');
-      } else {
-        px(10, ty + 1, 12, 9, vestMain);
-        px(12, ty + 7, 8, 1, vestDark);
-      }
-    } else {
-      px(11, ty + 1, 10, 9, vestMain);
-      px(11, ty + 1, 2, 9, vestDark);
-    }
-  } else if (resolvedRole === 'office') {
-    // Sharp suit jacket + crisp white shirt + necktie
-    const suitMain = shirtBase;
-    const suitLapel = shirtDark;
-    if (!isSide && facing === 'down') {
-      px(13, ty + 1, 6, 7, '#f7f8fb');
-      px(15, ty + 2, 2, 6, accentBase); // necktie
-      px(15, ty + 7, 2, 1, accentDark);
-      // Lapels
-      px(12, ty + 2, 1, 4, suitLapel);
-      px(19, ty + 2, 1, 4, suitLapel);
-      px(11, ty + 6, 10, 1, suitMain);
-    }
-  } else if (resolvedRole === 'walker') {
-    // Cozy scarf / accent collar
-    if (!isSide) {
-      px(10, ty + 1, 12, 2, accentBase);
-      px(10, ty + 2, 12, 1, accentDark);
-      if (facing === 'down') {
-        px(17, ty + 3, 3, 4, accentBase);
-        px(19, ty + 3, 1, 4, accentDark);
-      }
-    } else {
-      px(11, ty + 1, 10, 2, accentBase);
-      px(dir > 0 ? 11 : 18, ty + 3, 3, 3, accentDark);
-    }
-  } else if (palette.accent && !isSide && facing === 'down') {
-    // Default accent detail if no role passed
-    px(13, ty + 3, 6, 5, accentBase);
-    px(13, ty + 7, 6, 1, accentDark);
-  }
-
-  // --- ARMS & HAND-HELD ACCESSORIES (swing with stride) ---
-  const leftArmSwing = stepPhase === 1 ? 1 : stepPhase === 2 ? -1 : 0;
-  const rightArmSwing = -leftArmSwing;
-
-  if (isSide) {
-    const armX = 14 + (stepPhase === 1 ? -2 : stepPhase === 2 ? 2 : 0);
-    px(armX - 1, ty + 2, 5, 8, outline);
-    px(armX, ty + 2, 3, 5, shirtLight);
-    px(armX, ty + 7, 3, 2, skinBase);
-
-    // Side-view held accessories
-    if (resolvedRole === 'office') {
-      // Leather briefcase
-      const bx = armX + (dir > 0 ? 0 : -3);
-      px(bx - 1, ty + 8, 8, 6, outline);
-      px(bx, ty + 9, 6, 4, '#5a3825');
-      px(bx, ty + 9, 6, 1, '#7c5036');
-      px(bx + 2, ty + 10, 2, 1, '#f0c954');
-    } else if (resolvedRole === 'walker') {
-      // NYC coffee cup
-      const cx = armX + (dir > 0 ? 2 : -3);
-      px(cx, ty + 5, 4, 5, outline);
-      px(cx + 1, ty + 6, 2, 3, '#f5f2ea');
-      px(cx + 1, ty + 7, 2, 1, '#c58b52');
-      px(cx, ty + 5, 4, 1, '#ffffff');
-    } else if (resolvedRole === 'seller') {
-      // Wooden clipboard
-      const cx = armX + (dir > 0 ? 2 : -4);
-      px(cx, ty + 4, 5, 6, outline);
-      px(cx + 1, ty + 5, 3, 4, '#b87a43');
-      px(cx + 1, ty + 6, 3, 3, '#fffdf5');
-    }
-  } else {
-    // Left arm
-    px(5, ty + 1 + leftArmSwing, 4, 9, outline);
-    px(6, ty + 2 + leftArmSwing, 2, 5, shirtBase);
-    px(6, ty + 7 + leftArmSwing, 2, 2, skinBase);
-
-    // Right arm
-    px(23, ty + 1 + rightArmSwing, 4, 9, outline);
-    px(24, ty + 2 + rightArmSwing, 2, 5, shirtBase);
-    px(24, ty + 7 + rightArmSwing, 2, 2, skinBase);
-
-    // Front/back held accessories
-    if (resolvedRole === 'seller') {
-      // Clipboard in right hand
-      px(24, ty + 5 + rightArmSwing, 6, 7, outline);
-      px(25, ty + 6 + rightArmSwing, 4, 5, '#9e6232');
-      px(26, ty + 7 + rightArmSwing, 3, 4, '#fffdf5');
-      px(26, ty + 6 + rightArmSwing, 2, 1, '#c8ced8'); // metal clip
-      px(26, ty + 8 + rightArmSwing, 2, 1, '#8c96a4');
-    } else if (resolvedRole === 'office') {
-      // Leather briefcase in right hand
-      px(23, ty + 8 + rightArmSwing, 7, 6, outline);
-      px(24, ty + 9 + rightArmSwing, 5, 4, '#5a3825');
-      px(24, ty + 9 + rightArmSwing, 5, 1, '#805237');
-      px(26, ty + 10 + rightArmSwing, 1, 1, '#f2ca52');
-    } else if (resolvedRole === 'walker') {
-      // Takeaway coffee cup in left hand
-      px(3, ty + 5 + leftArmSwing, 4, 6, outline);
-      px(4, ty + 6 + leftArmSwing, 2, 4, '#f7f5ef');
-      px(4, ty + 7 + leftArmSwing, 2, 2, '#c88c50'); // sleeve
-      px(3, ty + 5 + leftArmSwing, 4, 1, '#ffffff'); // lid
-    }
-  }
-
-  // --- CHIBI HEAD (generous DQ3 / Octopath proportions) ---
-  const hy = 5 + bob;
-  px(7, hy + 1, 18, 14, outline);
-  px(8, hy, 16, 15, outline);
-  px(8, hy + 2, 16, 12, skinBase);
-  // Subtle chin & temple shading
-  px(8, hy + 12, 16, 2, skinShade);
-  px(9, hy + 13, 14, 1, skinBase);
-  px(10, hy + 3, 12, 2, skinLight);
-
-  // --- HAIR (layered bangs, crown halo highlight, side locks) ---
-  // Outer hair silhouette
-  px(7, hy - 1, 18, 7, outline);
-  px(9, hy - 2, 14, 3, outline);
-  // Side locks framing face
-  px(6, hy + 2, 3, 9, outline);
-  px(23, hy + 2, 3, 9, outline);
-
-  // Base hair fill
-  px(8, hy, 16, 6, hairBase);
-  px(10, hy - 1, 12, 2, hairBase);
-  px(7, hy + 3, 3, 7, hairBase);
-  px(22, hy + 3, 3, 7, hairBase);
-
-  // JRPG hair shading + specular crown band
-  px(8, hy, 16, 1, hairDark);
-  px(10, hy + 1, 12, 2, hairLight);
-  px(12, hy + 1, 4, 1, hairSpec);
-  px(18, hy + 1, 2, 1, hairSpec);
-  px(7, hy + 7, 2, 3, hairDark);
-  px(23, hy + 7, 2, 3, hairDark);
-
-  if (facing === 'up') {
-    // Back of head covered in rich layered hair
-    px(8, hy + 2, 16, 11, hairBase);
-    px(8, hy + 10, 16, 3, hairDark);
-    px(10, hy + 3, 12, 2, hairLight);
-    px(12, hy + 3, 4, 1, hairSpec);
-    px(18, hy + 3, 2, 1, hairSpec);
-    // Hair strand notches at bottom
-    px(11, hy + 12, 1, 1, hairBase);
-    px(16, hy + 12, 1, 1, hairBase);
-    px(20, hy + 12, 1, 1, hairBase);
-  } else if (isSide) {
-    // Side-profile bangs & back hair sweep
-    const backHairX = dir > 0 ? 7 : 18;
-    px(backHairX, hy + 2, 7, 11, hairBase);
-    px(backHairX, hy + 9, 6, 4, hairDark);
-    // Front bangs
-    const bangX = dir > 0 ? 17 : 9;
-    px(bangX, hy + 4, 6, 2, hairBase);
-    px(bangX + (dir > 0 ? 2 : 0), hy + 5, 3, 2, hairDark);
-
-    // Side eye (expressive 3x4 pixel eye)
-    const ex = dir > 0 ? 19 : 10;
-    px(ex, hy + 7, 3, 4, '#1b1826');
-    px(ex + (dir > 0 ? 1 : 0), hy + 7, 1, 2, '#ffffff'); // glint
-    px(ex + (dir > 0 ? 1 : 0), hy + 10, 1, 1, '#586994'); // lower iris shine
-    // Rosy cheek
-    px(ex + (dir > 0 ? -2 : 3), hy + 10, 2, 1, cheekBlush);
-  } else {
-    // Front-facing bangs with lively notches
-    px(9, hy + 5, 3, 2, hairBase);
-    px(14, hy + 5, 4, 2, hairBase);
-    px(20, hy + 5, 3, 2, hairBase);
-    px(9, hy + 6, 2, 1, hairDark);
-    px(15, hy + 6, 2, 1, hairDark);
-    px(21, hy + 6, 2, 1, hairDark);
-
-    // Expressive JRPG eyes (3x4 each)
-    // Left eye
-    px(10, hy + 7, 3, 4, '#1b1826');
-    px(10, hy + 7, 1, 2, '#ffffff');
-    px(12, hy + 9, 1, 1, '#5b729c');
-    // Right eye
-    px(19, hy + 7, 3, 4, '#1b1826');
-    px(19, hy + 7, 1, 2, '#ffffff');
-    px(21, hy + 9, 1, 1, '#5b729c');
-
-    // Rosy cheeks & tiny friendly smile
-    px(9, hy + 11, 2, 1, cheekBlush);
-    px(21, hy + 11, 2, 1, cheekBlush);
-    px(15, hy + 12, 2, 1, '#b87668');
-  }
-
-  // --- ROLE-SPECIFIC HEADGEAR ---
-  if (resolvedRole === 'player') {
-    // Sunny lemonade visor cap with white badge & brim
-    const visorMain = '#f8c93a';
-    const visorDark = '#c99318';
-    const visorLight = '#fff099';
-    px(7, hy + 2, 18, 4, outline);
-    px(8, hy + 3, 16, 2, visorMain);
-    px(9, hy + 3, 14, 1, visorLight);
-    if (facing === 'down') {
-      // Forward visor brim + white emblem
-      px(6, hy + 5, 20, 2, outline);
-      px(7, hy + 5, 18, 1, visorDark);
-      px(14, hy + 3, 4, 2, '#fffef7');
-      px(15, hy + 3, 2, 1, '#ffd43b');
-    } else if (isSide) {
-      const brimX = dir > 0 ? 19 : 5;
-      px(brimX, hy + 5, 8, 2, outline);
-      px(brimX + 1, hy + 5, 6, 1, visorDark);
-    } else {
-      // Back visor strap
-      px(12, hy + 4, 8, 1, '#fff8e1');
-    }
-  } else if (resolvedRole === 'jogger') {
-    // Sporty headband across forehead + trailing knot
-    const bandMain = accentBase;
-    const bandLight = accentLight;
-    px(7, hy + 3, 18, 3, outline);
-    px(8, hy + 4, 16, 2, bandMain);
-    px(10, hy + 4, 12, 1, bandLight);
-    if (facing === 'up') {
-      px(14, hy + 5, 4, 3, bandMain);
-      px(13, hy + 7, 2, 2, bandLight);
-      px(17, hy + 7, 2, 2, bandLight);
-    } else if (isSide) {
-      const knotX = dir > 0 ? 5 : 24;
-      px(knotX, hy + 5, 3, 2, bandMain);
-      px(knotX + (dir > 0 ? -1 : 1), hy + 7, 2, 2, bandLight);
-    }
-  }
-
-  return toPixelTexture(c);
-}
-
 // Tiny 3x5 pixel bitmap font for crisp chalkboard stand signs
 const TINY_FONT: Record<string, string[]> = {
   A: ['010', '101', '111', '101', '101'],
@@ -1460,7 +1041,7 @@ interface HumanChibiStyle {
 const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
   // Alex: warm chestnut spiky hair, sunny yellow-striped tee, jeans
   squirrel: {
-    outline: '#2a2220',
+    outline: '#2b2118',
     skin: '#f8cca4',
     skinShade: '#e3ac82',
     skinLight: '#ffe2c7',
@@ -1477,7 +1058,7 @@ const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
   },
   // Maya: dark-brown bob with gold clip, coral cardigan, dark pants
   shiba: {
-    outline: '#2a2220',
+    outline: '#2b2118',
     skin: '#f4c49c',
     skinShade: '#dda379',
     skinLight: '#ffdec2',
@@ -1494,7 +1075,7 @@ const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
   },
   // Leo: fluffy curly dark hair, varsity green/cream hoodie, sneakers
   panda: {
-    outline: '#2a2220',
+    outline: '#2b2118',
     skin: '#e5b085',
     skinShade: '#c98e63',
     skinLight: '#f7cba4',
@@ -1511,7 +1092,7 @@ const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
   },
   // Sam: blonde hair + navy NYC cap, teal jacket, jeans
   penguin: {
-    outline: '#2a2220',
+    outline: '#2b2118',
     skin: '#fad0ab',
     skinShade: '#e3af86',
     skinLight: '#ffe6cf',
@@ -1528,7 +1109,7 @@ const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
   },
   // Claire: warm auburn ponytail, Wall St. navy blazer + white collar, slacks
   bunny: {
-    outline: '#2a2220',
+    outline: '#2b2118',
     skin: '#f7c9a3',
     skinShade: '#dfa67d',
     skinLight: '#ffe1c7',
@@ -1545,6 +1126,195 @@ const HUMAN_CHIBI_STYLES: Record<FounderSpecies, HumanChibiStyle> = {
   },
 };
 
+// ============================================================================
+// SHOPKEEPERS: the seller and the three market vendors.
+//
+// Founders are what the PLAYER picks, so a vendor that wore a founder's face would
+// look like the player's twin. Vendors get their own faces and, more importantly, a
+// "this person runs a shop" read at a glance: a full-width shop apron in a bold colour
+// plus a different hat for each trade (visor, flat cap, bandana, straw hat).
+// ============================================================================
+
+/** The four shopkeeper looks. Each id names the trade, not a person. */
+export type VendorKind = 'broker' | 'carpenter' | 'glazier' | 'grower';
+
+type VendorHat = 'visor' | 'flatcap' | 'bandana' | 'straw';
+
+interface VendorStyle extends HumanChibiStyle {
+  hat: VendorHat;
+  hatMain: string;
+  hatLight: string;
+  hatDark: string;
+  apron: string;
+  apronShade: string;
+  /** Colour of the little chest emblem and the pocket stitching. */
+  apronTrim: string;
+}
+
+const VENDOR_STYLES: Record<VendorKind, VendorStyle> = {
+  // Stand broker (the seller): green visor, forest-green apron over a white shirt.
+  broker: {
+    outline: '#2b2118',
+    skin: '#d8a279',
+    skinShade: '#bd8460',
+    skinLight: '#ecbb94',
+    hair: '#2f2a2a',
+    hairShade: '#1e1a1a',
+    hairLight: '#4a4343',
+    shirt: '#f4f1e8',
+    shirtShade: '#d9d4c4',
+    shirtLight: '#ffffff',
+    shirtAccent: '#ffffff',
+    pants: '#3a3f4d',
+    shoe: '#2f2a28',
+    cheek: '#e8957f',
+    hat: 'visor',
+    hatMain: '#2f8f63',
+    hatLight: '#58b98a',
+    hatDark: '#1d6342',
+    apron: '#2f7d5b',
+    apronShade: '#1f5a41',
+    apronTrim: '#f2d36b',
+  },
+  // Stall-kit carpenter: tan flat cap, leather-brown apron with a tool pocket.
+  carpenter: {
+    outline: '#2b2118',
+    skin: '#f1c3a0',
+    skinShade: '#d9a37e',
+    skinLight: '#fddcc0',
+    hair: '#b4532a',
+    hairShade: '#8a3b1b',
+    hairLight: '#d97a4a',
+    shirt: '#8a5a3a',
+    shirtShade: '#6b4429',
+    shirtLight: '#a8754f',
+    shirtAccent: '#c9a27a',
+    pants: '#4a4036',
+    shoe: '#3a2c22',
+    cheek: '#f2a08f',
+    hat: 'flatcap',
+    hatMain: '#c9a269',
+    hatLight: '#e3c58f',
+    hatDark: '#8f6c3a',
+    apron: '#b9823f',
+    apronShade: '#8b5e27',
+    apronTrim: '#fff0c2',
+  },
+  // Glassware seller: white bandana with blue dots, cobalt apron.
+  glazier: {
+    outline: '#2b2118',
+    skin: '#8d5a3b',
+    skinShade: '#744529',
+    skinLight: '#a87350',
+    hair: '#1f1b1b',
+    hairShade: '#141111',
+    hairLight: '#3a3333',
+    shirt: '#dbe9f5',
+    shirtShade: '#b9cfe2',
+    shirtLight: '#f2f8fd',
+    shirtAccent: '#ffffff',
+    pants: '#2d3442',
+    shoe: '#262230',
+    cheek: '#c97a6a',
+    hat: 'bandana',
+    hatMain: '#f2f7ff',
+    hatLight: '#3f7fc4',
+    hatDark: '#c4d4e6',
+    apron: '#2f6fb0',
+    apronShade: '#214f82',
+    apronTrim: '#ffffff',
+  },
+  // Lemon grower: wide straw hat with a green band, sunny-yellow apron.
+  grower: {
+    outline: '#2b2118',
+    skin: '#f5d0b0',
+    skinShade: '#dcad88',
+    skinLight: '#ffe6cd',
+    hair: '#b7b2a6',
+    hairShade: '#948f84',
+    hairLight: '#d6d2c8',
+    shirt: '#fff6c8',
+    shirtShade: '#e6d9a0',
+    shirtLight: '#ffffff',
+    shirtAccent: '#ffffff',
+    pants: '#5a6b48',
+    shoe: '#5a4430',
+    cheek: '#f4a5a0',
+    hat: 'straw',
+    hatMain: '#e9cf7a',
+    hatLight: '#f7e7a6',
+    hatDark: '#58a55c',
+    apron: '#f2c230',
+    apronShade: '#c79a14',
+    apronTrim: '#58a55c',
+  },
+};
+
+/** Every drawable person: a founder (player) or a shopkeeper. */
+type CharacterId = FounderSpecies | VendorKind;
+
+const CHARACTER_STYLES: Record<CharacterId, HumanChibiStyle> = { ...HUMAN_CHIBI_STYLES, ...VENDOR_STYLES };
+
+function isVendorKind(id: CharacterId): id is VendorKind {
+  return id in VENDOR_STYLES;
+}
+
+/**
+ * A resting pose for a character who is standing still. Both flags default to false,
+ * which is the normal standing frame.
+ *   breathe     - the whole upper body (torso + head) sits 1 pixel lower, the "exhale" half
+ *                 of a slow breathing loop. The feet stay planted.
+ *   eyesClosed  - the eyes are drawn as a closed lid line, for blinking.
+ */
+export interface IdlePose {
+  breathe?: boolean;
+  eyesClosed?: boolean;
+}
+
+/** The three frames an idle character cycles through. */
+export type IdleFrameKey = 'rest' | 'breathe' | 'blink';
+
+export const IDLE_POSES: Record<IdleFrameKey, IdlePose> = {
+  rest: {},
+  breathe: { breathe: true },
+  blink: { eyesClosed: true },
+};
+
+const BREATH_PERIOD_S = 2.6;
+const BLINK_HOLD_S = 0.16;
+
+/**
+ * Which idle frame should show at time `t` (seconds)?  Pure and deterministic, so it is
+ * unit-tested without a canvas.
+ *
+ *   - A blink happens once per "blink period" and lasts BLINK_HOLD_S. The period is
+ *     3..4 seconds, derived from `seed`, so several shopkeepers standing side by side do
+ *     not all blink in unison (which looks robotic).
+ *   - Between blinks the character breathes: half of every BREATH_PERIOD_S is 'rest', the
+ *     other half is 'breathe' (1px lower).
+ *   - A blink always wins over a breath.
+ */
+export function idleFrameAt(t: number, seed = 0): IdleFrameKey {
+  const frac = seed - Math.floor(seed);
+  const blinkPeriod = 3 + frac; // 3.0 .. 4.0 s
+  const blinkClock = (((t + seed * 1.7) % blinkPeriod) + blinkPeriod) % blinkPeriod;
+  if (blinkClock > blinkPeriod - BLINK_HOLD_S) return 'blink';
+  const breathClock = (((t + seed) % BREATH_PERIOD_S) + BREATH_PERIOD_S) % BREATH_PERIOD_S;
+  return breathClock > BREATH_PERIOD_S / 2 ? 'breathe' : 'rest';
+}
+
+/** How a queued customer feels, from how much patience they have left (0..1). */
+export type QueueMood = 'happy' | 'neutral' | 'angry';
+
+/**
+ * Same thresholds as the patience bar's colour (WorldOverlays.patienceColor): plenty left
+ * is green, getting low is amber, nearly gone is red. Keeping the two in step means the
+ * face above a customer's head and the bar beside it never disagree.
+ */
+export function moodForPatience(ratio: number): QueueMood {
+  return ratio > 0.55 ? 'happy' : ratio > 0.28 ? 'neutral' : 'angry';
+}
+
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -1560,12 +1330,13 @@ function drawRoundedRect(
 
 function drawFriendlyHumanHead(
   ctx: CanvasRenderingContext2D,
-  species: FounderSpecies,
+  species: CharacterId,
   hx: number,
   hy: number,
-  facing: 'down' | 'up' | 'left' | 'right'
+  facing: 'down' | 'up' | 'left' | 'right',
+  eyesClosed = false
 ) {
-  const s = HUMAN_CHIBI_STYLES[species];
+  const s = CHARACTER_STYLES[species];
   const px = (x: number, y: number, w: number, h: number, col: string) => {
     ctx.fillStyle = col;
     ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
@@ -1585,7 +1356,7 @@ function drawFriendlyHumanHead(
   }
 
   // --- CLEAN ROUNDED CHIBI HEAD (18w x 16h) ---
-  // Soft warm dark-brown outline (#2a2220)
+  // Soft warm dark-brown outline (#2b2118)
   px(hx + 2, hy, 14, 16, s.outline);
   px(hx + 1, hy + 1, 16, 14, s.outline);
   px(hx, hy + 3, 18, 10, s.outline);
@@ -1601,7 +1372,9 @@ function drawFriendlyHumanHead(
     px(hx + 1, hy + 1, 16, 13, s.hair);
     px(hx + 2, hy + 11, 14, 3, s.hairShade);
     px(hx + 4, hy + 3, 10, 2, s.hairLight);
-    if (species === 'penguin') {
+    if (isVendorKind(species)) {
+      drawVendorHeadwear(ctx, VENDOR_STYLES[species], hx, hy, 'up', 0);
+    } else if (species === 'penguin') {
       // Back of navy NYC cap with snapback strap
       px(hx + 1, hy - 2, 16, 7, s.outline);
       px(hx + 2, hy - 1, 14, 5, '#243c6b');
@@ -1619,6 +1392,13 @@ function drawFriendlyHumanHead(
 
   // --- TWO SYMMETRICAL FRIENDLY EYES (ALWAYS BOTH VISIBLE on down/left/right!) ---
   const drawFriendlyEye = (ex: number, ey: number, pupilDx: number) => {
+    if (eyesClosed) {
+      // Blink: a skin-coloured lid over the eye with a dark lash line along its bottom edge.
+      px(ex, ey - 1, 3, 1, s.outline);
+      px(ex, ey, 3, 2, s.skin);
+      px(ex, ey + 2, 3, 1, s.outline);
+      return;
+    }
     // Soft dark-brown top lash / frame
     px(ex, ey - 1, 3, 1, s.outline);
     // Crisp 3x4 white sclera
@@ -1647,7 +1427,9 @@ function drawFriendlyHumanHead(
   px(hx + 8 + faceShift, hy + 13, 2, 1, '#b57360');
 
   // --- DISTINCT HUMAN HAIRSTYLES ---
-  if (species === 'squirrel') {
+  if (isVendorKind(species)) {
+    drawVendorHeadwear(ctx, VENDOR_STYLES[species], hx, hy, facing, faceShift);
+  } else if (species === 'squirrel') {
     // ALEX: Warm chestnut spiky hair
     px(hx + 1, hy - 2, 16, 7, s.outline);
     px(hx + 4, hy - 4, 4, 3, s.outline);
@@ -1741,16 +1523,106 @@ function drawFriendlyHumanHead(
   }
 }
 
-export function createMascotSpriteTexture(
-  species: FounderSpecies,
-  stepPhase: 0 | 1 | 2 = 0,
-  facing: 'down' | 'up' | 'left' | 'right' = 'down',
-  accessory: 'apron' | 'vest' | 'none' = 'none'
+/**
+ * Short hair plus the trade hat for a shopkeeper. Called after the face is drawn so the
+ * hat overlaps the forehead the way a real hat would. `faceShift` slides details toward
+ * the side the character is looking at (-1 left, +1 right, 0 front/back).
+ */
+function drawVendorHeadwear(
+  ctx: CanvasRenderingContext2D,
+  s: VendorStyle,
+  hx: number,
+  hy: number,
+  facing: 'down' | 'up' | 'left' | 'right',
+  faceShift: number
+) {
+  const px = (x: number, y: number, w: number, h: number, col: string) => {
+    ctx.fillStyle = col;
+    ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+  };
+  const front = facing !== 'up';
+
+  // Short hair cap shared by every vendor (the hat sits on top of it).
+  px(hx + 1, hy - 1, 16, 7, s.outline);
+  px(hx, hy + 1, 18, 5, s.outline);
+  px(hx + 2, hy, 14, 6, s.hair);
+  px(hx + 1, hy + 2, 16, 3, s.hair);
+  if (front) {
+    px(hx + 3, hy + 4, 4, 2, s.hair);
+    px(hx + 11, hy + 4, 4, 2, s.hair);
+  }
+  px(hx + 1, hy + 5, 2, 3, s.hairShade);
+  px(hx + 15, hy + 5, 2, 3, s.hairShade);
+
+  if (s.hat === 'visor') {
+    // Open-top green visor: a band across the forehead and a short brim in front.
+    px(hx, hy + 1, 18, 5, s.outline);
+    px(hx + 1, hy + 2, 16, 3, s.hatMain);
+    px(hx + 3, hy + 2, 10, 1, s.hatLight);
+    if (front) {
+      px(hx + 1, hy + 5, 16, 2, s.outline);
+      px(hx + 2, hy + 5, 14, 1, s.hatDark);
+    }
+  } else if (s.hat === 'flatcap') {
+    // Newsboy flat cap: a soft dome with a stitched button and a small peak.
+    px(hx, hy - 3, 18, 8, s.outline);
+    px(hx + 1, hy - 2, 16, 6, s.hatMain);
+    px(hx + 3, hy - 2, 11, 2, s.hatLight);
+    px(hx + 8, hy - 4, 2, 2, s.outline);
+    px(hx + 8, hy - 3, 2, 1, s.hatDark);
+    if (front) {
+      px(hx + 2, hy + 4, 14, 3, s.outline);
+      px(hx + 3, hy + 4, 12, 2, s.hatDark);
+    }
+  } else if (s.hat === 'bandana') {
+    // White bandana with blue dots, knotted at the side (or at the back when seen from behind).
+    px(hx, hy - 2, 18, 8, s.outline);
+    px(hx + 1, hy - 1, 16, 6, s.hatMain);
+    px(hx + 4, hy, 2, 1, s.hatLight);
+    px(hx + 9, hy + 1, 2, 1, s.hatLight);
+    px(hx + 13, hy, 2, 1, s.hatLight);
+    px(hx + 6, hy + 3, 2, 1, s.hatLight);
+    px(hx + 11, hy + 3, 2, 1, s.hatLight);
+    px(hx + 1, hy + 4, 16, 1, s.hatDark);
+    if (front) {
+      const knotX = faceShift < 0 ? hx + 16 : hx - 2;
+      px(knotX, hy + 2, 4, 4, s.outline);
+      px(knotX + 1, hy + 3, 2, 2, s.hatMain);
+    } else {
+      px(hx + 7, hy + 5, 4, 4, s.outline);
+      px(hx + 8, hy + 5, 2, 3, s.hatMain);
+    }
+  } else {
+    // Wide straw hat: a tall crown, a coloured band, and a brim that shades the forehead.
+    px(hx + 3, hy - 5, 12, 6, s.outline);
+    px(hx + 4, hy - 4, 10, 4, s.hatMain);
+    px(hx + 5, hy - 4, 6, 1, s.hatLight);
+    px(hx + 4, hy - 1, 10, 1, s.hatDark);
+    px(hx - 3, hy + 1, 24, 4, s.outline);
+    px(hx - 2, hy + 2, 22, 2, s.hatMain);
+    px(hx - 2, hy + 3, 22, 1, s.hatLight);
+  }
+}
+
+/**
+ * Draw one standing/walking character onto a 32x40 canvas. Shared by the founder sprite
+ * (`createMascotSpriteTexture`) and the shopkeeper sprite (`createVendorSpriteTexture`) so
+ * the two always have the same proportions, feet, arms and walk cycle.
+ *
+ * There is NO baked ground shadow in here: the scene already draws a soft contact-shadow
+ * mesh under every character, and a second painted one made feet look doubled and heavy.
+ */
+function drawCharacterSprite(
+  id: CharacterId,
+  stepPhase: 0 | 1 | 2,
+  facing: 'down' | 'up' | 'left' | 'right',
+  accessory: 'apron' | 'vest' | 'shop-apron' | 'none',
+  idle: IdlePose
 ): THREE.CanvasTexture {
   const [c, ctx] = makeCanvas(32, 40);
   ctx.clearRect(0, 0, 32, 40);
 
-  const s = HUMAN_CHIBI_STYLES[species];
+  const s = CHARACTER_STYLES[id];
   const px = (x: number, y: number, w: number, h: number, col: string) => {
     ctx.fillStyle = col;
     ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
@@ -1758,11 +1630,8 @@ export function createMascotSpriteTexture(
 
   const isSide = facing === 'left' || facing === 'right';
   const dir = facing === 'left' ? -1 : 1;
-  const bob = stepPhase === 0 ? 0 : -1;
-
-  // Soft ground contact shadow
-  px(9, 37, 14, 2, 'rgba(30, 24, 22, 0.28)');
-  px(11, 36, 10, 1, 'rgba(30, 24, 22, 0.16)');
+  // Walking frames hop UP 1px; the idle "exhale" sinks the upper body DOWN 1px.
+  const bob = idle.breathe ? 1 : stepPhase === 0 ? 0 : -1;
 
   // --- STUBBY BOUNCY FEET (3-frame stride) ---
   const leftFootY = stepPhase === 1 ? 32 : 34;
@@ -1789,32 +1658,32 @@ export function createMascotSpriteTexture(
   // Pants
   px(10, by + 8, 12, 2, s.pants);
 
-  // Outfit-specific shirt details (when not covered by apron/vest)
-  if (accessory === 'none' && facing !== 'up') {
-    if (species === 'squirrel') {
+  // Outfit-specific shirt details (founders only, and only when not covered by apron/vest)
+  if (accessory === 'none' && facing !== 'up' && !isVendorKind(id)) {
+    if (id === 'squirrel') {
       // Sunny yellow-striped tee
       px(10, by + 3, 12, 1, s.shirtAccent);
       px(10, by + 5, 12, 1, s.shirtAccent);
-    } else if (species === 'shiba') {
+    } else if (id === 'shiba') {
       // Coral cardigan open over cream shirt
       px(14, by + 1, 4, 7, s.shirtAccent);
-    } else if (species === 'panda') {
+    } else if (id === 'panda') {
       // Varsity hoodie cream chest stripe & strings
       px(12, by + 3, 8, 2, s.shirtAccent);
       px(14, by + 1, 1, 3, s.shirtAccent);
       px(17, by + 1, 1, 3, s.shirtAccent);
-    } else if (species === 'penguin') {
+    } else if (id === 'penguin') {
       // Teal jacket zipper over white tee
       px(14, by + 1, 4, 7, s.shirtAccent);
       px(15, by + 1, 2, 7, '#cfd8e6');
-    } else if (species === 'bunny') {
+    } else if (id === 'bunny') {
       // Crisp Wall St. navy blazer + white collar + gold accent
       px(13, by + 1, 6, 5, s.shirtAccent);
       px(15, by + 2, 2, 4, '#d9a938');
     }
   }
 
-  // --- ROLE ACCESSORIES (apron / vest) ---
+  // --- ROLE ACCESSORIES (apron / vest / shopkeeper apron) ---
   if (accessory === 'apron') {
     if (facing === 'up') {
       px(10, by + 5, 12, 1, '#fff9eb');
@@ -1829,6 +1698,28 @@ export function createMascotSpriteTexture(
       // Pixel lemon emblem on apron
       px(ax + Math.floor(aw / 2) - 1, by + 4, 3, 2, '#ffd43b');
       px(ax + Math.floor(aw / 2), by + 3, 1, 1, '#58b342');
+    }
+  } else if (accessory === 'shop-apron' && isVendorKind(id)) {
+    // A bold, full-width bib apron in the trade colour: the quickest "shopkeeper" signal.
+    const v = VENDOR_STYLES[id];
+    if (facing === 'up') {
+      // Seen from behind: a waist band with a bow, and the neck strap across the shoulders.
+      px(10, by + 1, 12, 1, v.apronShade);
+      px(10, by + 5, 12, 2, v.apron);
+      px(14, by + 4, 4, 3, v.apronShade);
+    } else {
+      const ax = isSide ? (dir > 0 ? 13 : 10) : 11;
+      const aw = isSide ? 8 : 10;
+      px(ax + 1, by + 1, aw - 2, 1, v.apronShade); // neck strap
+      px(ax, by + 2, aw, 8, v.apron);
+      px(ax, by + 2, 1, 8, v.apronShade);
+      px(ax + aw - 1, by + 2, 1, 8, v.apronShade);
+      px(ax, by + 9, aw, 1, v.apronShade);
+      // Chest emblem in the trim colour.
+      px(ax + Math.floor(aw / 2) - 1, by + 3, 2, 2, v.apronTrim);
+      // Pocket with a stitched top edge.
+      px(ax + 2, by + 6, aw - 4, 3, v.apronShade);
+      px(ax + 2, by + 6, aw - 4, 1, v.apronTrim);
     }
   } else if (accessory === 'vest') {
     const vestMain = '#237868';
@@ -1864,9 +1755,33 @@ export function createMascotSpriteTexture(
   }
 
   // --- FRIENDLY CHIBI HEAD (centered at x=7, y=9+bob) ---
-  drawFriendlyHumanHead(ctx, species, 7, 9 + bob, facing);
+  drawFriendlyHumanHead(ctx, id, 7, 9 + bob, facing, idle.eyesClosed === true);
 
   return toPixelTexture(c);
+}
+
+/** A founder (the player's character). `idle` selects a standing-still frame. */
+export function createMascotSpriteTexture(
+  species: FounderSpecies,
+  stepPhase: 0 | 1 | 2 = 0,
+  facing: 'down' | 'up' | 'left' | 'right' = 'down',
+  accessory: 'apron' | 'vest' | 'none' = 'none',
+  idle: IdlePose = {}
+): THREE.CanvasTexture {
+  return drawCharacterSprite(species, stepPhase, facing, accessory, idle);
+}
+
+/**
+ * A shopkeeper: the stand seller ('broker') or one of the three Union Square vendors.
+ * Always wears the full shop apron and the trade hat; never shares a face with a founder.
+ */
+export function createVendorSpriteTexture(
+  kind: VendorKind,
+  stepPhase: 0 | 1 | 2 = 0,
+  facing: 'down' | 'up' | 'left' | 'right' = 'down',
+  idle: IdlePose = {}
+): THREE.CanvasTexture {
+  return drawCharacterSprite(kind, stepPhase, facing, 'shop-apron', idle);
 }
 
 const mascotPortraitCache = new Map<FounderSpecies, string>();
@@ -1921,10 +1836,6 @@ export function createKnockedOutSpriteTexture(species: FounderSpecies): THREE.Ca
   const koSkin = '#c4ded6';
   const koSkinShade = '#9fc2b8';
   const koSkinLight = '#ddf2ec';
-
-  // Ground shadow
-  px(6, 36, 20, 3, 'rgba(24, 22, 28, 0.30)');
-  px(8, 35, 16, 1, 'rgba(24, 22, 28, 0.18)');
 
   // Splayed knocked-out shoes sticking out at the sides
   drawRoundedRect(ctx, 6, 33, 6, 4, s.outline);
@@ -2836,7 +2747,7 @@ export function createDistrictPedestrianTexture(
   ctx.clearRect(0, 0, 36, 40);
 
   const s = DISTRICT_PED_STYLES[kind];
-  const outline = '#2a2220';
+  const outline = '#2b2118';
   const px = (x: number, y: number, w: number, h: number, col: string) => {
     ctx.fillStyle = col;
     ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
@@ -2849,10 +2760,6 @@ export function createDistrictPedestrianTexture(
 
   // Shift dog walker slightly left so the cute golden dog trots neatly on the right!
   const ox = kind === 'park-dog-walker' ? -2 : 2;
-
-  // Ground contact shadow under human
-  px(9 + ox, 37, 14, 2, 'rgba(30, 24, 22, 0.28)');
-  px(11 + ox, 36, 10, 1, 'rgba(30, 24, 22, 0.16)');
 
   // --- BACKPACK BEHIND TORSO (Columbia Student on side/front) ---
   if (kind === 'columbia-student' && isSide) {
@@ -3103,3 +3010,126 @@ export function createDistrictPedestrianTexture(
 
 
 
+
+// ============================================================================
+// WORLD MARKERS: the player's chevron + ground ring, and queue mood faces
+// ============================================================================
+
+/** The one outline colour used by every character and marker sprite. */
+const WORLD_OUTLINE = '#2b2118';
+/** The UI's "control blue" (--accent in tokens.css), so the 3D marker matches the HUD. */
+const MARKER_BLUE = '#5aa9e6';
+const MARKER_BLUE_LIGHT = '#a9d6f5';
+
+/**
+ * A small down-pointing chevron that floats above the player's head ("this one is you").
+ *
+ * Built from a bit mask instead of hand-placed rectangles: we describe only the blue
+ * shape, then paint a 1px outline on every empty pixel that touches it (including
+ * diagonals). That guarantees an even, gap-free outline whatever the shape is.
+ */
+export function createPlayerChevronTexture(): THREE.CanvasTexture {
+  const W = 9;
+  const H = 5;
+  // Two 2px-thick strokes forming a V: row r puts a stroke at x = r..r+1 and its mirror.
+  const blue: boolean[][] = Array.from({ length: H }, () => Array<boolean>(W).fill(false));
+  for (let r = 0; r < H; r++) {
+    for (const x of [r, r + 1, W - 1 - r, W - 2 - r]) {
+      if (x >= 0 && x < W) blue[r][x] = true;
+    }
+  }
+  const PAD = 1;
+  const [c, ctx] = makeCanvas(W + PAD * 2, H + PAD * 2);
+  const isBlue = (x: number, y: number) => y >= 0 && y < H && x >= 0 && x < W && blue[y][x];
+  for (let y = -PAD; y < H + PAD; y++) {
+    for (let x = -PAD; x < W + PAD; x++) {
+      if (isBlue(x, y)) {
+        ctx.fillStyle = y === 0 ? MARKER_BLUE_LIGHT : MARKER_BLUE;
+        ctx.fillRect(x + PAD, y + PAD, 1, 1);
+        continue;
+      }
+      let touches = false;
+      for (let dy = -1; dy <= 1 && !touches; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (isBlue(x + dx, y + dy)) {
+            touches = true;
+            break;
+          }
+        }
+      }
+      if (touches) {
+        ctx.fillStyle = WORLD_OUTLINE;
+        ctx.fillRect(x + PAD, y + PAD, 1, 1);
+      }
+    }
+  }
+  return toPixelTexture(c);
+}
+
+/**
+ * A soft blue ring drawn on the ground around the player's feet. Smooth (not pixel
+ * art) on purpose: it is a light-on-the-floor effect, like the contact shadows.
+ */
+export function createPlayerRingTexture(): THREE.CanvasTexture {
+  const SIZE = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext('2d')!;
+  const cx = SIZE / 2;
+  // Faint inner fill so the ring reads as a pad, then a crisp ring with a soft glow.
+  const fill = ctx.createRadialGradient(cx, cx, 0, cx, cx, 26);
+  fill.addColorStop(0, 'rgba(90, 169, 230, 0.18)');
+  fill.addColorStop(1, 'rgba(90, 169, 230, 0.05)');
+  ctx.fillStyle = fill;
+  ctx.beginPath();
+  ctx.arc(cx, cx, 26, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(90, 169, 230, 0.35)';
+  ctx.beginPath();
+  ctx.arc(cx, cx, 26, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(169, 214, 245, 0.95)';
+  ctx.beginPath();
+  ctx.arc(cx, cx, 26, 0, Math.PI * 2);
+  ctx.stroke();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * The 7x7 face floating over a queued customer. The fill colour repeats the patience
+ * bar's traffic-light colours (green / amber / red) so the mood is readable even when
+ * the sprite is only a few screen pixels wide.
+ */
+export function createMoodFaceTexture(mood: QueueMood): THREE.CanvasTexture {
+  const [c, ctx] = makeCanvas(7, 7);
+  const fill = mood === 'happy' ? '#9be37a' : mood === 'neutral' ? '#ffd84d' : '#f26b5b';
+  const px = (x: number, y: number, w: number, h: number, col: string) => {
+    ctx.fillStyle = col;
+    ctx.fillRect(x, y, w, h);
+  };
+  // Round-ish head: 5x5 fill inside a 1px outline with clipped corners.
+  px(1, 0, 5, 7, WORLD_OUTLINE);
+  px(0, 1, 7, 5, WORLD_OUTLINE);
+  px(1, 1, 5, 5, fill);
+  // Eyes
+  px(2, 2, 1, 1, WORLD_OUTLINE);
+  px(4, 2, 1, 1, WORLD_OUTLINE);
+  // Mouth: corners up (happy), a straight line (neutral), corners down (angry).
+  if (mood === 'happy') {
+    px(1, 3, 1, 1, WORLD_OUTLINE);
+    px(5, 3, 1, 1, WORLD_OUTLINE);
+    px(2, 4, 3, 1, WORLD_OUTLINE);
+  } else if (mood === 'neutral') {
+    px(2, 4, 3, 1, WORLD_OUTLINE);
+  } else {
+    px(2, 4, 3, 1, WORLD_OUTLINE);
+    px(1, 5, 1, 1, WORLD_OUTLINE);
+    px(5, 5, 1, 1, WORLD_OUTLINE);
+  }
+  return toPixelTexture(c);
+}

@@ -31,7 +31,9 @@ function PlotLeaseModalBody() {
     actionRow = {
       id: 'sign-lease',
       label: 'Sign lease',
-      value: `$${neighborhood.dailyRent}/day`,
+      // "from tonight": signing pays nothing now; the first rent is booked at the closing
+      // bell, so the row says WHEN the cost starts, not only how much it is.
+      value: `$${neighborhood.dailyRent}/day from tonight`,
       onSelect: actions.signLease,
       // Leasing moves no money today (rent starts at day close), so the rent IS the preview.
       preview: <PurchasePreviewView preview={{ kind: 'none' }}>{rent}</PurchasePreviewView>,

@@ -22,6 +22,31 @@ export interface CursorMenuItem {
   value?: ReactNode;
   disabled?: boolean;
   onSelect: () => void;
+  /**
+   * Press-and-hold support for the mouse. When set, pressing the button selects at once
+   * (on pointer-down, not on click) and reports held=true; releasing ANYWHERE reports
+   * held=false. The release is caught on the window, not the button, because the
+   * button may become disabled mid-hold (e.g. Serve while pouring), and a disabled
+   * button receives no pointer-up: listening on it would leave the hold stuck on.
+   */
+  onHoldChange?: (held: boolean) => void;
+}
+
+/** Start a mouse hold on a menu item: select now, report held until the pointer is released. */
+function startPointerHold(e: React.PointerEvent, item: CursorMenuItem): void {
+  if (e.button !== 0 || !item.onHoldChange) return;
+  const report = item.onHoldChange;
+  const release = (): void => {
+    report(false);
+    window.removeEventListener('pointerup', release);
+    window.removeEventListener('pointercancel', release);
+    window.removeEventListener('blur', release);
+  };
+  window.addEventListener('pointerup', release);
+  window.addEventListener('pointercancel', release);
+  window.addEventListener('blur', release);
+  report(true);
+  item.onSelect();
 }
 
 interface CursorMenuProps {
@@ -148,7 +173,10 @@ export function CursorMenu({
             disabled={item.disabled}
             onMouseEnter={() => !item.disabled && setCursor(i)}
             onFocus={() => setCursor(i)}
-            onClick={item.onSelect}
+            onPointerDown={item.onHoldChange ? (e) => startPointerHold(e, item) : undefined}
+            // A hold item already selected on pointer-down; a mouse click (detail > 0)
+            // must not select it a second time. Keyboard "clicks" have detail 0.
+            onClick={item.onHoldChange ? (e) => e.detail === 0 && item.onSelect() : item.onSelect}
           >
             <span>{item.label}</span>
             {item.value !== undefined && <span className="pt-menu-value">{item.value}</span>}

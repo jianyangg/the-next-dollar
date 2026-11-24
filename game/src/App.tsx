@@ -1,5 +1,5 @@
 import { LazyMotion, MotionConfig } from 'motion/react';
-import { useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { soundEngine } from './audio/soundEngine';
 import { connectScene } from './state/connectScene';
 import { startGameLoops } from './state/loops';
@@ -8,10 +8,12 @@ import { BottomDock } from './ui/BottomDock';
 import { EndOfDayModal } from './ui/EndOfDayModal';
 import { FounderModal } from './ui/FounderModal';
 import { Hud } from './ui/Hud';
+import { IntroStory } from './ui/IntroStory';
 import { MapModalHost } from './ui/MapModalHost';
 import { MarketModals } from './ui/MarketModals';
 import { PlotLeaseModal } from './ui/PlotLeaseModal';
 import { SellerDealModal } from './ui/SellerDealModal';
+import { TravelTransition } from './ui/TravelTransition';
 import { TutorialBar } from './ui/TutorialBar';
 import { WorldPrompts } from './ui/WorldPrompts';
 import { PatienceBars, SalePopLayer, ToastLayer } from './ui/WorldOverlays';
@@ -20,6 +22,12 @@ import { PatienceBars, SalePopLayer, ToastLayer } from './ui/WorldOverlays';
 // `strict` makes a stray `motion.*` component throw instead of silently pulling the full
 // engine back into the bundle; the UI must use the lightweight `m.*` components.
 const loadMotionFeatures = () => import('./motionFeatures').then((mod) => mod.default);
+
+// Dev cheat panel: only in development builds (`import.meta.env.DEV` is a compile-time
+// constant, so production bundles drop this import entirely) and only with ?dev in the URL.
+const DevPanelHost = import.meta.env.DEV
+  ? lazy(() => import('./dev/DevPanel').then((mod) => ({ default: mod.DevPanelHost })))
+  : null;
 
 /**
  * App is LAYOUT ONLY: a mount point for the 3D scene plus the list of UI pieces.
@@ -112,6 +120,18 @@ export function App() {
 
       {/* Choose Your Founder Character-Select Overlay */}
       <FounderModal />
+
+      {/* Opening story (first visit / Replay intro), above the founder picker */}
+      <IntroStory />
+
+      {/* Subway ride between districts: doors close, district swaps, doors open */}
+      <TravelTransition />
+
+      {DevPanelHost && (
+        <Suspense fallback={null}>
+          <DevPanelHost />
+        </Suspense>
+      )}
     </div>
     </LazyMotion>
     </MotionConfig>

@@ -9,6 +9,7 @@ import { type BrewGameState, initGame, pressGame, pressStirKey, stepGame } from 
 import { getNeighborhood, type NeighborhoodId } from '../core/neighborhoods';
 import * as Purchases from '../core/purchases';
 import { ledgerChips, type MoneyChip } from '../core/ledgerChips';
+import { STARTER_NAME, type StarterItem, starterShortfall } from '../core/tutorial';
 import { gameplayRandom } from '../core/runRandom';
 import { applySale, applyWalkout, salePopLabel } from '../core/sales';
 import { dealMachine } from '../deal/dealMachine';
@@ -26,6 +27,7 @@ import { soundEngine } from '../audio/soundEngine';
 import type { NearbyTarget } from '../world/CentralParkScene';
 import type { FounderSpecies } from '../world/pixelArt';
 import { anchorStore } from './anchorStore';
+import { hasSeenIntro, markIntroSeen } from './introSeen';
 import { getScene } from './sceneBridge';
 import {
   cancelAllTimers,
@@ -113,6 +115,20 @@ export interface GameData {
   serveProgress: number | null;
 
   // --- ui ---
+  /** The opening story cards are showing (first visit, or "Replay intro"). */
+  introOpen: boolean;
+  /**
+   * False until the player confirms a founder for the first time. Before that the
+   * founder picker cannot be dismissed (Esc / backdrop): there is no run behind it yet,
+   * so closing it would drop the player into the world without having chosen anyone.
+   */
+  runStarted: boolean;
+  /**
+   * A subway ride in progress, or null. 'cover': the transition is closing over the
+   * old district; the district is swapped while fully covered; 'reveal': it opens on
+   * the new one. Input and the clock are paused for the whole ride.
+   */
+  travel: { to: NeighborhoodId; phase: 'cover' | 'reveal' } | null;
   founderModalOpen: boolean;
   mapOpen: boolean;
   booksOpen: boolean;
@@ -161,6 +177,12 @@ export interface GameActions {
   closeFounderModal: () => void;
   /** "Open My Stand" button: unlock audio, start music, close the founder picker. */
   startFromFounderModal: () => void;
+  /** Close the opening story (last card, or skipped) and remember it was seen. */
+  finishIntro: () => void;
+  /** Show the opening story again (from the founder screen). */
+  replayIntro: () => void;
+  /** Dev panel only: forget the seller deal's state machine so the next visit starts fresh. */
+  resetDealForDev: () => void;
   toggleMap: (opts?: { click?: boolean }) => void;
   closeMap: () => void;
   toggleBooks: (opts?: { click?: boolean }) => void;
@@ -256,6 +278,9 @@ export function createInitialGameData(): GameData {
     combo: 0,
     cashPulseKey: 0,
     serveProgress: null,
+    introOpen: !hasSeenIntro(),
+    runStarted: false,
+    travel: null,
     founderModalOpen: true,
     mapOpen: false,
     booksOpen: false,
@@ -287,7 +312,14 @@ export const selectStandOpen = (s: GameData): boolean =>
 /** True while the day clock must stand still (a panel is open, day 1 has no stand yet...). */
 export const selectClockPaused = (s: GameData): boolean =>
   isClockPaused({
-    overlayOpen: s.founderModalOpen || s.booksOpen || s.activeModal !== null || s.mapOpen || s.eodRecord !== null,
+    overlayOpen:
+      s.introOpen ||
+      s.founderModalOpen ||
+      s.travel !== null ||
+      s.booksOpen ||
+      s.activeModal !== null ||
+      s.mapOpen ||
+      s.eodRecord !== null,
     day: s.economy.day,
     maxDays: s.economy.maxDays,
     ownedStands: s.economy.ownedStands,
@@ -310,6 +342,13 @@ const TOAST_LIFETIME_MS = 2200;
 const SALE_POP_LIFETIME_MS = 1200;
 const STIR_SHAKE_MS = 180;
 const POUR_DURATION_MS = 450;
+/**
+ * Subway ride timing: the screen closes over the old district, the district is swapped
+ * while fully covered (so the player never sees the scene rebuild), then it opens on
+ * the new one. TravelTransition.tsx animates to these same numbers.
+ */
+export const TRAVEL_COVER_MS = 650;
+export const TRAVEL_REVEAL_MS = 550;
 
 export const useGameStore = create<GameState>()(
   devtools(
@@ -365,10 +404,10 @@ export const useGameStore = create<GameState>()(
       // ---- economy helpers ---------------------------------------------------
 
       /**
-       * Every change to the economy goes through here so two follow-up rules always
-       * hold (they used to be separate React effects that ran a render later):
-       *   1. brewedCups can never exceed the cups actually in stock.
-       *   2. The first-ever sale completes the tutorial.
+       * Every change to the economy goes through here so one follow-up rule always
+       * holds: brewedCups can never exceed the cups actually in stock.
+       * (The tutorial used to end at the first sale; it now ends when the first day
+       * closes with a sale, see startNextDay, so its last goal can teach the 5% line.)
        */
       const commitEconomy = (
         next: SliceState,
@@ -377,11 +416,22 @@ export const useGameStore = create<GameState>()(
       ): void => {
         const brewed = extra.brewedCups ?? get().brewedCups;
         patch({ ...extra, economy: next, brewedCups: Math.min(brewed, next.cupsInStock) }, name);
-        if (get().tutorialActive && next.totalRevenue > 0) {
-          patch({ tutorialActive: false }, 'completeTutorial');
-          soundEngine.playPerfect();
-          pushToast('Tutorial done', 'positive', 'own-stand');
-        }
+      };
+
+      /**
+       * Tutorial spending guard (rule in core/tutorial.ts): while the tutorial runs,
+       * refuse a purchase that would leave too little cash for the other starter items,
+       * so a new player cannot strand themselves without a pitcher. Returns true when
+       * the purchase may go ahead.
+       */
+      const tutorialAllows = (item: StarterItem, anchor: ToastAnchor): boolean => {
+        if (!get().tutorialActive) return true;
+        const short = starterShortfall(get().economy, item);
+        if (!short) return true;
+        soundEngine.playReject();
+        const names = short.reservedFor.map((m) => STARTER_NAME[m]).join(' + ');
+        pushToast(`Keep $${short.reserve} for ${names}`, 'negative', anchor);
+        return false;
       };
 
       /**
@@ -546,12 +596,33 @@ export const useGameStore = create<GameState>()(
           patch({ founderSpecies: species }, 'pickFounder');
         },
         openFounderModal: () => patch({ founderModalOpen: true }, 'openFounderModal'),
-        closeFounderModal: () => patch({ founderModalOpen: false }, 'closeFounderModal'),
+        closeFounderModal: () => {
+          // Before the first run starts there is nothing behind the picker to return to.
+          if (!get().runStarted) return;
+          patch({ founderModalOpen: false }, 'closeFounderModal');
+        },
         startFromFounderModal: () => {
           soundEngine.initOnGesture();
           if (!soundEngine.isMuted()) soundEngine.startMusic();
           soundEngine.playClick();
-          patch({ founderModalOpen: false }, 'startFromFounderModal');
+          patch({ founderModalOpen: false, runStarted: true }, 'startFromFounderModal');
+        },
+
+        finishIntro: () => {
+          soundEngine.playClick();
+          markIntroSeen();
+          patch({ introOpen: false }, 'finishIntro');
+        },
+
+        replayIntro: () => {
+          soundEngine.playClick();
+          patch({ introOpen: true }, 'replayIntro');
+        },
+
+        resetDealForDev: () => {
+          dealActor?.stop();
+          dealActor = null;
+          patch({ deal: null }, 'resetDealForDev');
         },
 
         toggleMap: (opts) => {
@@ -585,7 +656,9 @@ export const useGameStore = create<GameState>()(
 
         handleEscape: () => {
           const s = get();
-          if (s.founderModalOpen) actions.closeFounderModal();
+          if (s.introOpen) actions.finishIntro(); // Esc skips the story
+          else if (s.travel) return; // mid-ride: nothing to close
+          else if (s.founderModalOpen) actions.closeFounderModal();
           else if (s.mapOpen) actions.closeMap();
           else if (s.activeModal) actions.closeModal();
           // Books before the stand: Books can be open over the stand, and it shows an
@@ -613,6 +686,7 @@ export const useGameStore = create<GameState>()(
         interact: (target) => {
           if (!target) return;
           if (target === 'own-stand') actions.enterStand();
+          else if (target === 'subway') actions.toggleMap({ click: true });
           else patch({ activeModal: target }, 'interact');
         },
 
@@ -629,25 +703,41 @@ export const useGameStore = create<GameState>()(
           patch({ workingAtStand: false }, 'exitStand');
         },
 
+        /**
+         * Ride the subway to another district. Instead of swapping the world instantly
+         * (which felt like a glitch), the ride has three beats, driven by two timers:
+         *   depart  -> travel.phase 'cover'  (TravelTransition closes over the screen)
+         *   arrive  -> swap neighborhoodId while covered, travel.phase 'reveal'
+         *   done    -> travel = null, the district name floats up
+         * Timers go through scheduleTimeout so resetGameStore() can cancel a ride.
+         */
         selectNeighborhood: (id) => {
+          if (get().travel) return; // already riding
           leaveStandAndStopLoops();
           patch(
-            {
-              workingAtStand: false,
-              activeModal: null,
-              mapOpen: false,
-              lastBusinessNeighborhood: id !== 'market' ? id : get().lastBusinessNeighborhood,
-              neighborhoodId: id,
-            },
-            'selectNeighborhood'
+            { workingAtStand: false, activeModal: null, mapOpen: false, travel: { to: id, phase: 'cover' } },
+            'travelDepart'
           );
           soundEngine.playTravel();
-          const next = getNeighborhood(id);
-          pushToast(next.shortName, 'neutral', 'own-stand');
+          scheduleTimeout(() => {
+            patch(
+              {
+                lastBusinessNeighborhood: id !== 'market' ? id : get().lastBusinessNeighborhood,
+                neighborhoodId: id,
+                travel: { to: id, phase: 'reveal' },
+              },
+              'travelArrive'
+            );
+            scheduleTimeout(() => {
+              patch({ travel: null }, 'travelDone');
+              pushToast(getNeighborhood(id).shortName, 'neutral', 'own-stand');
+            }, TRAVEL_REVEAL_MS);
+          }, TRAVEL_COVER_MS);
         },
 
         // ===== shopping & staff =====
         buyLemons: () => {
+          if (!tutorialAllows('lemons', 'own-stand')) return;
           const before = get().economy;
           if (!runPurchase(Purchases.buyLemons, 'buyLemons').ok) {
             soundEngine.playReject();
@@ -660,6 +750,7 @@ export const useGameStore = create<GameState>()(
 
         buyStallKit: () => {
           const before = get().economy;
+          if (!tutorialAllows('stall-kit', 'seller-stand')) return;
           if (!runPurchase(Purchases.buyStallKit, 'buyStallKit').ok) {
             soundEngine.playReject();
             pushToast(`Need $${STALL_KIT_COST}`, 'negative', 'seller-stand');
@@ -671,6 +762,7 @@ export const useGameStore = create<GameState>()(
 
         buyPitcher: () => {
           const before = get().economy;
+          if (!tutorialAllows('pitcher', 'seller-stand')) return;
           if (!runPurchase(Purchases.buyPitcher, 'buyPitcher').ok) {
             soundEngine.playReject();
             pushToast(`Need $${Purchases.PITCHER_COST}`, 'negative', 'seller-stand');
@@ -866,6 +958,20 @@ export const useGameStore = create<GameState>()(
             // The sale pop ("+$2", combo) is the whole celebration; a second toast
             // repeating the cash in a sentence was noise.
             completeSale(served.patienceRatio);
+
+            // HOLD TO SERVE: a tap pours one cup; while Space (or the Serve button) is
+            // still held, the next pour starts by itself. It stops quietly when the
+            // player lets go, the line is empty or the pitcher is out (no "Brew first"
+            // toast here: the player did not press anything new).
+            const after = get();
+            if (
+              after.spaceHeld &&
+              after.workingAtStand &&
+              after.brewedCups >= 1 &&
+              anchorStore.getState().queue.length > 0
+            ) {
+              actions.startServeFrontCustomer();
+            }
           };
           setServeFrame(requestAnimationFrame(tick));
         },
@@ -919,6 +1025,13 @@ export const useGameStore = create<GameState>()(
           soundEngine.playClick();
           // The scene's sky follows timeProgress through the store subscription.
           commitEconomy(advanceToNextDay(get().economy), 'startNextDay', { eodRecord: null, timeProgress: 0 });
+          // The tutorial ends after its last goal ("beat the line"): the first day that
+          // closed with at least one sale. A day 1 with no sales keeps the tutorial on.
+          if (get().tutorialActive && get().economy.totalRevenue > 0) {
+            patch({ tutorialActive: false }, 'completeTutorial');
+            soundEngine.playPerfect();
+            pushToast('Tutorial done', 'positive', 'own-stand');
+          }
         },
 
         // ===== seller deal =====

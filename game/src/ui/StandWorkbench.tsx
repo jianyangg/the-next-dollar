@@ -104,6 +104,8 @@ function StandMenu() {
       value: queueLength > 0 ? queueLength : undefined,
       disabled: brewedCups < 1 || queueLength === 0 || pouring,
       onSelect: actions.startServeFrontCustomer,
+      // Hold the mouse on Serve to keep pouring for the next customers (same as Space).
+      onHoldChange: actions.setSpaceHeld,
     },
     { id: 'price', label: 'Price', value: `$${pricePerCup}`, onSelect: () => setPanel('price') },
     {

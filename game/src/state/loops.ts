@@ -108,7 +108,8 @@ export function handleGameKeyDown(e: KeyboardEvent): boolean {
     }
   }
 
-  const nothingOverlaying = !s.activeModal && !s.mapOpen && !s.founderModalOpen && !s.eodRecord;
+  const nothingOverlaying =
+    !s.activeModal && !s.mapOpen && !s.founderModalOpen && !s.eodRecord && !s.introOpen && !s.travel;
   if (k === 'b') {
     e.preventDefault();
     actions.toggleBooks();
@@ -149,7 +150,13 @@ function startKeyboard(): () => void {
     onKeyDown: handleGameKeyDown,
     onKeyUp: handleGameKeyUp,
   });
+  // If the window loses focus while Space is down, the key-up goes to another app and
+  // never reaches us; without this the game would think Space is held forever (and the
+  // hold-to-serve chain would keep pouring). Losing focus = letting go.
+  const releaseHeld = (): void => useGameStore.getState().actions.setSpaceHeld(false);
+  window.addEventListener('blur', releaseHeld);
   return () => {
+    window.removeEventListener('blur', releaseHeld);
     removeLayer();
     stopRouter();
   };

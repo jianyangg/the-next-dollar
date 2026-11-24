@@ -19,6 +19,7 @@ import { createInitialState } from '../../core/sliceModel';
 import { dispatchKeyDown, resetInputRouterForTests } from '../../state/input';
 import { resetGameStore, useGameStore } from '../../state/gameStore';
 import { FounderModal } from '../FounderModal';
+import { IntroStory } from '../IntroStory';
 import { ManhattanMapModal } from '../ManhattanMapModal';
 import { MarketModals } from '../MarketModals';
 import { PlotLeaseModal } from '../PlotLeaseModal';
@@ -73,13 +74,42 @@ describe('plot lease', () => {
 
 describe('founder select', () => {
   it('moves with right/left and confirming picks and starts', () => {
-    useGameStore.setState({ founderModalOpen: true, founderSpecies: 'squirrel' });
+    useGameStore.setState({ introOpen: false, founderModalOpen: true, founderSpecies: 'squirrel' });
     render(wrap(<FounderModal />));
     expect(screen.getByText('Campus Founder')).toBeTruthy();
     press('d');
     press('Enter');
     expect(useGameStore.getState().founderSpecies).toBe('panda');
     expect(useGameStore.getState().founderModalOpen).toBe(false);
+  });
+});
+
+describe('opening story', () => {
+  it('advances one card per E press (held repeats ignored), then hands over to the founder picker', () => {
+    localStorage.clear();
+    useGameStore.setState({ introOpen: true, founderModalOpen: true, runStarted: false });
+    render(wrap(<><IntroStory /><FounderModal /></>));
+    // The stake comes from the engine's starting cash, not a hard-coded $30.
+    expect(screen.getByText(/Summer in New York/)).toBeTruthy();
+    press('e');
+    act(() =>
+      dispatchKeyDown({ key: 'e', repeat: true, target: document.body, preventDefault: () => {} } as unknown as KeyboardEvent)
+    );
+    press('e');
+    press('e');
+    expect(useGameStore.getState().introOpen).toBe(true); // 4th card still showing
+    press('e');
+    expect(useGameStore.getState().introOpen).toBe(false);
+    expect(localStorage.getItem('tnd.introSeen.v1')).toBe('1');
+  });
+
+  it('the founder picker offers no Close before the first run, and has Replay intro', async () => {
+    useGameStore.setState({ introOpen: false, founderModalOpen: true, runStarted: false });
+    render(wrap(<FounderModal />));
+    expect(await screen.findByText('Who are you?')).toBeTruthy();
+    expect(screen.queryByText('Close')).toBeNull();
+    act(() => screen.getByText('Replay intro').click());
+    expect(useGameStore.getState().introOpen).toBe(true);
   });
 });
 

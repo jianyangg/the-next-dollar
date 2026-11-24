@@ -41,13 +41,15 @@ import { type FxQuality, screenYToTiltOffset, smoothToward } from './postfxQuali
 /**
  * Tilt-shift geometry, in the effect's own units where the whole screen height
  * spans -1 (bottom) .. +1 (top).
- *  - Fully sharp band: |y - offset| < FOCUS_AREA - FEATHER = 0.45, i.e. 45% of
- *    the screen height centred on the player. Pixel art stays 1:1 crisp there
- *    because the effect outputs the untouched original inside this band.
- *  - Blur ramps up between 0.45 and FOCUS_AREA (0.85) away from the player and
- *    is at full (still mild) strength only in the top/bottom ~8% of the screen.
+ *  - Fully sharp band: |y - offset| < FOCUS_AREA - FEATHER = 0.6, i.e. 60% of
+ *    the screen height centred on the player (it was 45%). Pixel art stays 1:1 crisp
+ *    there because the effect outputs the untouched original inside this band, so the
+ *    stands and the pedestrians walking within a few units of the player no longer
+ *    sit on the soft edge of the blur.
+ *  - Blur ramps up between 0.6 and FOCUS_AREA (1.0) away from the player, so it
+ *    reaches full (still mild) strength only at the very top and bottom edges.
  */
-const TILT_FOCUS_AREA = 0.85;
+const TILT_FOCUS_AREA = 1.0;
 const TILT_FEATHER = 0.4;
 /** Camera looks straight on, so the focus band is horizontal: no rotation. */
 const TILT_ROTATION = 0;
@@ -75,10 +77,14 @@ const BLOOM_RESOLUTION_SCALE_LOW = 0.5;
 const BLOOM_INTENSITY_DAY = 0.3;
 const BLOOM_INTENSITY_NIGHT = 1.0;
 
-/** Vignette: gentle at noon, a bit heavier at dusk to pull the eye to the lit area. */
+/**
+ * Vignette: gentle at noon, a bit heavier at dusk to pull the eye to the lit area.
+ * Both darkness values are about a third lower than the first version (0.42 / 0.62) so
+ * the corners match the bright UI instead of looking dirty.
+ */
 const VIGNETTE_OFFSET = 0.32;
-const VIGNETTE_DARKNESS_DAY = 0.42;
-const VIGNETTE_DARKNESS_NIGHT = 0.62;
+const VIGNETTE_DARKNESS_DAY = 0.28;
+const VIGNETTE_DARKNESS_NIGHT = 0.42;
 
 export class PostFx {
   private readonly renderer: THREE.WebGLRenderer;

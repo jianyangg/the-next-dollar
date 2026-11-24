@@ -30,9 +30,10 @@ import { CENTRAL_PARK_DEAL } from '../core/deal';
 import * as P from '../core/purchases';
 import { applySale } from '../core/sales';
 import { createInitialState, type SliceState } from '../core/sliceModel';
-import { resetAnchorStore } from './anchorStore';
+import { anchorStore, resetAnchorStore } from './anchorStore';
+import { registerScene } from './sceneBridge';
 import type { SellerClient } from '../deal/sellerClient';
-import { resetGameStore, setSellerClientForTests, useGameStore } from './gameStore';
+import { resetGameStore, setSellerClientForTests, TRAVEL_COVER_MS, TRAVEL_REVEAL_MS, useGameStore } from './gameStore';
 
 const store = () => useGameStore.getState();
 const actions = () => useGameStore.getState().actions;
@@ -83,6 +84,8 @@ describe('shopping actions match the pure core rules', () => {
   });
 
   it('refuses an unaffordable purchase: economy untouched, buzz sound, negative toast', () => {
+    // Tutorial off: this test is about the plain affordability rule, not the starter guard.
+    useGameStore.setState({ tutorialActive: false });
     setEconomy({ cash: 4.99 });
     const before = store().economy;
 
@@ -111,6 +114,7 @@ describe('shopping actions match the pure core rules', () => {
   });
 
   it('two rapid buyPitcher calls with $15 buy exactly one pitcher', () => {
+    useGameStore.setState({ tutorialActive: false });
     setEconomy({ cash: 15 });
 
     actions().buyPitcher();
@@ -128,14 +132,41 @@ describe('shopping actions match the pure core rules', () => {
     expect(store().brewedCups).toBe(2);
   });
 
-  it('completes the tutorial (once) when the first revenue lands', () => {
+  it('a sale no longer ends the tutorial; closing the first day with a sale does (once)', () => {
     useGameStore.setState({ economy: applySale({ ...createInitialState(), cupsInStock: 5 }, 1, 1) });
-    actions().hireWorker(); // any economy commit re-checks the tutorial rule
+    actions().hireWorker(); // an economy commit must NOT end the tutorial any more
+    expect(store().tutorialActive).toBe(true);
+    actions().startNextDay(); // the player closes the first end-of-day screen
     expect(store().tutorialActive).toBe(false);
     expect(soundEngine.playPerfect).toHaveBeenCalledTimes(1);
     expect(store().toasts.some((t) => t.text === 'Tutorial done')).toBe(true);
-    actions().hireWorker();
+    actions().startNextDay();
     expect(soundEngine.playPerfect).toHaveBeenCalledTimes(1);
+  });
+
+  it('a day 1 with no sales keeps the tutorial running', () => {
+    actions().startNextDay();
+    expect(store().tutorialActive).toBe(true);
+  });
+
+  it('tutorial guard: refuses the second crate that would leave no money for the pitcher', () => {
+    actions().buyStallKit(); // $30 -> $18
+    actions().buyLemons(); // -> $13
+    actions().buyLemons(); // would leave $8 < $10 pitcher: refused
+    expect(store().economy.cash).toBe(13);
+    expect(store().economy.cupsInStock).toBe(10);
+    expect(store().toasts.at(-1)?.text).toBe('Keep $10 for pitcher');
+    expect(soundEngine.playReject).toHaveBeenCalledTimes(1);
+    actions().buyPitcher(); // the essentials still go through
+    expect(store().economy.pitchers).toBe(1);
+  });
+
+  it('tutorial guard steps aside once the tutorial is skipped', () => {
+    actions().skipTutorial();
+    actions().buyStallKit();
+    actions().buyLemons();
+    actions().buyLemons();
+    expect(store().economy.cupsInStock).toBe(20);
   });
 });
 
@@ -290,19 +321,54 @@ describe('seller deal (deal machine + seller server client)', () => {
 });
 
 describe('navigation', () => {
+  /** Run a whole subway ride: doors close, district swaps, doors open. */
+  const ride = (id: Parameters<ReturnType<typeof actions>['selectNeighborhood']>[0]) => {
+    actions().selectNeighborhood(id);
+    vi.advanceTimersByTime(TRAVEL_COVER_MS + TRAVEL_REVEAL_MS);
+  };
+
+  it('a subway ride covers the screen, swaps the district while covered, then reveals', () => {
+    actions().selectNeighborhood('market');
+    // Doors closing: the old district is still loaded and the clock is paused.
+    expect(store().travel).toEqual({ to: 'market', phase: 'cover' });
+    expect(store().neighborhoodId).toBe('central-park');
+    actions().selectNeighborhood('fidi'); // a second ride request mid-ride is ignored
+    vi.advanceTimersByTime(TRAVEL_COVER_MS);
+    expect(store().travel).toEqual({ to: 'market', phase: 'reveal' });
+    expect(store().neighborhoodId).toBe('market');
+    vi.advanceTimersByTime(TRAVEL_REVEAL_MS);
+    expect(store().travel).toBeNull();
+    expect(store().toasts.at(-1)?.text).toBe('Supply Market');
+  });
+
   it('selectNeighborhood remembers the last business district and closes panels', () => {
     useGameStore.setState({ mapOpen: true, workingAtStand: true });
-    actions().selectNeighborhood('market');
+    ride('market');
     expect(store().neighborhoodId).toBe('market');
     expect(store().lastBusinessNeighborhood).toBe('central-park');
     expect(store().mapOpen).toBe(false);
     expect(store().workingAtStand).toBe(false);
-    actions().selectNeighborhood('columbia');
+    ride('columbia');
     expect(store().lastBusinessNeighborhood).toBe('columbia');
   });
 
+  it('Escape skips the intro first, and cannot close the founder picker before the run starts', () => {
+    useGameStore.setState({ introOpen: true, founderModalOpen: true, runStarted: false });
+    actions().handleEscape();
+    expect(store().introOpen).toBe(false);
+    actions().handleEscape();
+    expect(store().founderModalOpen).toBe(true); // nothing behind it yet
+    actions().closeFounderModal();
+    expect(store().founderModalOpen).toBe(true);
+    actions().startFromFounderModal();
+    expect(store().runStarted).toBe(true);
+    actions().openFounderModal();
+    actions().handleEscape();
+    expect(store().founderModalOpen).toBe(false); // mid-run it closes normally
+  });
+
   it('Escape closes the top-most layer first', () => {
-    useGameStore.setState({ founderModalOpen: true, mapOpen: true, booksOpen: true });
+    useGameStore.setState({ introOpen: false, runStarted: true, founderModalOpen: true, mapOpen: true, booksOpen: true });
     actions().handleEscape();
     expect(store().founderModalOpen).toBe(false);
     expect(store().mapOpen).toBe(true);
@@ -313,11 +379,56 @@ describe('navigation', () => {
   });
 
   it('Escape closes Books opened over the stand, and only then leaves the stand', () => {
-    useGameStore.setState({ founderModalOpen: false, workingAtStand: true, booksOpen: true });
+    useGameStore.setState({ introOpen: false, founderModalOpen: false, workingAtStand: true, booksOpen: true });
     actions().handleEscape();
     expect(store().booksOpen).toBe(false);
     expect(store().workingAtStand).toBe(true);
     actions().handleEscape();
     expect(store().workingAtStand).toBe(false);
+  });
+});
+
+describe('hold to serve', () => {
+  // Node has no requestAnimationFrame. This stub finishes each 450 ms pour on the next
+  // fake-timer tick by reporting a frame time far in the future, so a test can count
+  // pours by advancing the fake clock.
+  beforeEach(() => {
+    vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) =>
+      setTimeout(() => cb(performance.now() + 10_000), 16)
+    );
+    vi.stubGlobal('cancelAnimationFrame', (id: ReturnType<typeof setTimeout>) => clearTimeout(id));
+    // A fake scene that always has a customer to hand over, and a 4-person line.
+    registerScene({ serveFrontCustomer: () => ({ patienceRatio: 1 }), burstSaleSparkles: () => {} } as unknown as Parameters<typeof registerScene>[0]);
+    anchorStore.setState({ queue: [1, 2, 3, 4].map((id) => ({ id })) } as never);
+    useGameStore.setState({ workingAtStand: true, brewedCups: 3 });
+    setEconomy({ cupsInStock: 10, pitchers: 1 });
+  });
+  afterEach(() => {
+    registerScene(null);
+    vi.unstubAllGlobals();
+  });
+
+  it('a tap (released before the pour ends) serves exactly one cup', () => {
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(500);
+    expect(store().economy.dayCupsSold).toBe(1);
+  });
+
+  it('holding keeps pouring until the pitcher is empty, then stops quietly', () => {
+    actions().setSpaceHeld(true);
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(500);
+    expect(store().economy.dayCupsSold).toBe(3); // all 3 brewed cups
+    expect(store().brewedCups).toBe(0);
+    expect(store().toasts.some((t) => t.text === 'Brew first')).toBe(false);
+  });
+
+  it('letting go mid-chain stops after the current pour', () => {
+    actions().setSpaceHeld(true);
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(20); // first pour done, second started
+    actions().setSpaceHeld(false);
+    vi.advanceTimersByTime(500);
+    expect(store().economy.dayCupsSold).toBe(2);
   });
 });

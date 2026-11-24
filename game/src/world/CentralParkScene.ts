@@ -20,6 +20,8 @@ import { followRoute, replaceWaypoints, routeGoal, startRoute, type RouteState }
 import { type FxQuality, resolveFxQuality } from './postfxQuality';
 import type { Random } from '../core/rng';
 import { NeighborhoodId, getNeighborhood } from '../core/neighborhoods';
+import { SUNRISE_PROGRESS } from '../core/clock';
+import { DISTRICT_PEDESTRIANS } from './districtCrowds';
 import {
   DistrictPedestrianKind,
   FounderSpecies,
@@ -36,6 +38,16 @@ import {
   createLemonadeStandFrontTexture,
   createLimestoneLuxuryFacadeTexture,
   createMascotSpriteTexture,
+  createMoodFaceTexture,
+  createPlayerChevronTexture,
+  createPlayerRingTexture,
+  createVendorSpriteTexture,
+  IDLE_POSES,
+  idleFrameAt,
+  moodForPatience,
+  type IdleFrameKey,
+  type QueueMood,
+  type VendorKind,
   createParkBenchTexture,
   createParkPathTexture,
   createPitcherTexture,
@@ -53,6 +65,8 @@ export type NearbyTarget =
   | 'market-lemons'
   | 'market-pitchers'
   | 'plot-lease'
+  /** A subway entrance: E opens the map (travel lives underground). */
+  | 'subway'
   | null;
 
 export type PlotStatus = 'empty' | 'leased' | 'built';
@@ -76,6 +90,13 @@ export interface ProjectedAnchors {
     pitchers: { x: number; y: number };
     lemons: { x: number; y: number };
   };
+  /**
+   * Screen position of this neighborhood's subway entrance sign. Every neighborhood has
+   * one, so the live scene always publishes it. It is optional only so the placeholder
+   * snapshot in anchorStore (used before the scene exists, and in tests) stays valid;
+   * the UI draws no subway sign until a real position arrives.
+   */
+  subway?: { x: number; y: number };
 }
 
 interface Pedestrian {
@@ -83,6 +104,9 @@ interface Pedestrian {
   sprite: THREE.Sprite;
   shadow: THREE.Mesh;
   soulSprite: THREE.Sprite;
+  /** Small face above the head while queued; its expression follows patienceRatio. */
+  moodSprite: THREE.Sprite;
+  mood: QueueMood;
   frames: Record<'down' | 'up' | 'left' | 'right', [THREE.CanvasTexture, THREE.CanvasTexture, THREE.CanvasTexture]>;
   x: number;
   z: number;
@@ -99,6 +123,22 @@ interface Pedestrian {
   careful: boolean;
   koTimer: number;
 }
+
+/** A shopkeeper sprite and the three standing frames it cycles through. */
+interface IdleActor {
+  sprite: THREE.Sprite;
+  frames: Record<IdleFrameKey, THREE.CanvasTexture>;
+  /** Offsets this actor's blink/breath timing so neighbours are not in lockstep. */
+  seed: number;
+  current: IdleFrameKey;
+}
+
+/** Index of each idle frame inside a player direction's texture array (0..2 are walk frames). */
+/** Timing offset for the player's idle loop (any number; see idleFrameAt). */
+const PLAYER_IDLE_SEED = 0.37;
+/** Base opacity of the painted plot pad (was 0.22: too easy to miss). */
+const PLOT_PAD_OPACITY = 0.45;
+const PLAYER_IDLE_INDEX: Record<IdleFrameKey, number> = { rest: 0, breathe: 3, blink: 4 };
 
 interface SaleSparkle {
   mesh: THREE.Mesh;
@@ -155,6 +195,59 @@ const MARKET_STALLS_POS = new THREE.Vector3(MARKET_STALLS_XZ.x, 0, MARKET_STALLS
 const MARKET_PITCHERS_POS = new THREE.Vector3(MARKET_PITCHERS_XZ.x, 0, MARKET_PITCHERS_XZ.z);
 const MARKET_LEMONS_POS = new THREE.Vector3(MARKET_LEMONS_XZ.x, 0, MARKET_LEMONS_XZ.z);
 
+/**
+ * Where the subway entrance stands in EVERY neighborhood. One shared spot means a player
+ * learns it once: "stairs are in the back-right corner". It is the spot FiDi already used,
+ * and was checked against every neighborhood's props, the own-stand plot (x up to ~7.1)
+ * and the market stalls (x up to ~5.6), so nothing overlaps it.
+ * collision.ts holds the same numbers for FiDi's prop box; `withSubwayCollider` below
+ * adds the box for the other neighborhoods without duplicating it.
+ */
+export const SUBWAY_ENTRANCE_XZ = Object.freeze({ x: 9.4, z: -2.5 });
+/** Half-size of the stair-pit footprint (the pit mesh is 2.2 x 1.3). */
+const SUBWAY_HALF = Object.freeze({ x: 1.1, z: 0.65 });
+/** How close (in world units) the player must be for E to open the map. */
+export const SUBWAY_INTERACT_RADIUS = 2.1;
+
+export function subwayCollider(): Box {
+  return {
+    id: 'subway-entrance',
+    minX: SUBWAY_ENTRANCE_XZ.x - SUBWAY_HALF.x,
+    maxX: SUBWAY_ENTRANCE_XZ.x + SUBWAY_HALF.x,
+    minZ: SUBWAY_ENTRANCE_XZ.z - SUBWAY_HALF.z,
+    maxZ: SUBWAY_ENTRANCE_XZ.z + SUBWAY_HALF.z,
+  };
+}
+
+/**
+ * `boxes` plus the subway entrance box. collision.ts already lists the entrance for FiDi,
+ * so we skip it when an 'subway-entrance' box is present (two identical boxes would be
+ * harmless but confusing in the nav grid and in tests).
+ */
+export function withSubwayCollider(boxes: readonly Box[]): Box[] {
+  return boxes.some((b) => b.id === 'subway-entrance') ? [...boxes] : [...boxes, subwayCollider()];
+}
+
+/** One thing the player might be standing next to: how far away, and how close counts as "next to". */
+export interface NearbyCandidate {
+  target: Exclude<NearbyTarget, null>;
+  dist: number;
+  radius: number;
+}
+
+/**
+ * Of all candidates whose radius contains the player, the CLOSEST wins. Needed now that a
+ * subway entrance can sit within reach of a stand: without a tie-break the first one in
+ * the list would always win even when the player is right next to the other.
+ */
+export function pickNearbyTarget(candidates: readonly NearbyCandidate[]): NearbyTarget {
+  let best: NearbyCandidate | null = null;
+  for (const c of candidates) {
+    if (c.dist < c.radius && (best === null || c.dist < best.dist)) best = c;
+  }
+  return best ? best.target : null;
+}
+
 const QUEUE_MAX_PATIENCE = 16;
 const QUEUE_SLOTS: Array<{ x: number; z: number }> = [
   { x: OWN_STAND_POS.x, z: OWN_STAND_POS.z + 1.05 },
@@ -171,15 +264,6 @@ const PED_SPRITE_H = 1.38;
 const PED_SPRITE_W = PED_SPRITE_H * 0.9;
 const BEHIND_COUNTER_LIFT = 0.28;
 
-const DISTRICT_PEDESTRIANS: Record<NeighborhoodId, DistrictPedestrianKind[]> = {
-  'central-park': ['park-dog-walker', 'park-jogger'],
-  columbia: ['columbia-student'],
-  fidi: ['fidi-suit'],
-  broadway: ['broadway-theater', 'fidi-suit'],
-  'fifth-ave': ['fifth-shopper', 'fidi-suit'],
-  'west-village': ['village-artist', 'park-dog-walker', 'columbia-student'],
-  market: ['village-artist', 'park-dog-walker', 'columbia-student'],
-};
 
 /**
  * A light-source material whose colour is multiplied above 1.0 (HDR) so the
@@ -195,6 +279,25 @@ interface GlowEntry {
 
 /** Streetlamp intensity at dusk (the largest `lampIntensity` keyframe); used to normalise to 0..1. */
 const MAX_LAMP_INTENSITY = 1.55;
+
+/**
+ * Distance fog: about a third thinner than the first version, to match the brighter UI.
+ * Broadway stays a touch hazier than the rest (its lit marquee street reads better with some haze).
+ */
+const FOG_DENSITY_DEFAULT = 0.0085;
+const FOG_DENSITY_BROADWAY = 0.01;
+
+/**
+ * Neighborhoods whose theme colours are cool grey-blue get a warm haze mixed in so the
+ * street does not look flat next to the bright UI. Applied to the DAYTIME colours only
+ * (the pre-dawn and dusk keyframes keep their own blues, so the day still goes
+ * dark -> bright -> dark).
+ */
+const WARM_HAZE = '#f6e2c2';
+const NEIGHBORHOOD_WARMTH: Partial<Record<NeighborhoodId, { sky: number; fog: number }>> = {
+  fidi: { sky: 0.1, fog: 0.3 },
+  broadway: { sky: 0.08, fog: 0.26 },
+};
 
 const ROAD_NEIGHBORHOODS = new Set<NeighborhoodId>(['central-park', 'broadway', 'fidi', 'fifth-ave']);
 
@@ -237,6 +340,15 @@ export class CentralParkScene {
   private playerShadow!: THREE.Mesh;
   private playerFrames!: Record<'down' | 'up' | 'left' | 'right', THREE.CanvasTexture[]>;
   private playerKoTex!: THREE.CanvasTexture;
+  /** Blue chevron above the player's head, and the soft ring on the ground ("this is you"). */
+  private playerMarker!: THREE.Sprite;
+  private playerRing!: THREE.Mesh;
+  /** Shopkeepers that blink and breathe while they stand behind their counters. */
+  private idleActors: IdleActor[] = [];
+  /** One shared texture per queue mood (three tiny canvases for every customer to reuse). */
+  private moodTextures!: Record<QueueMood, THREE.CanvasTexture>;
+  /** The "for lease" pad material; pulses while the plot is unleased. */
+  private emptyPlotPadMat: THREE.MeshBasicMaterial | null = null;
   private soulSprite!: THREE.Sprite;
   private koTimer = 0;
   private invulnTimer = 0;
@@ -328,7 +440,7 @@ export class CentralParkScene {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#c7def2');
-    this.scene.fog = new THREE.FogExp2('#d7e5f2', 0.013);
+    this.scene.fog = new THREE.FogExp2('#d7e5f2', FOG_DENSITY_DEFAULT);
 
     // Straight-on 3/4 JRPG HD-2D camera
     this.camera = new THREE.PerspectiveCamera(
@@ -485,11 +597,13 @@ export class CentralParkScene {
    * planned against the old obstacles is dropped (it may now cross a wall).
    */
   private rebuildNavigation(): void {
-    this.colliders = getColliders({
-      neighborhood: this.currentNeighborhood,
-      plotStatus: this.plotStatus,
-      includeProps: true,
-    });
+    this.colliders = withSubwayCollider(
+      getColliders({
+        neighborhood: this.currentNeighborhood,
+        plotStatus: this.plotStatus,
+        includeProps: true,
+      })
+    );
     this.navGrid = buildGrid(this.colliders, { hasTraffic: hasTraffic(this.currentNeighborhood) });
     this.route = null;
   }
@@ -575,6 +689,11 @@ export class CentralParkScene {
 
     const baseSky = new THREE.Color(theme.skyHex);
     const baseFog = new THREE.Color(theme.fogHex);
+    const warmth = NEIGHBORHOOD_WARMTH[this.currentNeighborhood];
+    if (warmth) {
+      baseSky.lerp(new THREE.Color(WARM_HAZE), warmth.sky);
+      baseFog.lerp(new THREE.Color(WARM_HAZE), warmth.fog);
+    }
 
     const sunriseSky = new THREE.Color('#f3c9a4').lerp(baseSky, 0.42);
     const sunriseFog = new THREE.Color('#f5d8bc').lerp(baseFog, 0.42);
@@ -618,14 +737,15 @@ export class CentralParkScene {
         bulbColor: new THREE.Color('#ffd86b'),
       },
       {
-        t: 0.12,
+        // Same moment the HUD sun arc clears the horizon (one constant for both).
+        t: SUNRISE_PROGRESS,
         sky: sunriseSky,
         fog: sunriseFog,
         sunPos: new THREE.Vector3(18, 12.5, 10),
         sunColor: new THREE.Color('#ffd194'),
         sunIntensity: 1.42,
         hemiSky: new THREE.Color('#ffe8c8'),
-        hemiGround: new THREE.Color('#636958'),
+        hemiGround: new THREE.Color('#7a6f58'),
         hemiIntensity: 0.84,
         lampIntensity: 0.2,
         bulbColor: new THREE.Color('#fff0b8'),
@@ -638,7 +758,7 @@ export class CentralParkScene {
         sunColor: new THREE.Color(isBroadway ? '#ffb86c' : '#ffe2ae'),
         sunIntensity: isBroadway ? 1.1 : 1.72,
         hemiSky: new THREE.Color(isBroadway ? '#b9c6ff' : '#fff6e0'),
-        hemiGround: new THREE.Color('#5b6c54'),
+        hemiGround: new THREE.Color('#79714f'),
         hemiIntensity: isBroadway ? 0.64 : 0.92,
         lampIntensity: isBroadway ? 0.75 : 0.0,
         bulbColor: new THREE.Color('#f7eed2'),
@@ -651,7 +771,7 @@ export class CentralParkScene {
         sunColor: new THREE.Color('#ffb36b'),
         sunIntensity: 1.35,
         hemiSky: new THREE.Color('#ffc996'),
-        hemiGround: new THREE.Color('#544648'),
+        hemiGround: new THREE.Color('#68524a'),
         hemiIntensity: 0.75,
         lampIntensity: 0.95,
         bulbColor: new THREE.Color('#ffe28a'),
@@ -690,7 +810,7 @@ export class CentralParkScene {
     this.scene.background = skyCol;
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.color.copy(fogCol);
-      this.scene.fog.density = isBroadway ? 0.015 : 0.0125;
+      this.scene.fog.density = isBroadway ? FOG_DENSITY_BROADWAY : FOG_DENSITY_DEFAULT;
     }
 
     this.sunLight.position.lerpVectors(k0.sunPos, k1.sunPos, alpha);
@@ -797,31 +917,23 @@ export class CentralParkScene {
     }
   }
 
+  /**
+   * Textures for every facing. Per direction: [0] standing, [1] and [2] the two walk
+   * frames, [3] standing with the body 1px lower (breathing out), [4] standing with eyes
+   * closed (blink). The animate loop picks 3/4 through `idleFrameAt` when the player is
+   * not moving. The player wears the lemon apron, so the founder's look stays unique.
+   */
   private buildPlayerFrames(
     species: FounderSpecies
   ): Record<'down' | 'up' | 'left' | 'right', THREE.CanvasTexture[]> {
-    return {
-      down: [
-        createMascotSpriteTexture(species, 0, 'down', 'apron'),
-        createMascotSpriteTexture(species, 1, 'down', 'apron'),
-        createMascotSpriteTexture(species, 2, 'down', 'apron'),
-      ],
-      up: [
-        createMascotSpriteTexture(species, 0, 'up', 'apron'),
-        createMascotSpriteTexture(species, 1, 'up', 'apron'),
-        createMascotSpriteTexture(species, 2, 'up', 'apron'),
-      ],
-      left: [
-        createMascotSpriteTexture(species, 0, 'left', 'apron'),
-        createMascotSpriteTexture(species, 1, 'left', 'apron'),
-        createMascotSpriteTexture(species, 2, 'left', 'apron'),
-      ],
-      right: [
-        createMascotSpriteTexture(species, 0, 'right', 'apron'),
-        createMascotSpriteTexture(species, 1, 'right', 'apron'),
-        createMascotSpriteTexture(species, 2, 'right', 'apron'),
-      ],
-    };
+    const make = (facing: 'down' | 'up' | 'left' | 'right'): THREE.CanvasTexture[] => [
+      createMascotSpriteTexture(species, 0, facing, 'apron'),
+      createMascotSpriteTexture(species, 1, facing, 'apron'),
+      createMascotSpriteTexture(species, 2, facing, 'apron'),
+      createMascotSpriteTexture(species, 0, facing, 'apron', IDLE_POSES.breathe),
+      createMascotSpriteTexture(species, 0, facing, 'apron', IDLE_POSES.blink),
+    ];
+    return { down: make('down'), up: make('up'), left: make('left'), right: make('right') };
   }
 
   private createContactShadowTexture(): THREE.CanvasTexture {
@@ -1139,6 +1251,9 @@ export class CentralParkScene {
   }
 
   private registerNeighborhood(id: NeighborhoodId, grp: THREE.Group): void {
+    // FiDi built its own entrance inside its layout (it was the original); all others get
+    // the same one here, so "a subway in every neighborhood" cannot be forgotten by a new layout.
+    if (id !== 'fidi') this.buildSubwayEntrance(grp, SUBWAY_ENTRANCE_XZ.x, SUBWAY_ENTRANCE_XZ.z);
     grp.visible = id === 'central-park';
     this.neighborhoodGroups.set(id, grp);
     this.scene.add(grp);
@@ -1869,8 +1984,9 @@ export class CentralParkScene {
     for (const [cx, cz] of [
       [-9.2, -3.1],
       [-7.8, -3.1],
-      [9.2, -3.1],
-      [10.6, -3.1],
+      // Moved in from x = 9.2 / 10.6: that corner now holds the subway entrance.
+      [6.5, -3.1],
+      [7.7, -3.1],
     ]) {
       const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.14, 0.68, 8), ironMat);
       leg.position.set(cx, 0.34, cz);
@@ -2015,15 +2131,39 @@ export class CentralParkScene {
 
     g.add(bullGroup);
 
-    // Classic green NYC Subway Entrance railing + iconic green globe lamp
+    // Every neighborhood has one of these (see buildAllNeighborhoods); FiDi's is the original.
+    this.buildSubwayEntrance(g, SUBWAY_ENTRANCE_XZ.x, SUBWAY_ENTRANCE_XZ.z);
+
+    this.addStreetlamps(g, [
+      [-3.3, 2.3],
+      [3.3, 2.3],
+      [3.3, -2.6],
+      [-3.3, -2.6],
+    ]);
+
+    return g;
+  }
+
+  /**
+   * Classic green NYC subway entrance: a dark stair pit, three green railings, a lit
+   * globe lamp on a pole, and a "SUBWAY" sign on the back rail so it can be spotted
+   * from across the street. Pressing E next to it opens the map (travel lives
+   * underground). Its collision box comes from `subwayCollider` / collision.ts.
+   *
+   * @param target group to add the entrance to (a neighborhood's group)
+   * @param x,z    centre of the stair pit on the ground plane
+   */
+  private buildSubwayEntrance(target: THREE.Group, x: number, z: number): void {
     const subway = new THREE.Group();
-    subway.position.set(9.4, 0, -2.5);
+    subway.position.set(x, 0, z);
     const railMat = new THREE.MeshStandardMaterial({ color: '#1b6b42', roughness: 0.5, metalness: 0.35 });
+    // 0.14 tall (not 0.08): Columbia's lawn is 0.12 tall and reaches the pit's back edge,
+    // so a lower pit would be partly buried in grass.
     const stairPit = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 0.08, 1.3),
+      new THREE.BoxGeometry(SUBWAY_HALF.x * 2, 0.14, SUBWAY_HALF.z * 2),
       new THREE.MeshStandardMaterial({ color: '#1c2129', roughness: 0.9 })
     );
-    stairPit.position.y = 0.04;
+    stairPit.position.y = 0.07;
     subway.add(stairPit);
 
     const backRail = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.85, 0.08), railMat);
@@ -2034,6 +2174,13 @@ export class CentralParkScene {
       sideRail.position.set(sx, 0.45, 0);
       subway.add(sideRail);
     }
+
+    // "SUBWAY" board standing on the back rail, facing the camera.
+    const signMat = new THREE.MeshBasicMaterial({ map: this.createStreetSignTexture('SUBWAY') });
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 0.27), signMat);
+    sign.position.set(0, 1.12, -0.62);
+    subway.add(sign);
+
     const globePole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 2.2, 8), railMat);
     globePole.position.set(-1.12, 1.1, 0.68);
     subway.add(globePole);
@@ -2043,16 +2190,7 @@ export class CentralParkScene {
     );
     greenGlobe.position.set(-1.12, 2.26, 0.68);
     subway.add(greenGlobe);
-    g.add(subway);
-
-    this.addStreetlamps(g, [
-      [-3.3, 2.3],
-      [3.3, 2.3],
-      [3.3, -2.6],
-      [-3.3, -2.6],
-    ]);
-
-    return g;
+    target.add(subway);
   }
 
   // 7. FIFTH AVENUE: Iconic translucent Glass Flagship Cube + Beaux-Arts cream limestone boutiques + gold topiary planters
@@ -2157,7 +2295,7 @@ export class CentralParkScene {
     for (const [px, pz] of [
       [-3.55, -3.5],
       [3.55, -3.5],
-      [8.9, -3.5],
+      [7.7, -3.6], // was x = 8.9: the subway entrance now stands there
       [-9.2, -3.5],
     ]) {
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.74, 0.56, 0.74), planterMat);
@@ -2574,13 +2712,15 @@ export class CentralParkScene {
       fillHex: string,
       signTop: string,
       signSub: string
-    ) => {
+    ): THREE.MeshBasicMaterial => {
       target.position.copy(OWN_STAND_POS);
 
+      // Opacity was 0.22, which vanished against the pavement. The unleased pad also
+      // pulses (see animate step 1d) so a free plot is the loudest thing on the street.
       const padMat = new THREE.MeshBasicMaterial({
         color: fillHex,
         transparent: true,
-        opacity: 0.22,
+        opacity: PLOT_PAD_OPACITY,
         depthWrite: false,
       });
       const pad = new THREE.Mesh(new THREE.PlaneGeometry(2.55, 1.45), padMat);
@@ -2592,7 +2732,7 @@ export class CentralParkScene {
       // Front & back dashed edges
       for (const ez of [-0.76, 0.66]) {
         for (let dx = -1.08; dx <= 1.09; dx += 0.36) {
-          const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.07), dashMat);
+          const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 0.13), dashMat);
           dash.rotation.x = -Math.PI / 2;
           dash.position.set(dx, 0.028, ez);
           target.add(dash);
@@ -2601,7 +2741,7 @@ export class CentralParkScene {
       // Left & right dashed edges
       for (const ex of [-1.26, 1.26]) {
         for (let dz = -0.58; dz <= 0.5; dz += 0.36) {
-          const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.07, 0.22), dashMat);
+          const dash = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.24), dashMat);
           dash.rotation.x = -Math.PI / 2;
           dash.position.set(ex, 0.028, dz);
           target.add(dash);
@@ -2610,6 +2750,21 @@ export class CentralParkScene {
 
       // Small side sign stake
       const woodMat = new THREE.MeshStandardMaterial({ color: '#61391c', roughness: 0.9 });
+
+      // Four little corner flags in the border colour: tall enough to read from the far
+      // side of the street, thin enough not to hide the stand.
+      const flagMat = new THREE.MeshBasicMaterial({ color: borderHex, side: THREE.DoubleSide });
+      for (const fx of [-1.26, 1.26]) {
+        for (const fz of [-0.76, 0.66]) {
+          const pole = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.5, 0.04), woodMat);
+          pole.position.set(fx, 0.25, fz);
+          target.add(pole);
+          const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.14), flagMat);
+          // Flags point outward from the plot so the two on each side mirror each other.
+          cloth.position.set(fx + Math.sign(fx) * 0.11, 0.43, fz);
+          target.add(cloth);
+        }
+      }
       const stake = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.12, 0.07), woodMat);
       stake.position.set(1.42, 0.56, 0.14);
       stake.castShadow = true;
@@ -2628,9 +2783,10 @@ export class CentralParkScene {
       plaque.position.set(1.42, 1.08, 0.14);
       plaque.castShadow = true;
       target.add(plaque);
+      return padMat;
     };
 
-    buildPaintedPlot(this.emptyPlotGroup, '#f0b829', '#ffe885', 'FOR LEASE', 'PRESS [E]');
+    this.emptyPlotPadMat = buildPaintedPlot(this.emptyPlotGroup, '#f0b829', '#ffe885', 'FOR LEASE', 'PRESS [E]');
     buildPaintedPlot(this.leasedPlotGroup, '#2fb862', '#7ef2a6', 'LEASED', 'BUILD STAND');
   }
 
@@ -2658,21 +2814,32 @@ export class CentralParkScene {
       parentGroup: this.businessStandsGroup,
     });
 
-    const sellerTex = createMascotSpriteTexture('shiba', 0, 'down', 'vest');
-    const sellerSprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: sellerTex, transparent: true, alphaTest: 0.2 })
-    );
-    sellerSprite.scale.set(PLAYER_SPRITE_W, PLAYER_SPRITE_H, 1);
-    sellerSprite.position.set(
-      SELLER_STAND_POS.x,
-      PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT,
-      SELLER_STAND_POS.z - 0.62
-    );
-    this.businessStandsGroup.add(sellerSprite);
+    this.addShopkeeper('broker', SELLER_STAND_POS, this.businessStandsGroup, 0.15);
+  }
 
-    const sellerShadow = this.createContactShadowMesh(0.4, 0.26);
-    sellerShadow.position.set(SELLER_STAND_POS.x, 0.265, SELLER_STAND_POS.z - 0.6);
-    this.businessStandsGroup.add(sellerShadow);
+  /**
+   * Put a shopkeeper behind a counter: sprite, ground shadow, and a three-frame idle loop
+   * (stand / breathe / blink) driven from animate().
+   *
+   * `seed` offsets the blink and breath timing (see idleFrameAt) so the four shopkeepers
+   * never blink in unison.
+   */
+  private addShopkeeper(kind: VendorKind, standPos: { x: number; z: number }, parent: THREE.Group, seed: number): void {
+    const frames: Record<IdleFrameKey, THREE.CanvasTexture> = {
+      rest: createVendorSpriteTexture(kind, 0, 'down', IDLE_POSES.rest),
+      breathe: createVendorSpriteTexture(kind, 0, 'down', IDLE_POSES.breathe),
+      blink: createVendorSpriteTexture(kind, 0, 'down', IDLE_POSES.blink),
+    };
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: frames.rest, transparent: true, alphaTest: 0.2 }));
+    sprite.scale.set(PLAYER_SPRITE_W, PLAYER_SPRITE_H, 1);
+    sprite.position.set(standPos.x, PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT, standPos.z - 0.62);
+    parent.add(sprite);
+
+    const shadow = this.createContactShadowMesh(0.4, 0.26);
+    shadow.position.set(standPos.x, 0.265, standPos.z - 0.6);
+    parent.add(shadow);
+
+    this.idleActors.push({ sprite, frames, seed, current: 'rest' });
   }
 
   private buildMarketStands(): void {
@@ -2688,21 +2855,7 @@ export class CentralParkScene {
       parentGroup: this.marketStandsGroup,
     });
 
-    const stallVendorTex = createMascotSpriteTexture('bunny', 0, 'down', 'vest');
-    const stallVendor = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: stallVendorTex, transparent: true, alphaTest: 0.2 })
-    );
-    stallVendor.scale.set(PLAYER_SPRITE_W, PLAYER_SPRITE_H, 1);
-    stallVendor.position.set(
-      MARKET_STALLS_POS.x,
-      PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT,
-      MARKET_STALLS_POS.z - 0.62
-    );
-    this.marketStandsGroup.add(stallVendor);
-
-    const stallVendorShadow = this.createContactShadowMesh(0.4, 0.26);
-    stallVendorShadow.position.set(MARKET_STALLS_POS.x, 0.265, MARKET_STALLS_POS.z - 0.6);
-    this.marketStandsGroup.add(stallVendorShadow);
+    this.addShopkeeper('carpenter', MARKET_STALLS_POS, this.marketStandsGroup, 0.4);
 
     // 2. Center Stall (x = 0.0, z = -1.3): Glassware & Pitchers Vendor ('market-pitchers')
     this.buildStandStructure(MARKET_PITCHERS_POS, {
@@ -2716,21 +2869,7 @@ export class CentralParkScene {
       parentGroup: this.marketStandsGroup,
     });
 
-    const pitcherVendorTex = createMascotSpriteTexture('penguin', 0, 'down', 'vest');
-    const pitcherVendor = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: pitcherVendorTex, transparent: true, alphaTest: 0.2 })
-    );
-    pitcherVendor.scale.set(PLAYER_SPRITE_W, PLAYER_SPRITE_H, 1);
-    pitcherVendor.position.set(
-      MARKET_PITCHERS_POS.x,
-      PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT,
-      MARKET_PITCHERS_POS.z - 0.62
-    );
-    this.marketStandsGroup.add(pitcherVendor);
-
-    const pitcherVendorShadow = this.createContactShadowMesh(0.4, 0.26);
-    pitcherVendorShadow.position.set(MARKET_PITCHERS_POS.x, 0.265, MARKET_PITCHERS_POS.z - 0.6);
-    this.marketStandsGroup.add(pitcherVendorShadow);
+    this.addShopkeeper('glazier', MARKET_PITCHERS_POS, this.marketStandsGroup, 0.65);
 
     // 3. Right Stall (x = +4.3, z = -1.3): Fresh Lemon Vendor ('market-lemons')
     this.buildStandStructure(MARKET_LEMONS_POS, {
@@ -2744,21 +2883,7 @@ export class CentralParkScene {
       parentGroup: this.marketStandsGroup,
     });
 
-    const lemonVendorTex = createMascotSpriteTexture('panda', 0, 'down', 'apron');
-    const lemonVendor = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: lemonVendorTex, transparent: true, alphaTest: 0.2 })
-    );
-    lemonVendor.scale.set(PLAYER_SPRITE_W, PLAYER_SPRITE_H, 1);
-    lemonVendor.position.set(
-      MARKET_LEMONS_POS.x,
-      PLAYER_SPRITE_H * 0.48 + BEHIND_COUNTER_LIFT,
-      MARKET_LEMONS_POS.z - 0.62
-    );
-    this.marketStandsGroup.add(lemonVendor);
-
-    const lemonVendorShadow = this.createContactShadowMesh(0.4, 0.26);
-    lemonVendorShadow.position.set(MARKET_LEMONS_POS.x, 0.265, MARKET_LEMONS_POS.z - 0.6);
-    this.marketStandsGroup.add(lemonVendorShadow);
+    this.addShopkeeper('grower', MARKET_LEMONS_POS, this.marketStandsGroup, 0.9);
   }
 
   private createVehicleMesh(kind: 'taxi' | 'sedan' | 'van'): THREE.Group {
@@ -2918,6 +3043,34 @@ export class CentralParkScene {
     this.playerShadow.position.set(this.playerPos.x, 0.022, this.playerPos.z + 0.04);
     this.scene.add(this.playerShadow);
 
+    // "This one is you": a bobbing blue chevron over the head plus a soft ring on the
+    // ground. Pedestrians get neither, so the player's character is never confused with a
+    // look-alike walking past. depthTest is off for the chevron so a lamp post or awning
+    // in front of the player can never hide it; renderOrder keeps it drawn last.
+    this.playerMarker = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: createPlayerChevronTexture(),
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+      })
+    );
+    this.playerMarker.scale.set(0.36, 0.36 * (7 / 11), 1);
+    this.playerMarker.renderOrder = 12;
+    this.scene.add(this.playerMarker);
+
+    this.playerRing = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.25, 1.25),
+      new THREE.MeshBasicMaterial({
+        map: createPlayerRingTexture(),
+        transparent: true,
+        depthWrite: false,
+      })
+    );
+    this.playerRing.rotation.x = -Math.PI / 2;
+    this.playerRing.renderOrder = 1;
+    this.scene.add(this.playerRing);
+
     // Floating translucent pixel soul wisp for taxi KO animation
     const soulMat = new THREE.SpriteMaterial({
       map: createSoulSpriteTexture(),
@@ -2935,6 +3088,11 @@ export class CentralParkScene {
   private buildPedestrians(): void {
     this.pedKoTex = createKnockedOutSpriteTexture('penguin');
     const sharedSoulTex = createSoulSpriteTexture();
+    this.moodTextures = {
+      happy: createMoodFaceTexture('happy'),
+      neutral: createMoodFaceTexture('neutral'),
+      angry: createMoodFaceTexture('angry'),
+    };
     const allKinds: DistrictPedestrianKind[] = [
       'park-dog-walker',
       'park-jogger',
@@ -3011,11 +3169,21 @@ export class CentralParkScene {
       pedSoul.renderOrder = 9;
       this.scene.add(pedSoul);
 
+      const moodSprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: this.moodTextures.happy, transparent: true, alphaTest: 0.2 })
+      );
+      moodSprite.scale.set(0.3, 0.3, 1);
+      moodSprite.visible = false;
+      moodSprite.renderOrder = 8;
+      this.scene.add(moodSprite);
+
       this.pedestrians.push({
         id: idx + 1,
         sprite: sp,
         shadow,
         soulSprite: pedSoul,
+        moodSprite,
+        mood: 'happy',
         frames,
         x: a.x,
         z: a.z,
@@ -3172,21 +3340,25 @@ export class CentralParkScene {
   }
 
   private getNearbyTarget(): NearbyTarget {
+    const p = this.playerPos;
+    // Flat (x, z) distance: the player and every anchor stand on the ground plane (y = 0).
+    const dist = (q: { x: number; z: number }): number => Math.hypot(p.x - q.x, p.z - q.z);
+    const candidates: NearbyCandidate[] = [
+      { target: 'subway', dist: dist(SUBWAY_ENTRANCE_XZ), radius: SUBWAY_INTERACT_RADIUS },
+    ];
     if (this.currentNeighborhood === 'market') {
-      const candidates: Array<{ target: NearbyTarget; dist: number }> = [
-        { target: 'market-stalls', dist: this.playerPos.distanceTo(MARKET_STALLS_POS) },
-        { target: 'market-pitchers', dist: this.playerPos.distanceTo(MARKET_PITCHERS_POS) },
-        { target: 'market-lemons', dist: this.playerPos.distanceTo(MARKET_LEMONS_POS) },
-      ];
-      candidates.sort((a, b) => a.dist - b.dist);
-      if (candidates[0].dist < 2.25) return candidates[0].target;
-      return null;
+      candidates.push(
+        { target: 'market-stalls', dist: dist(MARKET_STALLS_POS), radius: 2.25 },
+        { target: 'market-pitchers', dist: dist(MARKET_PITCHERS_POS), radius: 2.25 },
+        { target: 'market-lemons', dist: dist(MARKET_LEMONS_POS), radius: 2.25 }
+      );
+    } else {
+      candidates.push(
+        { target: this.plotStatus === 'built' ? 'own-stand' : 'plot-lease', dist: dist(OWN_STAND_POS), radius: 2.65 },
+        { target: 'seller-stand', dist: dist(SELLER_STAND_POS), radius: 2.75 }
+      );
     }
-    if (this.playerPos.distanceTo(OWN_STAND_POS) < 2.65) {
-      return this.plotStatus === 'built' ? 'own-stand' : 'plot-lease';
-    }
-    if (this.playerPos.distanceTo(SELLER_STAND_POS) < 2.75) return 'seller-stand';
-    return null;
+    return pickNearbyTarget(candidates);
   }
 
   private projectToScreen(pos: THREE.Vector3, yOffset = 2.1): { x: number; y: number } {
@@ -3325,11 +3497,48 @@ export class CentralParkScene {
         this.playerShadow.scale.set(shadowPulse, shadowPulse, 1);
       } else {
         this.stepSoundCooldown = Math.max(0, this.stepSoundCooldown - dt);
-        (this.playerSprite.material as THREE.SpriteMaterial).map = this.playerFrames[this.playerFacing][0];
+        // Standing still: breathe slowly and blink every 3-4 s instead of freezing.
+        const idleIdx = PLAYER_IDLE_INDEX[idleFrameAt(this.elapsedTime, PLAYER_IDLE_SEED)];
+        (this.playerSprite.material as THREE.SpriteMaterial).map = this.playerFrames[this.playerFacing][idleIdx];
         this.playerSprite.position.set(this.playerPos.x, PLAYER_SPRITE_H * 0.48, this.playerPos.z);
         this.playerShadow.scale.set(1, 1, 1);
       }
       this.playerShadow.position.set(this.playerPos.x, 0.022, this.playerPos.z + 0.04);
+    }
+
+    // 1b. Player marker: chevron bobs above the head, ring sits on the ground and
+    // breathes slowly. Hidden while knocked out (the soul wisp takes over) and while
+    // working behind the counter (the stand window is open on top of the world).
+    const markerVisible = this.koTimer <= 0 && !this.workingAtStand;
+    this.playerMarker.visible = markerVisible;
+    this.playerRing.visible = markerVisible;
+    if (markerVisible) {
+      const bob = Math.sin(this.elapsedTime * 3.2) * 0.05;
+      this.playerMarker.position.set(
+        this.playerSprite.position.x,
+        this.playerSprite.position.y + PLAYER_SPRITE_H * 0.5 + 0.17 + bob,
+        this.playerSprite.position.z
+      );
+      const ringScale = 1 + Math.sin(this.elapsedTime * 2.1) * 0.04;
+      this.playerRing.scale.set(ringScale, ringScale, 1);
+      this.playerRing.position.set(this.playerPos.x, 0.026, this.playerPos.z + 0.04);
+    }
+
+    // 1c. Shopkeepers: pick this instant's idle frame and swap the sprite's texture only
+    // when it changes (assigning a map to a SpriteMaterial forces a shader refresh).
+    for (const actor of this.idleActors) {
+      const key = idleFrameAt(this.elapsedTime, actor.seed);
+      if (key !== actor.current) {
+        actor.current = key;
+        const mat = actor.sprite.material as THREE.SpriteMaterial;
+        mat.map = actor.frames[key];
+        mat.needsUpdate = true;
+      }
+    }
+
+    // 1d. "For lease" pad: a slow pulse while the plot is still unleased.
+    if (this.emptyPlotPadMat && this.plotStatus === 'empty') {
+      this.emptyPlotPadMat.opacity = PLOT_PAD_OPACITY + Math.sin(this.elapsedTime * 2.4) * 0.11;
     }
 
     // 2. Smooth HD-2D camera follow (straight-on 3/4)
@@ -3581,6 +3790,23 @@ export class CentralParkScene {
       this.shuffleQueueForward();
     }
 
+    // Queue mood faces: shown only over customers waiting in line, with the expression
+    // chosen from how much patience is left. Runs after the loop so every `continue`
+    // path above is covered, and only swaps the texture when the mood actually changes.
+    for (const ped of this.pedestrians) {
+      const show = ped.state === 'queued' && ped.koTimer <= 0;
+      ped.moodSprite.visible = show;
+      if (!show) continue;
+      const mood = moodForPatience(THREE.MathUtils.clamp(ped.patience / ped.maxPatience, 0, 1));
+      if (mood !== ped.mood) {
+        ped.mood = mood;
+        const mat = ped.moodSprite.material as THREE.SpriteMaterial;
+        mat.map = this.moodTextures[mood];
+        mat.needsUpdate = true;
+      }
+      ped.moodSprite.position.set(ped.x, ped.sprite.position.y + PED_SPRITE_H * 0.5 + 0.08, ped.z);
+    }
+
     if (this.postfx) this.postfx.render(dt);
     else this.renderer.render(this.scene, this.camera); // postfx chunk not ready yet (or fx=off)
     // Centre the tilt-shift sharp band on the player's body (0.9 units up from
@@ -3608,6 +3834,7 @@ export class CentralParkScene {
       player: this.projectToScreen(this.playerPos, 1.8),
       nearby: this.getNearbyTarget(),
       queue: queueAnchors,
+      subway: this.projectToScreen(new THREE.Vector3(SUBWAY_ENTRANCE_XZ.x, 0, SUBWAY_ENTRANCE_XZ.z), 2.5),
       marketAnchors: {
         stalls: this.projectToScreen(MARKET_STALLS_POS, 1.95),
         pitchers: this.projectToScreen(MARKET_PITCHERS_POS, 1.95),
@@ -3674,6 +3901,12 @@ export class CentralParkScene {
     addMaterial(this.streetSignBMat);
     for (const tex of [this.summerTreeTex, this.autumnTreeTex, this.playerKoTex, this.pedKoTex]) {
       if (tex) resources.add(tex);
+    }
+    // Textures that are only attached to a sprite part of the time (one mood face / idle
+    // frame is on screen, the others wait in these tables).
+    for (const tex of Object.values(this.moodTextures ?? {})) resources.add(tex);
+    for (const actor of this.idleActors) {
+      for (const tex of Object.values(actor.frames)) resources.add(tex);
     }
     for (const dir of ['down', 'up', 'left', 'right'] as const) {
       for (const tex of this.playerFrames?.[dir] ?? []) resources.add(tex);

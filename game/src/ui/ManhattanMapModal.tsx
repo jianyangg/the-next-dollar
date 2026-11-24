@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { soundEngine } from '../audio/soundEngine';
 import {
   NEIGHBORHOODS,
@@ -6,12 +6,16 @@ import {
   type NeighborhoodConfig,
   type NeighborhoodId,
 } from '../core/neighborhoods';
+import { useGameStore } from '../state/gameStore';
 import { INPUT_PRIORITY } from '../state/input';
-import type { UiIconKind } from '../world/pixelArt';
+import { createDistrictPedestrianTexture, createMascotPortraitDataUrl } from '../world/pixelArt';
 import { getIcons } from './assets';
 import { useInputLayer } from './kit/useInputLayer';
 import { Key } from './kit/Money';
 import { PaperChip } from './shop/ShopWindow';
+import { crowdFrames, crowdKinds } from './map/crowdSprites';
+import { routeBetween, SUBWAY_LINE_ORDER, toPolylinePoints } from './map/mapRoute';
+import { rentPips } from './map/rentTiers';
 import './styles/map.css';
 
 export interface ManhattanMapModalProps {
@@ -31,32 +35,19 @@ const PIN_SIDE: Record<NeighborhoodId, 'left' | 'right'> = {
   fidi: 'right',
 };
 
-/** North to south: the order the subway line runs, and the order arrow keys walk. */
-const SUBWAY_LINE_ORDER: NeighborhoodId[] = [
-  'columbia',
-  'central-park',
-  'fifth-ave',
-  'broadway',
-  'market',
-  'west-village',
-  'fidi',
+/** Every real daily rent, so a plate's coin pips are ranked against the other districts. */
+const ALL_RENTS = NEIGHBORHOODS.map((n) => n.dailyRent);
+
+/** River wave marks: [x, y] in map units, placed in the water between the island and the shores. */
+const WAVES: ReadonlyArray<readonly [number, number]> = [
+  [150, 100], [130, 200], [106, 330], [92, 430], [210, 540],
+  [309, 90], [310, 180], [295, 280], [270, 400],
 ];
 
-/**
- * The crowd of each district as pictures instead of a sentence. There is no dedicated
- * "crowd" art yet, so these reuse the existing pixel icons (book = students, sun = park
- * walkers, coin = shoppers, hurdle = people in a rush, lemon = regulars, ...). The
- * district's full crowd label stays as the icons' tooltip / screen-reader name.
- */
-const CROWD_ICONS: Record<NeighborhoodId, UiIconKind[]> = {
-  columbia: ['book', 'lemon'],
-  'central-park': ['sun', 'lemon'],
-  'fifth-ave': ['coin', 'map'],
-  broadway: ['hurdle', 'coin'],
-  market: ['lemon', 'pitcher'],
-  'west-village': ['lemon', 'coin'],
-  fidi: ['hurdle', 'book'],
-};
+/** Tree dots inside Central Park (coordinates in the park's own rotated frame). */
+const TREES: ReadonlyArray<readonly [number, number]> = [
+  [208, 150], [226, 154], [212, 196], [228, 190], [208, 232], [226, 226], [220, 148], [206, 206], [230, 214], [214, 240],
+];
 
 // Manhattan Island silhouette in 420x560 viewBox
 const MANHATTAN_PATH =
@@ -74,6 +65,19 @@ const TRAVEL_KEYS = ['Enter', 'e', 'E'];
 /** Map position (percent of the canvas) to SVG user units (the 420x560 viewBox). */
 const toX = (pct: number) => (pct / 100) * 420;
 const toY = (pct: number) => (pct / 100) * 560;
+/** A station's position in SVG units. */
+const pointOf = (id: NeighborhoodId) => {
+  const n = getNeighborhood(id);
+  return { x: toX(n.mapPos.x), y: toY(n.mapPos.y) };
+};
+
+/** A little price tag (a "for sale" sign) drawn in SVG; colours come from map.css. */
+const PriceTag: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
+    <path className="nycmap-pricetag-body" d="M 1 2 L 9 2 L 15 8 L 9 14 L 1 8 Z" />
+    <circle className="nycmap-pricetag-hole" cx="5" cy="5" r="1.6" />
+  </svg>
+);
 
 export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
   currentId,
@@ -83,6 +87,9 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
   const [selectedId, setSelectedId] = useState<NeighborhoodId>(currentId);
   const [hoveredId, setHoveredId] = useState<NeighborhoodId | null>(null);
   const icons = getIcons();
+  const founderSpecies = useGameStore((st) => st.founderSpecies);
+  // The player's own face on the "you are here" pin (createMascotPortraitDataUrl caches).
+  const portrait = useMemo(() => createMascotPortraitDataUrl(founderSpecies), [founderSpecies]);
 
   useEffect(() => {
     setSelectedId(currentId);
@@ -95,10 +102,11 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
   const isCurrent = inspected.id === currentId;
   const isMarket = inspected.id === 'market';
 
-  const subwayPolylinePoints = SUBWAY_LINE_ORDER.map((id) => {
-    const n = getNeighborhood(id);
-    return `${toX(n.mapPos.x)},${toY(n.mapPos.y)}`;
-  }).join(' ');
+  // The whole line, and the part of it the train would ride from here to the district on show.
+  const linePoints = toPolylinePoints(SUBWAY_LINE_ORDER, pointOf);
+  const routePoints = toPolylinePoints(routeBetween(currentId, activeId), pointOf);
+  const trainAt = pointOf(activeId);
+  const hereAt = currentConfig.mapPos;
 
   const handleTravel = (targetId: NeighborhoodId) => {
     if (targetId !== currentId) {
@@ -188,7 +196,32 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
                   <path className="nycmap-island-shadow" d={MANHATTAN_PATH} />
                 </g>
 
+                {/* River wave marks: little zig-zags that shuffle sideways in two steps */}
+                {WAVES.map(([x, y]) => (
+                  <path
+                    key={`wave-${x}-${y}`}
+                    className="nycmap-wave"
+                    d={`M ${x} ${y} l 4 -3 l 4 3 l 4 -3 l 4 3`}
+                  />
+                ))}
+
                 <path className="nycmap-island" d={MANHATTAN_PATH} />
+
+                {/* Each district's patch, lightly tinted with its own theme colour. The colour
+                    comes from the data (neighborhoods.ts), so it is passed as an inline fill;
+                    the CSS class only sets how faint it is. */}
+                <g clipPath="url(#nycManhattanClip)">
+                  {NEIGHBORHOODS.map((n) => (
+                    <circle
+                      key={`tint-${n.id}`}
+                      className="nycmap-tint"
+                      cx={toX(n.mapPos.x)}
+                      cy={toY(n.mapPos.y)}
+                      r={36}
+                      style={{ fill: n.theme.accentHex }}
+                    />
+                  ))}
+                </g>
 
                 {/* Avenue and cross-street grid, clipped to the island */}
                 <g clipPath="url(#nycManhattanClip)">
@@ -214,28 +247,45 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
                     <rect className="nycmap-park" x="202" y="142" width="32" height="98" />
                     <ellipse className="nycmap-pond" cx="218" cy="176" rx="8" ry="12" />
                     <ellipse className="nycmap-pond" cx="216" cy="216" rx="7" ry="6" />
+                    {TREES.map(([x, y]) => (
+                      <circle key={`tree-${x}-${y}`} className="nycmap-tree" cx={x} cy={y} r={3.5} />
+                    ))}
                   </g>
                 </g>
 
-                {/* The subway line joining every station. Not yellow: yellow means the 5% line. */}
-                <polyline className="nycmap-subway" points={subwayPolylinePoints} />
+                {/* The subway line: a solid blue track with a light core. Blue is the "act"
+                    colour; yellow is reserved for the 5% charge. */}
+                <polyline className="nycmap-subway" points={linePoints} />
+                <polyline className="nycmap-subway-core" points={linePoints} />
 
-                {/* Route from where you stand to the district on show */}
-                {!isCurrent && (
-                  <line
-                    className="nycmap-route"
-                    x1={toX(currentConfig.mapPos.x)}
-                    y1={toY(currentConfig.mapPos.y)}
-                    x2={toX(inspected.mapPos.x)}
-                    y2={toY(inspected.mapPos.y)}
-                  />
-                )}
+                {/* Route: only the stretch of track between where you stand and the district on show */}
+                {!isCurrent && <polyline className="nycmap-route" points={routePoints} />}
               </svg>
+
+              {/* The train sits above the station dots and slides (in steps) to the district on show. */}
+              <svg className="nycmap-overlay" viewBox="0 0 420 560" aria-hidden="true">
+                <g className="nycmap-train" style={{ transform: `translate(${trainAt.x}px, ${trainAt.y}px)` }}>
+                  <rect className="nycmap-train-body" x={-14} y={-8} width={28} height={16} />
+                  <rect className="nycmap-train-window" x={-10} y={-4} width={6} height={6} />
+                  <rect className="nycmap-train-window" x={4} y={-4} width={6} height={6} />
+                </g>
+              </svg>
+
+              {/* You: the founder's own face, hopping in place above your station */}
+              <div
+                className="nycmap-pin"
+                style={{ left: `${hereAt.x}%`, top: `${hereAt.y}%` }}
+                role="img"
+                aria-label={`You, at ${currentConfig.name}`}
+              >
+                <img src={portrait} alt="" className="nycmap-pin-face" />
+              </div>
 
               {/* One station (dot + name plate) per district */}
               {NEIGHBORHOODS.map((n) => {
                 const isActive = n.id === activeId;
                 const isHere = n.id === currentId;
+                const pips = rentPips(n.dailyRent, ALL_RENTS);
                 return (
                   <button
                     key={n.id}
@@ -246,7 +296,7 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
                     style={{ left: `${n.mapPos.x}%`, top: `${n.mapPos.y}%` }}
                     aria-label={`${n.name}, ${isHere ? 'you are here, ' : ''}${
                       n.hasSellerDeal ? 'for sale, ' : ''
-                    }rent $${n.dailyRent} per day`}
+                    }${n.dailyRent > 0 ? `rent $${n.dailyRent} per day` : 'no rent'}`}
                     onMouseEnter={() => setHoveredId(n.id)}
                     onMouseLeave={() => setHoveredId(null)}
                     onFocus={() => setSelectedId(n.id)}
@@ -256,8 +306,14 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
                     <span className="nycmap-dot" aria-hidden="true" />
                     <span className="nycmap-plate pt-disp">
                       {n.shortName}
-                      {isHere && <span className="nycmap-mini is-here">You</span>}
-                      {n.hasSellerDeal && <span className="nycmap-mini is-sale">Sale</span>}
+                      {pips > 0 && (
+                        <span className="nycmap-pips" aria-hidden="true">
+                          {Array.from({ length: pips }).map((_, i) => (
+                            <img key={i} src={icons.coin} alt="" className="nycmap-pip" />
+                          ))}
+                        </span>
+                      )}
+                      {n.hasSellerDeal && <PriceTag className="nycmap-pricetag" />}
                     </span>
                   </button>
                 );
@@ -275,14 +331,27 @@ export const ManhattanMapModal: React.FC<ManhattanMapModalProps> = ({
             <div className="nycmap-tags">
               {isCurrent && <span className="nycmap-tag is-here">Here</span>}
               {isMarket && <span className="nycmap-tag is-market">Market</span>}
-              {inspected.hasSellerDeal && <span className="nycmap-tag is-sale">For sale</span>}
+              {inspected.hasSellerDeal && (
+                <span className="nycmap-tag is-sale">
+                  <PriceTag className="nycmap-pricetag" /> For sale
+                </span>
+              )}
             </div>
 
-            {/* Crowd as pictures; the full label is the tooltip and the screen-reader name */}
-            <div className="nycmap-crowd" role="img" aria-label={inspected.crowdLabel} title={inspected.crowdLabel}>
-              {CROWD_ICONS[inspected.id].map((kind, i) => (
-                <img key={`${kind}-${i}`} src={icons[kind]} alt="" className="nycmap-crowd-icon" />
-              ))}
+            {/* Crowd: the real pedestrians of this district (two walk frames each, swapped in
+                steps). The full crowd label is real text for screen readers. */}
+            <div className="nycmap-crowd" title={inspected.crowdLabel}>
+              <span className="nycmap-sr">{inspected.crowdLabel}</span>
+              {crowdKinds(inspected.id).map((kind) => {
+                const frames = crowdFrames(kind, (k, phase) => createDistrictPedestrianTexture(k, phase, 'down'));
+                if (!frames) return null;
+                return (
+                  <span key={kind} className="nycmap-ped" aria-hidden="true">
+                    <img src={frames[0]} alt="" className="nycmap-ped-frame is-a" />
+                    <img src={frames[1]} alt="" className="nycmap-ped-frame is-b" />
+                  </span>
+                );
+              })}
             </div>
 
             <div className="nycmap-chips">

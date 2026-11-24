@@ -23,9 +23,12 @@ const TRAIT: Record<FounderSpecies, string> = {
   bunny: 'Street Analyst',
 };
 
-/** Character-select screen (also the game's opening screen). */
+/**
+ * Character-select screen. On a new run it follows the opening story (IntroStory), so
+ * it waits until the story is closed; "Replay intro" brings the story back over it.
+ */
 export function FounderModal() {
-  const open = useGameStore((s) => s.founderModalOpen);
+  const open = useGameStore((s) => s.founderModalOpen && !s.introOpen && s.travel === null);
   // AnimatePresence keeps the body mounted until its exit animation has played.
   return <AnimatePresence>{open && <FounderModalBody key="founder" />}</AnimatePresence>;
 }
@@ -35,6 +38,9 @@ function FounderModalBody() {
   const founderSpecies = useGameStore((s) => s.founderSpecies);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
   const cash = useGameStore((s) => s.economy.cash);
+  // Before the first run there is nothing to go back to, so no "Close" is offered
+  // (the store also refuses closeFounderModal until then).
+  const runStarted = useGameStore((s) => s.runStarted);
   const sprites = getStandingSprites();
   const neighborhood = getNeighborhood(neighborhoodId);
 
@@ -69,7 +75,7 @@ function FounderModalBody() {
         {...modalShellMotion}
       >
         <header className="pt-titlebar fpick-head">
-          <h2 className="pt-disp fpick-title">Pick your founder</h2>
+          <h2 className="pt-disp fpick-title">Who are you?</h2>
           <div className="fpick-stats">
             <PaperChip label="CASH" value={`$${cash.toFixed(2)}`} />
             <PaperChip label="START" value={neighborhood.shortName} />
@@ -82,9 +88,14 @@ function FounderModalBody() {
           <span className="fpick-key">
             <Key k="E" /> Play
           </span>
-          <span className="fpick-key">
-            <Key k="Esc" nav /> Close
-          </span>
+          {runStarted && (
+            <span className="fpick-key">
+              <Key k="Esc" nav /> Close
+            </span>
+          )}
+          <button type="button" className="pt-btn fpick-replay" onClick={actions.replayIntro}>
+            Replay intro
+          </button>
         </footer>
       </m.div>
     </m.div>

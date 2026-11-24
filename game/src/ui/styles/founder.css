@@ -78,12 +78,15 @@
 
 .fpick-keys {
   display: flex;
+  align-items: center;
   gap: var(--s-5);
   font-family: var(--f-display);
   font-size: var(--t-big);
   color: var(--sign-dim);
 }
 .fpick-key { display: inline-flex; align-items: center; gap: var(--s-2); }
+/* "Replay intro" sits at the far right of the key row, out of the way of Play. */
+.fpick-replay { margin-left: auto; }
 
 /* Narrow screens: let the cards wrap instead of squeezing. */
 @media (max-width: 760px) {

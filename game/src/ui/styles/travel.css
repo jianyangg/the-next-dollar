@@ -1,0 +1,47 @@
+/*
+ * Subway ride (TravelTransition.tsx): two control-blue car doors with pale windows close
+ * over the screen, a station plate names the stop, then the doors open again.
+ * Above every window and the founder picker, below nothing.
+ */
+.travel-layer {
+  position: absolute;
+  inset: 0;
+  z-index: calc(var(--z-top) + 2);
+  overflow: hidden;
+  pointer-events: all; /* no clicks reach the world mid-ride */
+}
+
+.travel-door {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  border: var(--px) solid var(--outline);
+}
+.travel-door.is-left { left: 0; border-right-width: calc(var(--px) * 2); }
+.travel-door.is-right { right: 0; border-left-width: calc(var(--px) * 2); }
+
+/* A tall car-door window, the one detail that says "subway door". */
+.travel-window {
+  width: 38%;
+  height: 34%;
+  margin-bottom: 18%;
+  background: var(--sign-2);
+  border: var(--px) solid var(--outline);
+}
+
+.travel-plate {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: var(--s-3) var(--s-5);
+}
+.travel-name {
+  font-size: var(--t-giant);
+  color: var(--sign-text);
+  white-space: nowrap;
+}

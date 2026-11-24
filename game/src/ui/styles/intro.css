@@ -1,0 +1,95 @@
+/*
+ * Opening story (IntroStory.tsx): one big SIGN card over the live park, one line each.
+ * Sits above everything, including the founder picker that waits behind it.
+ */
+.intro-scrim {
+  z-index: calc(var(--z-top) + 1);
+  cursor: pointer;
+}
+
+.intro-card {
+  width: min(760px, 100%);
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--s-4);
+  cursor: default;
+}
+
+.intro-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-4);
+  text-align: center;
+}
+
+.intro-line {
+  margin: 0;
+  font-size: var(--t-giant);
+  line-height: 1.1;
+  color: var(--sign-text);
+}
+.intro-sub {
+  margin: 0;
+  font-size: var(--t-title);
+  color: var(--sign-dim);
+}
+
+/* Card 2: the founders standing in a row. */
+.intro-figures { display: flex; gap: var(--s-3); align-items: flex-end; }
+.intro-figure {
+  width: 64px;
+  height: 80px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+/* Card 3: what you buy sits on THE LINE (hazard stripes = the 5% daily charge). */
+.intro-line-bar {
+  display: flex;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-5);
+  border: var(--px) solid var(--outline);
+}
+.intro-icon {
+  width: 48px;
+  height: 48px;
+  image-rendering: pixelated;
+  background: var(--sign);
+  border: var(--px) solid var(--outline);
+}
+.intro-icon.is-big { width: 96px; height: 96px; }
+
+.intro-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+  color: var(--sign-dim);
+}
+.intro-key { display: inline-flex; align-items: center; gap: var(--s-2); margin-left: auto; }
+.intro-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* Progress: four square pips; the current card's pip is filled. */
+.intro-dots { display: inline-flex; gap: var(--s-2); }
+.intro-dots i {
+  width: 14px;
+  height: 14px;
+  border: 3px solid var(--outline);
+  background: var(--sign);
+}
+.intro-dots i.is-on { background: var(--accent); }

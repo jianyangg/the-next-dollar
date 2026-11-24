@@ -1,0 +1,58 @@
+/*
+ * Developer panel (src/dev/DevPanel.tsx). Dev builds only. Built from the Paper Trail
+ * kit and tokens, but the big lemon "DEV" bar and the accent dashed outline make it
+ * impossible to mistake for game UI. Class prefix: dv-.
+ */
+
+.dv-panel {
+  position: fixed;
+  left: var(--s-4);
+  bottom: var(--s-4);
+  z-index: var(--z-top);
+  width: 360px;
+  max-width: calc(100vw - 2 * var(--s-4));
+  max-height: calc(100vh - 2 * var(--s-4));
+  overflow-y: auto;
+  outline: var(--px) dashed var(--accent);
+  outline-offset: var(--s-1);
+}
+
+.dv-title {
+  font-size: var(--t-hero);
+  letter-spacing: 0.1em;
+  text-align: center;
+}
+
+.dv-hint { font-size: var(--t-small); color: var(--sign-dim); margin: 0 0 var(--s-2); }
+
+.dv-group { margin-top: var(--s-3); }
+.dv-group-name {
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+  margin: 0 0 var(--s-1);
+}
+
+.dv-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+
+.dv-btn {
+  font-size: var(--t-body);
+  min-height: 40px;
+  padding: var(--s-1) var(--s-3) var(--s-1);
+  box-shadow: var(--shadow-sm);
+}
+.dv-btn.is-on { background: var(--title); }
+
+.dv-input {
+  width: 72px;
+  min-height: 40px;
+  font-family: var(--f-num);
+  font-size: var(--t-body);
+  color: var(--sign-text);
+  background: var(--sign-2);
+  border: var(--px) solid var(--outline);
+  padding: 0 var(--s-2);
+}
+
+.dv-seed { font-family: var(--f-num); font-size: var(--t-body); }
+.dv-status { font-size: var(--t-small); margin: var(--s-2) 0 0; min-height: 1.4em; }
+.dv-status.is-refused { color: var(--cost-sign); }

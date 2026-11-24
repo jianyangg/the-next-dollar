@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { advanceClock, formatClockTime, isClockPaused } from './clock';
+import {
+  advanceClock,
+  CLOSING_TIME_SHORT,
+  formatClockTime,
+  isClockPaused,
+  SUNRISE_PROGRESS,
+  SUNSET_PROGRESS,
+  sunArcPosition,
+} from './clock';
 import { closeDay, startNextDay } from './dayEnd';
 import { CENTRAL_PARK_DEAL, resolveSealedBid, toPublicView } from './deal';
 import * as P from './purchases';
@@ -169,10 +177,23 @@ describe('clock', () => {
     expect(isClockPaused({ ...base, day: 31 })).toBe(true);
   });
 
-  it('formats 8 AM to 8 PM in 5-minute steps', () => {
-    expect(formatClockTime(0)).toBe('8:00 AM');
-    expect(formatClockTime(0.5)).toBe('2:00 PM');
-    expect(formatClockTime(1)).toBe('8:00 PM');
+  it('formats 5 AM to 9 PM in 5-minute steps', () => {
+    expect(formatClockTime(0)).toBe('5:00 AM');
+    expect(formatClockTime(0.5)).toBe('1:00 PM');
+    expect(formatClockTime(1)).toBe('9:00 PM');
+    expect(CLOSING_TIME_SHORT).toBe('9 PM');
+  });
+
+  it('the sun arc matches the sky: below the horizon before sunrise and after sunset, highest mid-day', () => {
+    expect(sunArcPosition(0).up).toBe(false);
+    expect(sunArcPosition(0).height).toBeLessThan(0);
+    expect(sunArcPosition(SUNRISE_PROGRESS).height).toBeCloseTo(0);
+    const noon = (SUNRISE_PROGRESS + SUNSET_PROGRESS) / 2;
+    expect(sunArcPosition(noon).height).toBeCloseTo(1);
+    expect(sunArcPosition(SUNSET_PROGRESS).height).toBeCloseTo(0);
+    expect(sunArcPosition(1).up).toBe(false);
+    // The sun's sideways position is the clock itself.
+    expect(sunArcPosition(0.25).x).toBe(0.25);
   });
 });
 

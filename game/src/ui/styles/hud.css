@@ -43,7 +43,14 @@
 .hud-day { font-size: var(--t-title); }
 .hud-place { font-size: var(--t-body); color: var(--sign-dim); white-space: nowrap; }
 .hud-clock { display: flex; align-items: center; gap: var(--s-2); }
-.hud-clock-track { flex: 1; min-width: 80px; }
+/* Sun-arc clock (SunArc.tsx): the path is dashed ahead of the sun and solid behind it. */
+.hud-sun { flex: 1; min-width: 110px; height: 48px; overflow: visible; }
+.hud-sun-path { fill: none; stroke: var(--sign-dim); stroke-width: 2; stroke-dasharray: 3 4; }
+.hud-sun-done { fill: none; stroke: var(--outline); stroke-width: 3; }
+.hud-sun-horizon { stroke: var(--outline); stroke-width: 3; }
+.hud-sun-disc { fill: var(--title); stroke: var(--outline); stroke-width: 3; }
+/* Before sunrise / after sunset the sun sits under the horizon, dimmed like the sky. */
+.hud-sun-disc.is-down { fill: var(--sign-2); }
 .hud-clock-time { font-size: var(--t-small); white-space: nowrap; }
 
 /* The 1x/2x toggle is a small sign button: control blue (--accent) when the day runs fast. */
