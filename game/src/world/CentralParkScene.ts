@@ -3346,14 +3346,93 @@ export class CentralParkScene {
     });
   };
 
+  /**
+   * Free everything this scene put on the GPU, then release the WebGL context.
+   *
+   * Why this is needed: three.js uploads each geometry, material program and
+   * texture to the graphics card the first time it is drawn. JavaScript garbage
+   * collection never frees that GPU memory; only an explicit `.dispose()` does.
+   * `renderer.dispose()` alone just releases the renderer's own caches, so every
+   * scene rebuild (React StrictMode remounts, hot reload) used to leak the whole
+   * town's worth of textures.
+   *
+   * Strategy: collect every resource into ONE Set (so a resource shared by many
+   * meshes is disposed exactly once), then dispose them all. Three kinds of
+   * resources are reachable from the scene graph (geometry, material, textures
+   * on a material); a fourth kind is held only in fields (frame banks, shared
+   * materials), so those are added explicitly.
+   */
+  private disposeGpuResources(): void {
+    const resources = new Set<{ dispose(): void }>();
+
+    // Every texture slot a three.js material can carry. Listed explicitly because
+    // a material stores its textures as plain properties, not in a collection.
+    const TEXTURE_SLOTS = [
+      'map', 'alphaMap', 'aoMap', 'bumpMap', 'displacementMap', 'emissiveMap',
+      'envMap', 'lightMap', 'metalnessMap', 'normalMap', 'roughnessMap',
+      'specularMap', 'gradientMap', 'clearcoatMap', 'clearcoatNormalMap',
+      'clearcoatRoughnessMap', 'sheenColorMap', 'sheenRoughnessMap',
+      'transmissionMap', 'thicknessMap', 'iridescenceMap', 'iridescenceThicknessMap',
+    ] as const;
+
+    const addMaterial = (material: THREE.Material | undefined): void => {
+      if (!material) return;
+      resources.add(material);
+      const slots = material as unknown as Record<string, unknown>;
+      for (const slot of TEXTURE_SLOTS) {
+        const value = slots[slot];
+        if (value instanceof THREE.Texture) resources.add(value);
+      }
+    };
+
+    // 1. Everything reachable from the scene graph.
+    this.scene.traverse((obj) => {
+      const renderable = obj as THREE.Object3D & {
+        geometry?: THREE.BufferGeometry;
+        material?: THREE.Material | THREE.Material[];
+      };
+      if (renderable.geometry) resources.add(renderable.geometry);
+      if (Array.isArray(renderable.material)) renderable.material.forEach(addMaterial);
+      else addMaterial(renderable.material);
+    });
+
+    // 2. Resources held only in fields (not necessarily attached to a visible object).
+    resources.add(this.sparkleGeo);
+    addMaterial(this.streetlampBulbMat);
+    addMaterial(this.contactShadowMat);
+    addMaterial(this.streetSignAMat);
+    addMaterial(this.streetSignBMat);
+    for (const tex of [this.summerTreeTex, this.autumnTreeTex, this.playerKoTex, this.pedKoTex]) {
+      if (tex) resources.add(tex);
+    }
+    for (const dir of ['down', 'up', 'left', 'right'] as const) {
+      for (const tex of this.playerFrames?.[dir] ?? []) resources.add(tex);
+    }
+    for (const byDirection of Object.values(this.pedSpriteBank ?? {})) {
+      for (const frames of Object.values(byDirection)) {
+        for (const tex of frames) resources.add(tex);
+      }
+    }
+    // Sale sparkles each own a private material that is only freed when they expire.
+    for (const sparkle of this.sparkles) addMaterial(sparkle.mesh.material as THREE.Material);
+
+    resources.forEach((r) => r.dispose());
+  }
+
   public dispose(): void {
+    // Guard against double-dispose: a second call would touch a dead renderer.
+    if (this.disposed) return;
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
+    this.disposeGpuResources();
     this.renderer.dispose();
+    // Ask the browser to drop the WebGL context now instead of waiting for GC;
+    // browsers cap live contexts (~16) and warn when a page leaks them.
+    this.renderer.forceContextLoss();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);
     }

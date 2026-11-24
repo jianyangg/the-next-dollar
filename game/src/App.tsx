@@ -1,33 +1,37 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  createInitialState,
-  createReviewFromPatience,
-  DayRecord,
   getDailyHurdleCharge,
   getDailyWages,
   getDayNopat,
   getInvestedCapital,
   getTotalEquity,
   HURDLE_RATE,
-  LedgerToast,
   MANAGER_DAILY_WAGE,
-  SliceState,
   STALL_KIT_COST,
   WORKER_DAILY_WAGE,
 } from './core/sliceModel';
-import { getNeighborhood, NeighborhoodId } from './core/neighborhoods';
-import { advanceClock, formatClockTime, isClockPaused } from './core/clock';
-import { closeDay, startNextDay as advanceToNextDay } from './core/dayEnd';
-import { CENTRAL_PARK_DEAL, resolveSealedBid } from './core/deal';
-import * as Purchases from './core/purchases';
+import { getNeighborhood } from './core/neighborhoods';
+import { formatClockTime } from './core/clock';
+import { CENTRAL_PARK_DEAL } from './core/deal';
 import { getDailyPlotRent } from './core/rent';
-import { applySale, applyWalkout, salePopLabel } from './core/sales';
-import { applyBrewOutcome, BrewTier, pickChallenge, StirKey, sweetSpots } from './core/brewing';
-import { BrewGameState, initGame, pressGame, pressStirKey, stepGame } from './core/minigames';
+import { sweetSpots, StirKey } from './core/brewing';
+import { STARTER_QUESTIONS } from './core/sellerQuestions';
 import { soundEngine } from './audio/soundEngine';
-import { cosmeticRandom, gameplayRandom, getRunSeed } from './core/runRandom';
+import { getRunSeed } from './core/runRandom';
 import { ManhattanMapModal } from './ui/ManhattanMapModal';
-import { CentralParkScene, NearbyTarget, ProjectedAnchors } from './world/CentralParkScene';
+import { AnchoredButton, PatienceBars, SalePopLayer, ToastLayer } from './ui/WorldOverlays';
+import { connectScene } from './state/connectScene';
+import { useGameStore } from './state/gameStore';
+import {
+  selectMarketLemons,
+  selectMarketPitchers,
+  selectMarketStalls,
+  selectOwnStand,
+  selectSellerStand,
+  useNearbyTarget,
+  useQueueLength,
+} from './state/anchorStore';
+import { startGameLoops } from './state/loops';
 import {
   createMascotPortraitDataUrl,
   createMascotSpriteTexture,
@@ -36,32 +40,6 @@ import {
   FounderSpecies,
   UiIconKind,
 } from './world/pixelArt';
-
-interface QaEntry {
-  q: string;
-  a: string;
-}
-
-interface SalePop {
-  id: number;
-  text: string;
-  combo: number;
-  isPerfect?: boolean;
-}
-
-type ActiveModal =
-  | 'seller-stand'
-  | 'market-stalls'
-  | 'market-lemons'
-  | 'market-pitchers'
-  | 'plot-lease'
-  | null;
-
-const STARTER_QUESTIONS = [
-  'Who runs the stand?',
-  'When does the lease renew?',
-  'Why are you selling?',
-];
 
 // The seller's published books, formatted for the deal table. The numbers live in core/deal.ts.
 const SELLER_ASK = CENTRAL_PARK_DEAL.askingPrice;
@@ -91,63 +69,53 @@ function getConversionProb(price: number, priceSensitivity: number): number {
   return Math.min(0.96, Math.max(0.12, +(base + boost).toFixed(2)));
 }
 
-function answerSellerQuestion(q: string): string {
-  const lower = q.toLowerCase();
-  if (lower.includes('manager') || lower.includes('staff') || lower.includes('who runs') || lower.includes('wage')) {
-    return "I've been hands-on since day one—nothing beats an owner's touch, so manager pay is $0 on the books. Sales still grew from $14 to $16 a day.";
-  }
-  if (lower.includes('lease') || lower.includes('rent') || lower.includes('renew')) {
-    return 'Lease renews in 4 days—the landlord mentioned rent is stepping up from $3 to $5 a day on renewal. Still a prime brownstone corner.';
-  }
-  if (lower.includes('why') || lower.includes('sell') || lower.includes('leav')) {
-    return "I'm moving to Brooklyn next week and don't want to commute uptown. Revenue hit $16 a day last period.";
-  }
-  return "Every number I have is right there on the sheet—sales went $14, $15, $16 a day. Ask me about staffing, the lease, or why I'm selling.";
-}
-
 function fmtSignedMoney(val: number): string {
   return `${val >= 0 ? '+' : '-'}$${Math.abs(val).toFixed(2)}`;
 }
 
+/**
+ * The App component only DRAWS the game. All state lives in `state/gameStore.ts`
+ * (game rules + actions), per-frame world positions live in `state/anchorStore.ts`,
+ * and `connectScene` / `startGameLoops` wire the 3D scene and the timers to those
+ * stores. Component splitting is a later phase, so the markup is still all here.
+ */
 export function App() {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const sceneRef = useRef<CentralParkScene | null>(null);
-  const toastIdRef = useRef(1);
-  const reviewIdRef = useRef(1);
-  const brewRafRef = useRef<number | null>(null);
-  const serveRafRef = useRef<number | null>(null);
+  const actions = useGameStore((s) => s.actions);
 
-  const [state, setState] = useState<SliceState>(createInitialState);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  // Each selector re-renders App only when ITS value changes.
+  const state = useGameStore((s) => s.economy);
+  const founderSpecies = useGameStore((s) => s.founderSpecies);
+  const founderModalOpen = useGameStore((s) => s.founderModalOpen);
+  const tutorialActive = useGameStore((s) => s.tutorialActive);
+  const neighborhoodId = useGameStore((s) => s.neighborhoodId);
+  const lastBusinessNeighborhood = useGameStore((s) => s.lastBusinessNeighborhood);
+  const mapOpen = useGameStore((s) => s.mapOpen);
+  const booksOpen = useGameStore((s) => s.booksOpen);
+  const activeModal = useGameStore((s) => s.activeModal);
+  const workingAtStand = useGameStore((s) => s.workingAtStand);
+  const brewedCups = useGameStore((s) => s.brewedCups);
+  const brewGame = useGameStore((s) => s.brewGame);
+  const stirShake = useGameStore((s) => s.stirShake);
+  const dayTimeProgress = useGameStore((s) => s.timeProgress);
+  const clockSpeed = useGameStore((s) => s.clockSpeed);
+  const eodRecord = useGameStore((s) => s.eodRecord);
+  const serveProgress = useGameStore((s) => s.serveProgress);
+  const combo = useGameStore((s) => s.combo);
+  const cashPulseKey = useGameStore((s) => s.cashPulseKey);
+  const muted = useGameStore((s) => s.muted);
+  const qaLog = useGameStore((s) => s.qaLog);
+  const bidMessage = useGameStore((s) => s.bidMessage);
 
-  // Founder mascot, neighborhood & working-inside-stall state
-  const [founderSpecies, setFounderSpecies] = useState<FounderSpecies>('squirrel');
-  const [founderModalOpen, setFounderModalOpen] = useState(true);
-  const [tutorialActive, setTutorialActive] = useState(true);
-  const [neighborhoodId, setNeighborhoodId] = useState<NeighborhoodId>('central-park');
-  const [lastBusinessNeighborhood, setLastBusinessNeighborhood] = useState<NeighborhoodId>('central-park');
-  const [mapOpen, setMapOpen] = useState(false);
+  // Discrete values from the per-frame anchor store (re-render only when they change).
+  const nearby = useNearbyTarget();
+  const queueLength = useQueueLength();
 
-  const [workingAtStand, setWorkingAtStand] = useState(false);
-  const [brewedCups, setBrewedCups] = useState(0);
-  const brewedCupsRef = useRef(brewedCups);
-  brewedCupsRef.current = brewedCups;
+  // Text inputs are purely local UI state, so they stay as component state.
+  const [questionInput, setQuestionInput] = useState('');
+  const [bidInput, setBidInput] = useState('45');
 
-  // 4-Challenge Rotating Arcade Brewing State.
-  // The whole running mini-game is one immutable value from core/minigames; the
-  // ref mirrors it so the animation loop and key handlers read the latest frame.
-  const [brewGame, setBrewGameState] = useState<BrewGameState | null>(null);
-  const brewGameRef = useRef<BrewGameState | null>(null);
-  const setBrewGame = useCallback((g: BrewGameState | null) => {
-    brewGameRef.current = g;
-    setBrewGameState(g);
-  }, []);
-  const lastBrewKindRef = useRef<BrewGameState['kind'] | null>(null);
-  const spaceHeldRef = useRef(false);
-  const [stirShake, setStirShake] = useState(false);
-
-  // Read-only views of the running game for the JSX below.
+  // Read-only views of the running brew mini-game for the JSX below.
   const brewGameActive = brewGame !== null;
   const brewKind = brewGame?.kind ?? 'triple-squeeze';
   const tripleGame = brewGame?.kind === 'triple-squeeze' ? brewGame : null;
@@ -166,27 +134,11 @@ export function App() {
   const stirIndex = stirGame?.index ?? 0;
   const stirFuse = stirGame?.fuse ?? 1;
 
-  // Real-Time Day Clock (8:00 AM -> 8:00 PM) & 8:00 PM Closing Bell Scorecard
-  const [dayTimeProgress, setDayTimeProgress] = useState(0);
-  const dayTimeProgressRef = useRef(0);
-  const [clockSpeed, setClockSpeed] = useState<1 | 2>(1);
-  const [eodRecord, setEodRecord] = useState<DayRecord | null>(null);
-
-  const [serveProgress, setServeProgress] = useState<number | null>(null);
-  const [combo, setCombo] = useState(0);
-  const comboRef = useRef(0);
-  const [cashPulseKey, setCashPulseKey] = useState(0);
-  const [salePops, setSalePops] = useState<SalePop[]>([]);
-  const popIdRef = useRef(1);
-  const [muted, setMuted] = useState<boolean>(() => soundEngine.isMuted());
-
   const neighborhood = useMemo(() => getNeighborhood(neighborhoodId), [neighborhoodId]);
   const lastBusinessDistrict = useMemo(
     () => getNeighborhood(lastBusinessNeighborhood),
     [lastBusinessNeighborhood]
   );
-  const neighborhoodRef = useRef(neighborhood);
-  neighborhoodRef.current = neighborhood;
 
   // Pre-render crisp 32x32 pixel mascot portraits, 32x40 full standing sprites & 16x16 UI icons once
   const portraits = useMemo(() => {
@@ -223,72 +175,18 @@ export function App() {
     [founderSpecies]
   );
 
-  const [anchors, setAnchors] = useState<ProjectedAnchors>({
-    ownStand: { x: 640, y: 360 },
-    sellerStand: { x: 320, y: 360 },
-    marketAnchors: {
-      stalls: { x: 360, y: 350 },
-      pitchers: { x: 640, y: 350 },
-      lemons: { x: 920, y: 350 },
-    },
-    player: { x: 500, y: 400 },
-    nearby: null,
-    queue: [],
-  });
-  const anchorsRef = useRef(anchors);
-  anchorsRef.current = anchors;
+  const currentPlotStatus = state.plots[neighborhoodId] ?? 'empty';
 
-  const [toasts, setToasts] = useState<LedgerToast[]>([]);
-  const [booksOpen, setBooksOpen] = useState(false);
-  const [activeModal, setActiveModal] = useState<ActiveModal>(null);
-
-  // Seller Q&A + sealed bid state
-  const [qaLog, setQaLog] = useState<QaEntry[]>([]);
-  const [questionInput, setQuestionInput] = useState('');
-  const [bidInput, setBidInput] = useState('45');
-  const [bidMessage, setBidMessage] = useState<string | null>(null);
-
-  const pushToast = useCallback(
-    (text: string, tone: LedgerToast['tone'], anchor: LedgerToast['anchor'] = 'own-stand') => {
-      const id = toastIdRef.current++;
-      setToasts((prev) => [...prev.slice(-4), { id, text, tone, anchor }]);
-      window.setTimeout(() => {
-        setToasts((prev) => prev.filter((t) => t.id !== id));
-      }, 2200);
-    },
-    []
-  );
-
-  const pushSalePop = useCallback((text: string, comboCount: number, isPerfect = false) => {
-    const id = popIdRef.current++;
-    setSalePops((prev) => [...prev.slice(-5), { id, text, combo: comboCount, isPerfect }]);
-    window.setTimeout(() => {
-      setSalePops((prev) => prev.filter((p) => p.id !== id));
-    }, 1200);
+  // Create the 3D scene exactly once per mount and wire it to the stores.
+  // (StrictMode runs mount -> cleanup -> mount in development; the cleanup disposes the
+  // first scene so exactly one stays alive.)
+  useEffect(() => {
+    if (!mountRef.current) return;
+    return connectScene(mountRef.current);
   }, []);
 
-  const enterStand = useCallback(() => {
-    soundEngine.playClick();
-    setActiveModal(null);
-    setWorkingAtStand(true);
-    sceneRef.current?.setWorkingAtStand(true);
-  }, []);
-
-  const exitStand = useCallback(() => {
-    soundEngine.playClick();
-    if (brewRafRef.current !== null) {
-      cancelAnimationFrame(brewRafRef.current);
-      brewRafRef.current = null;
-      setBrewGame(null);
-    }
-    if (serveRafRef.current !== null) {
-      cancelAnimationFrame(serveRafRef.current);
-      serveRafRef.current = null;
-      setServeProgress(null);
-    }
-    setWorkingAtStand(false);
-    sceneRef.current?.setWorkingAtStand(false);
-  }, []);
+  // Day clock, manager auto-serve and keyboard shortcuts (they read state via the store).
+  useEffect(() => startGameLoops(), []);
 
   // Initialize Web Audio & cozy background music on first user gesture
   useEffect(() => {
@@ -309,138 +207,6 @@ export function App() {
     };
   }, []);
 
-  const handleToggleSound = () => {
-    soundEngine.initOnGesture();
-    const nextMuted = soundEngine.toggleMute();
-    setMuted(nextMuted);
-    if (!nextMuted) {
-      soundEngine.startMusic();
-      soundEngine.playClick();
-    }
-  };
-
-  // Stand never auto-serves; sales happen only when the player manually serves from behind the counter
-  const handleCustomerPurchase = useCallback(() => {}, []);
-
-  const handleCustomerWalkout = useCallback(() => {
-    soundEngine.playReject();
-    comboRef.current = 0;
-    setCombo(0);
-    const id = reviewIdRef.current++;
-    setState((prev) => applyWalkout(prev, id));
-    pushToast('★ 1.0 Customer left!', 'negative', 'own-stand');
-  }, [pushToast]);
-
-  const handleTaxiHit = useCallback(() => {
-    soundEngine.playHonkKo();
-    pushToast('Beep! Watch the NYC cabs!', 'negative', 'own-stand');
-  }, [pushToast]);
-
-  const handleInteract = useCallback(
-    (target: NearbyTarget) => {
-      if (!target) return;
-      if (target === 'own-stand') {
-        enterStand();
-      } else {
-        setActiveModal(target);
-      }
-    },
-    [enterStand]
-  );
-
-  useEffect(() => {
-    if (!mountRef.current) return;
-    const world = new CentralParkScene(mountRef.current, {
-      onCustomerPurchase: handleCustomerPurchase,
-      onCustomerWalkout: handleCustomerWalkout,
-      onTaxiHit: handleTaxiHit,
-      onAnchorsUpdate: setAnchors,
-      onInteract: handleInteract,
-    }, { gameplay: gameplayRandom, cosmetic: cosmeticRandom });
-    sceneRef.current = world;
-    world.setPlayerSpecies(founderSpecies);
-    world.setNeighborhood(neighborhoodId);
-    world.setPlotState(stateRef.current.plots[neighborhoodId] ?? 'empty');
-    world.setTimeOfDay(dayTimeProgressRef.current);
-    return () => {
-      if (brewRafRef.current !== null) cancelAnimationFrame(brewRafRef.current);
-      if (serveRafRef.current !== null) cancelAnimationFrame(serveRafRef.current);
-      world.dispose();
-      sceneRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleCustomerPurchase, handleCustomerWalkout, handleTaxiHit, handleInteract]);
-
-  const currentPlotStatus = state.plots[neighborhoodId] ?? 'empty';
-
-  useEffect(() => {
-    sceneRef.current?.setPlotState(currentPlotStatus);
-  }, [neighborhoodId, currentPlotStatus]);
-
-  useEffect(() => {
-    sceneRef.current?.setPitcherCount(state.pitchers);
-    sceneRef.current?.setStandOpen(
-      currentPlotStatus === 'built' &&
-        state.cupsInStock > 0 &&
-        state.day <= state.maxDays &&
-        eodRecord === null
-    );
-  }, [state.pitchers, state.cupsInStock, state.day, state.maxDays, currentPlotStatus, eodRecord]);
-
-  useEffect(() => {
-    sceneRef.current?.setPlayerSpecies(founderSpecies);
-  }, [founderSpecies]);
-
-  // Keep brewedCups clamped to available cupsInStock
-  useEffect(() => {
-    setBrewedCups((c) => Math.min(c, state.cupsInStock));
-  }, [state.cupsInStock]);
-
-  // Auto-complete First-Stall Guided Tutorial as soon as 1 customer is served
-  useEffect(() => {
-    if (tutorialActive && state.totalRevenue > 0) {
-      setTutorialActive(false);
-      soundEngine.playPerfect();
-      pushToast('Tutorial complete! Build your NYC empire before Day 30.', 'positive', 'own-stand');
-    }
-  }, [tutorialActive, state.totalRevenue, pushToast]);
-
-  const handleSelectNeighborhood = useCallback(
-    (id: NeighborhoodId) => {
-      if (brewRafRef.current !== null) {
-        cancelAnimationFrame(brewRafRef.current);
-        brewRafRef.current = null;
-        setBrewGame(null);
-      }
-      if (serveRafRef.current !== null) {
-        cancelAnimationFrame(serveRafRef.current);
-        serveRafRef.current = null;
-        setServeProgress(null);
-      }
-      if (workingAtStand) {
-        setWorkingAtStand(false);
-        sceneRef.current?.setWorkingAtStand(false);
-      }
-      setActiveModal(null);
-      setMapOpen(false);
-      if (id !== 'market') {
-        setLastBusinessNeighborhood(id);
-      }
-      setNeighborhoodId(id);
-      sceneRef.current?.setNeighborhood(id);
-      soundEngine.playTravel();
-      const next = getNeighborhood(id);
-      pushToast(
-        id === 'market'
-          ? `Arrived at ${next.name} · Wholesale Stalls Open!`
-          : `Subway to ${next.name} · Rent $${next.dailyRent}/day`,
-        'neutral',
-        'own-stand'
-      );
-    },
-    [pushToast, workingAtStand]
-  );
-
   const stopInputKeyPropagation = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Escape') {
       e.nativeEvent.stopPropagation();
@@ -450,572 +216,16 @@ export function App() {
   // Sweet-spot widths widen with pitchers and hired workers (core/brewing.ts)
   const { perfectHalf, goodHalf, tubeWidth } = sweetSpots(state);
 
-  const finishBrewOutcome = useCallback(
-    (tier: BrewTier) => {
-      if (brewRafRef.current !== null) {
-        cancelAnimationFrame(brewRafRef.current);
-        brewRafRef.current = null;
-      }
-      spaceHeldRef.current = false;
-      setBrewGame(null);
-
-      const latest = stateRef.current;
-      // Toasts show the cups actually added. (They used to fall back to the full
-      // batch size when the pitcher was already full, which overstated the brew.)
-      const { added } = applyBrewOutcome(tier, brewedCupsRef.current, latest.cupsInStock);
-      setBrewedCups((prev) => applyBrewOutcome(tier, prev, latest.cupsInStock).brewedCups);
-      if (tier === 'perfect') {
-        soundEngine.playPerfect();
-        pushSalePop(`✨ PERFECT BREW! +${added}`, Math.max(3, comboRef.current), true);
-        pushToast(`✨ PERFECT BREW! +${added}`, 'positive', 'own-stand');
-      } else if (tier === 'good') {
-        soundEngine.playBrew();
-        pushToast(`GOOD BREW! +${added}`, 'positive', 'own-stand');
-      } else {
-        soundEngine.playReject();
-        pushToast(`Sour batch (+${added})`, 'negative', 'own-stand');
-      }
-    },
-    [pushSalePop, pushToast, setBrewGame]
-  );
-
-  const startBrewGame = useCallback(() => {
-    if (brewGameRef.current) return;
-    const cur = stateRef.current;
-    if (cur.pitchers < 1) {
-      soundEngine.playReject();
-      pushToast('Buy a Glass Pitcher ($10) at Union Sq. Market first!', 'negative', 'own-stand');
-      return;
-    }
-    if (cur.cupsInStock <= 0) {
-      soundEngine.playReject();
-      pushToast('No lemons left! Visit Union Sq. Supply Market', 'negative', 'own-stand');
-      return;
-    }
-    if (brewedCupsRef.current >= cur.cupsInStock) {
-      soundEngine.playClick();
-      pushToast('All lemons already brewed & ready to serve!', 'neutral', 'own-stand');
-      return;
-    }
-
-    // One of the 4 arcade challenges, never the same one twice in a row.
-    const chosen = pickChallenge(lastBrewKindRef.current, gameplayRandom);
-    lastBrewKindRef.current = chosen;
-    setBrewGame(initGame(chosen, gameplayRandom));
-    soundEngine.playClick();
-    spaceHeldRef.current = false;
-
-    // One loop for every challenge: advance the pure game state by the real
-    // frame time, render it, and stop when the rules report an outcome.
-    let lastNow = performance.now();
-    const tick = (now: number) => {
-      const game = brewGameRef.current;
-      if (!game) return;
-      const dt = Math.max(0, (now - lastNow) / 1000);
-      lastNow = now;
-      const latest = stateRef.current;
-      const result = stepGame(game, dt, {
-        pitchers: latest.pitchers,
-        workers: latest.workers,
-        spaceHeld: spaceHeldRef.current,
-      });
-      setBrewGame(result.state);
-      if (result.outcome) {
-        finishBrewOutcome(result.outcome);
-        return;
-      }
-      brewRafRef.current = requestAnimationFrame(tick);
-    };
-    brewRafRef.current = requestAnimationFrame(tick);
-  }, [finishBrewOutcome, pushToast, setBrewGame]);
-
-  const handleStirKeyInput = useCallback(
-    (pressedKey: StirKey) => {
-      const game = brewGameRef.current;
-      if (!game || game.kind !== 'rapid-stir') return;
-      const result = pressStirKey(game, pressedKey);
-      setBrewGame(result.state);
-      if (result.shake) {
-        soundEngine.playReject();
-        setStirShake(true);
-        window.setTimeout(() => setStirShake(false), 180);
-        return;
-      }
-      soundEngine.playClick();
-      if (result.outcome) finishBrewOutcome(result.outcome);
-    },
-    [finishBrewOutcome, setBrewGame]
-  );
-
-  const lockBrewGame = useCallback(() => {
-    const game = brewGameRef.current;
-    if (!game) return;
-
-    if (game.kind === 'rapid-stir') {
-      handleStirKeyInput(game.seq[game.index] ?? 'SPACE');
-      return;
-    }
-
-    const latest = stateRef.current;
-    const result = pressGame(game, { pitchers: latest.pitchers, workers: latest.workers });
-
-    if (game.kind === 'keep-in-tube') {
-      // Tapping or clicking boosts the lemon drop rightward inside the tube
-      setBrewGame(result.state);
-      soundEngine.playClick();
-      return;
-    }
-
-    if (game.kind === 'triple-squeeze' && result.state.kind === 'triple-squeeze') {
-      const hit = result.state.hits > game.hits;
-      if (hit) {
-        soundEngine.playClick();
-      } else {
-        soundEngine.playReject();
-      }
-      setBrewGame(result.state);
-    }
-
-    if (result.outcome) finishBrewOutcome(result.outcome);
-  }, [finishBrewOutcome, handleStirKeyInput, setBrewGame]);
-
-  const startServeFrontCustomer = useCallback(() => {
-    if (!workingAtStand || serveProgress !== null) return;
-    const cur = stateRef.current;
-    if (cur.day > cur.maxDays) return;
-    if (brewedCupsRef.current < 1 || cur.cupsInStock < 1) {
-      soundEngine.playReject();
-      pushToast('Brew a pitcher first!', 'negative', 'own-stand');
-      return;
-    }
-    if (anchorsRef.current.queue.length === 0) {
-      soundEngine.playClick();
-      return;
-    }
-
-    const durationMs = 450;
-    const startTime = performance.now();
-    setServeProgress(0.01);
-
-    const tick = (now: number) => {
-      const pct = Math.min(1, (now - startTime) / durationMs);
-      setServeProgress(pct);
-      if (pct < 1) {
-        serveRafRef.current = requestAnimationFrame(tick);
-      } else {
-        serveRafRef.current = null;
-        setServeProgress(null);
-
-        const served = sceneRef.current?.serveFrontCustomer();
-        if (!served) return;
-
-        const latest = stateRef.current;
-        if (latest.cupsInStock <= 0) return;
-
-        const revId = reviewIdRef.current++;
-        const reviewPreview = createReviewFromPatience(served.patienceRatio, revId);
-        const nextCombo = comboRef.current + 1;
-        comboRef.current = nextCombo;
-        setCombo(nextCombo);
-        setCashPulseKey((k) => k + 1);
-
-        setState((prev) => applySale(prev, served.patienceRatio, revId));
-        setBrewedCups((c) => Math.max(0, c - 1));
-        soundEngine.playCoin(nextCombo);
-        sceneRef.current?.burstSaleSparkles(nextCombo);
-        pushSalePop(salePopLabel(latest.pricePerCup, nextCombo), nextCombo);
-        pushToast(
-          `+$${latest.pricePerCup} Cash · ★ ${reviewPreview.stars.toFixed(1)}`,
-          reviewPreview.stars >= 4 ? 'positive' : 'neutral',
-          'own-stand'
-        );
-      }
-    };
-    serveRafRef.current = requestAnimationFrame(tick);
-  }, [workingAtStand, serveProgress, pushSalePop, pushToast]);
-
-  // Global UI shortcuts: [B] Books, [M] NY Map, [F] Brew, [Space] Squeeze/Serve, [Esc] closes modals / steps out
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const isTyping =
-        target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable;
-
-      if (e.key === 'Escape') {
-        if (founderModalOpen) {
-          setFounderModalOpen(false);
-        } else if (mapOpen) {
-          setMapOpen(false);
-        } else if (activeModal) {
-          setActiveModal(null);
-        } else if (workingAtStand) {
-          exitStand();
-        } else if (booksOpen) {
-          setBooksOpen(false);
-        }
-        return;
-      }
-
-      if (isTyping || e.metaKey || e.ctrlKey || e.altKey) return;
-
-      const k = e.key.toLowerCase();
-      if (brewGameActive && brewGameRef.current?.kind === 'rapid-stir' && workingAtStand) {
-        if (k === 'w' || e.key === 'ArrowUp') {
-          e.preventDefault();
-          handleStirKeyInput('W');
-          return;
-        }
-        if (k === 'a' || e.key === 'ArrowLeft') {
-          e.preventDefault();
-          handleStirKeyInput('A');
-          return;
-        }
-        if (k === 's' || e.key === 'ArrowDown') {
-          e.preventDefault();
-          handleStirKeyInput('S');
-          return;
-        }
-        if (k === 'd' || e.key === 'ArrowRight') {
-          e.preventDefault();
-          handleStirKeyInput('D');
-          return;
-        }
-        if (e.code === 'Space') {
-          e.preventDefault();
-          handleStirKeyInput('SPACE');
-          return;
-        }
-      }
-
-      if (k === 'b') {
-        e.preventDefault();
-        setBooksOpen((v) => !v);
-      } else if (k === 'm') {
-        e.preventDefault();
-        setMapOpen((v) => !v);
-      } else if (k === 'f' && workingAtStand && !activeModal && !mapOpen && !founderModalOpen && !eodRecord) {
-        e.preventDefault();
-        if (!brewGameActive) {
-          startBrewGame();
-        }
-      } else if (
-        e.code === 'Space' &&
-        workingAtStand &&
-        !activeModal &&
-        !mapOpen &&
-        !founderModalOpen &&
-        !eodRecord
-      ) {
-        e.preventDefault();
-        spaceHeldRef.current = true;
-        if (brewGameActive) {
-          if (brewGameRef.current?.kind !== 'keep-in-tube') {
-            lockBrewGame();
-          }
-        } else {
-          startServeFrontCustomer();
-        }
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        spaceHeldRef.current = false;
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, [
-    activeModal,
-    booksOpen,
-    mapOpen,
-    founderModalOpen,
-    eodRecord,
-    workingAtStand,
-    brewGameActive,
-    exitStand,
-    startBrewGame,
-    lockBrewGame,
-    handleStirKeyInput,
-    startServeFrontCustomer,
-  ]);
-
-  // Autonomous Manager Loop: auto-brews & serves queued customers steadily when hired
-  useEffect(() => {
-    if (
-      state.managers <= 0 ||
-      currentPlotStatus !== 'built' ||
-      state.day > state.maxDays ||
-      eodRecord !== null
-    ) {
-      return;
-    }
-    const intervalMs = Math.max(900, 1850 - (state.managers - 1) * 350);
-    const timer = window.setInterval(() => {
-      const latest = stateRef.current;
-      if (latest.day > latest.maxDays || latest.cupsInStock <= 0) return;
-      if (brewedCupsRef.current < 1) {
-        if (latest.pitchers < 1) return;
-        setBrewedCups((prev) => Math.min(latest.cupsInStock, prev + 4));
-        soundEngine.playBrew();
-        return;
-      }
-      if (anchorsRef.current.queue.length === 0) return;
-      const served = sceneRef.current?.serveFrontCustomer();
-      if (!served) return;
-
-      const revId = reviewIdRef.current++;
-      const nextCombo = comboRef.current + 1;
-      comboRef.current = nextCombo;
-      setCombo(nextCombo);
-      setCashPulseKey((k) => k + 1);
-
-      setState((prev) => applySale(prev, served.patienceRatio, revId));
-      setBrewedCups((c) => Math.max(0, c - 1));
-      soundEngine.playCoin(nextCombo);
-      sceneRef.current?.burstSaleSparkles(nextCombo);
-      pushSalePop(salePopLabel(latest.pricePerCup, nextCombo), nextCombo);
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }, [state.managers, state.day, state.maxDays, currentPlotStatus, eodRecord, pushSalePop]);
-
-  /**
-   * Run a pure purchase rule from core/purchases.
-   * The yes/no decision uses the latest committed state (stateRef), and the update
-   * re-runs the same rule on React's `prev` so concurrent updates (a sale landing in
-   * the same frame) are never overwritten. Phase 3's store removes this double run.
-   */
-  const runPurchase = (rule: (s: SliceState) => Purchases.PurchaseResult): Purchases.PurchaseResult => {
-    const decision = rule(stateRef.current);
-    if (decision.ok) {
-      setState((prev) => {
-        const r = rule(prev);
-        return r.ok ? r.state : prev;
-      });
-    }
-    return decision;
-  };
-
-  const buyLemons = () => {
-    if (!runPurchase(Purchases.buyLemons).ok) {
-      soundEngine.playReject();
-      pushToast(`Not enough cash ($${Purchases.LEMON_CRATE_COST} needed)`, 'negative', 'own-stand');
-      return;
-    }
-    soundEngine.playBuy();
-    pushToast('Cash -$5 · Stock +$5 (+10 cups) · Profit $0', 'neutral', 'own-stand');
-  };
-
-  const buyStallKit = () => {
-    if (!runPurchase(Purchases.buyStallKit).ok) {
-      soundEngine.playReject();
-      pushToast(`Not enough cash ($${STALL_KIT_COST} needed)`, 'negative', 'seller-stand');
-      return;
-    }
-    soundEngine.playBuy();
-    pushToast(
-      `Cash -$${STALL_KIT_COST} · Equip +$${STALL_KIT_COST} (+1 Stall Kit) · Profit $0`,
-      'neutral',
-      'seller-stand'
-    );
-  };
-
-  const buyPitcher = () => {
-    if (!runPurchase(Purchases.buyPitcher).ok) {
-      soundEngine.playReject();
-      pushToast(`Not enough cash ($${Purchases.PITCHER_COST} needed)`, 'negative', 'seller-stand');
-      return;
-    }
-    soundEngine.playBuy();
-    pushToast('Cash -$10 · Equip +$10 (+1 Pitcher) · Profit $0', 'neutral', 'seller-stand');
-  };
-
-  const sellUsedPitcher = () => {
-    if (!runPurchase(Purchases.sellUsedPitcher).ok) {
-      soundEngine.playReject();
-      pushToast('No pitchers to sell!', 'negative', 'own-stand');
-      return;
-    }
-    soundEngine.playCoin(1);
-    pushToast('Sold Pitcher: Cash +$7 | Equip -$10 | Hurdle -$0.50/d', 'neutral', 'own-stand');
-  };
-
-  const divestCurrentStand = () => {
-    if (!runPurchase((s) => Purchases.divestStand(s, neighborhoodId)).ok) {
-      soundEngine.playReject();
-      pushToast('No built stand in this district to divest!', 'negative', 'own-stand');
-      return;
-    }
-    if (brewRafRef.current !== null) {
-      cancelAnimationFrame(brewRafRef.current);
-      brewRafRef.current = null;
-      setBrewGame(null);
-    }
-    if (serveRafRef.current !== null) {
-      cancelAnimationFrame(serveRafRef.current);
-      serveRafRef.current = null;
-      setServeProgress(null);
-    }
-    spaceHeldRef.current = false;
-    setWorkingAtStand(false);
-    sceneRef.current?.setWorkingAtStand(false);
-    sceneRef.current?.setPlotState('empty');
-    setBrewedCups(0);
-    soundEngine.playCoin(1);
-    pushToast('Divested Stand: Cash +$8.40 | Equip -$12 | Hurdle -$0.60/d', 'neutral', 'own-stand');
-  };
-
-  const signLease = () => {
-    if (!runPurchase((s) => Purchases.signLease(s, neighborhoodId)).ok) return;
-    soundEngine.playBuy();
-    pushToast(
-      `Leased ${neighborhood.shortName} Plot ($${neighborhood.dailyRent}/day) — Ready for a Stall Kit!`,
-      'positive',
-      'own-stand'
-    );
-  };
-
-  const buildStandOnPlot = () => {
-    const result = runPurchase((s) => Purchases.buildStand(s, neighborhoodId));
-    if (!result.ok) {
-      if (result.reason === 'no-stall-kit') {
-        soundEngine.playReject();
-        pushToast(`Need a Stall Kit ($${STALL_KIT_COST}) from Union Sq. Market!`, 'negative', 'own-stand');
-      }
-      return;
-    }
-    setActiveModal(null);
-    soundEngine.playBuy();
-    pushToast(`Stand Built in ${neighborhood.shortName}! Press [E] to step behind the counter.`, 'positive', 'own-stand');
-  };
-
-  const hireWorker = () => {
-    setState(Purchases.hireWorker);
-    soundEngine.playBuy();
-    pushToast(`Hired Worker ($${WORKER_DAILY_WAGE}/day) · Brew sweet spot widened!`, 'positive', 'own-stand');
-  };
-
-  const hireManager = () => {
-    setState(Purchases.hireManager);
-    soundEngine.playBuy();
-    pushToast(`Hired Manager ($${MANAGER_DAILY_WAGE}/day) · Stand auto-brews & serves!`, 'positive', 'own-stand');
+  const askSeller = (e: React.FormEvent) => {
+    e.preventDefault();
+    actions.askQuestion(questionInput);
+    setQuestionInput('');
   };
 
   // Daily rent: every leased/built district plot plus any acquired seller stand (core/rent.ts)
   const dailyPlotRent = getDailyPlotRent(state);
 
   const dailyWages = getDailyWages(state);
-
-  const triggerEndOfDay = useCallback(() => {
-    const cur = stateRef.current;
-    if (cur.day > cur.maxDays) return;
-
-    // Step out of stand and cancel any active brew/pour timers at 8:00 PM closing bell
-    if (brewRafRef.current !== null) {
-      cancelAnimationFrame(brewRafRef.current);
-      brewRafRef.current = null;
-      setBrewGame(null);
-    }
-    if (serveRafRef.current !== null) {
-      cancelAnimationFrame(serveRafRef.current);
-      serveRafRef.current = null;
-      setServeProgress(null);
-    }
-    spaceHeldRef.current = false;
-    setWorkingAtStand(false);
-    sceneRef.current?.setWorkingAtStand(false);
-
-    // Unserved brewed lemonade in the pitcher spoils overnight; raw lemons in crate stay
-    setBrewedCups(0);
-
-    // The books are closed by the pure rule in core/dayEnd.ts.
-    const closed = closeDay(cur);
-    if (!closed) return;
-    const { record } = closed;
-    setState((prev) => closeDay(prev)?.state ?? prev);
-
-    setEodRecord(record);
-    soundEngine.playDayEnd();
-  }, []);
-
-  const startNextDay = useCallback(() => {
-    soundEngine.playClick();
-    setEodRecord(null);
-    dayTimeProgressRef.current = 0;
-    setDayTimeProgress(0);
-    sceneRef.current?.setTimeOfDay(0);
-    setState(advanceToNextDay);
-  }, []);
-
-  // Smart Pause & Real-Time Day Clock (8:00 AM -> 8:00 PM over 120s at 1x, 60s at 2x)
-  const clockPaused = isClockPaused({
-    overlayOpen: founderModalOpen || booksOpen || activeModal !== null || mapOpen || eodRecord !== null,
-    day: state.day,
-    maxDays: state.maxDays,
-    ownedStands: state.ownedStands,
-  });
-
-  useEffect(() => {
-    if (clockPaused) return;
-    let lastTime = performance.now();
-    const interval = window.setInterval(() => {
-      const now = performance.now();
-      const realDt = (now - lastTime) / 1000;
-      lastTime = now;
-      const next = advanceClock(dayTimeProgressRef.current, realDt, clockSpeed);
-      dayTimeProgressRef.current = next;
-      setDayTimeProgress(next);
-      sceneRef.current?.setTimeOfDay(next);
-      if (next >= 1) {
-        window.clearInterval(interval);
-        triggerEndOfDay();
-      }
-    }, 80);
-    return () => window.clearInterval(interval);
-  }, [clockPaused, clockSpeed, triggerEndOfDay]);
-
-  const submitQuestion = (rawQuestion: string) => {
-    const trimmed = rawQuestion.trim();
-    if (!trimmed || qaLog.length >= 3 || state.dealStatus !== 'open') return;
-    soundEngine.playClick();
-    const ans = answerSellerQuestion(trimmed);
-    setQaLog((prev) => [...prev, { q: trimmed, a: ans }]);
-  };
-
-  const askSeller = (e: React.FormEvent) => {
-    e.preventDefault();
-    submitQuestion(questionInput);
-    setQuestionInput('');
-  };
-
-  const submitSealedBid = () => {
-    const bid = Number(bidInput);
-    // The hidden minimum is compared only inside core/deal.ts.
-    const result = resolveSealedBid(stateRef.current, CENTRAL_PARK_DEAL, bid);
-    if (result.kind === 'deal-closed' || result.kind === 'invalid') return;
-    if (result.kind === 'insufficient-cash') {
-      soundEngine.playReject();
-      setBidMessage(`Insufficient cash: you have $${result.cash.toFixed(2)}.`);
-      return;
-    }
-    // Re-resolve on React's latest state so a sale landing in the same frame is kept.
-    setState((prev) => {
-      const r = resolveSealedBid(prev, CENTRAL_PARK_DEAL, bid);
-      return r.kind === 'won' || r.kind === 'rejected' ? r.state : prev;
-    });
-    if (result.kind === 'won') {
-      soundEngine.playBuy();
-      setBidMessage(`Accepted! Stand joined your chain at $${bid}.`);
-      pushToast(`Acquired Stand · Cash -$${bid} · Equip +$${bid}`, 'positive', 'seller-stand');
-    } else {
-      soundEngine.playReject();
-      setBidMessage(`Seller declined your $${bid} bid and walked away. Deal closed.`);
-      pushToast(`Bid $${bid} Rejected — Cash Preserved`, 'neutral', 'seller-stand');
-    }
-  };
 
   // Derived financial metrics
   const investedCap = getInvestedCapital(state);
@@ -1161,7 +371,7 @@ export function App() {
           <button
             type="button"
             className="crest-avatar-btn"
-            onClick={() => setFounderModalOpen(true)}
+            onClick={actions.openFounderModal}
             title={`Founder: ${selectedFounder.name} (${selectedFounder.title}) — Click to switch`}
             aria-label="Choose Your Founder"
           >
@@ -1183,10 +393,7 @@ export function App() {
               <button
                 type="button"
                 className={`clock-speed-btn game-num ${clockSpeed === 2 ? 'is-fast' : ''}`}
-                onClick={() => {
-                  soundEngine.playClick();
-                  setClockSpeed((s) => (s === 1 ? 2 : 1));
-                }}
+                onClick={actions.toggleClockSpeed}
                 title="Toggle Day Clock Speed (1x = 120s, 2x = 60s)"
                 aria-label={`Clock Speed ${clockSpeed}x`}
               >
@@ -1231,7 +438,7 @@ export function App() {
             <button
               type="button"
               className={`gbtn ${muted ? 'gbtn-slate' : ''}`}
-              onClick={handleToggleSound}
+              onClick={actions.toggleSound}
               title={muted ? 'Unmute game audio' : 'Mute game audio'}
               aria-label={muted ? 'Sound Off' : 'Sound On'}
             >
@@ -1240,10 +447,7 @@ export function App() {
             <button
               type="button"
               className={`gbtn gbtn-green ${mapOpen ? 'is-active' : ''}`}
-              onClick={() => {
-                soundEngine.playClick();
-                setMapOpen((v) => !v);
-              }}
+              onClick={() => actions.toggleMap({ click: true })}
             >
               <img src={icons.map} alt="" className="px-icon-sm" />
               <span>NY Map</span>
@@ -1252,10 +456,7 @@ export function App() {
             <button
               type="button"
               className={`gbtn ${booksOpen ? 'is-active' : ''}`}
-              onClick={() => {
-                soundEngine.playClick();
-                setBooksOpen((v) => !v);
-              }}
+              onClick={() => actions.toggleBooks({ click: true })}
             >
               <img src={icons.book} alt="" className="px-icon-sm" />
               <span>Books</span>
@@ -1275,10 +476,7 @@ export function App() {
           <button
             type="button"
             className="tutorial-skip-btn"
-            onClick={() => {
-              soundEngine.playClick();
-              setTutorialActive(false);
-            }}
+            onClick={actions.skipTutorial}
           >
             Skip Tutorial
           </button>
@@ -1286,36 +484,39 @@ export function App() {
       )}
 
       {/* In-World Floating [E] Interaction Prompts */}
-      {anchors.nearby === 'own-stand' && noOverlayOpen && (
-        <button
+      {nearby === 'own-stand' && noOverlayOpen && (
+        <AnchoredButton
           type="button"
           className="world-prompt"
-          onClick={enterStand}
-          style={{ left: anchors.ownStand.x, top: anchors.ownStand.y - 12 }}
+          onClick={actions.enterStand}
+          select={selectOwnStand}
+          offset={{ x: 0, y: -12 }}
         >
           <span className="keycap">E</span>
           <span>Work Behind Counter (${state.pricePerCup}/cup)</span>
-        </button>
+        </AnchoredButton>
       )}
 
-      {anchors.nearby === 'seller-stand' && noOverlayOpen && (
-        <button
+      {nearby === 'seller-stand' && noOverlayOpen && (
+        <AnchoredButton
           type="button"
           className="world-prompt seller"
-          onClick={() => setActiveModal('seller-stand')}
-          style={{ left: anchors.sellerStand.x, top: anchors.sellerStand.y - 12 }}
+          onClick={() => actions.openModal('seller-stand')}
+          select={selectSellerStand}
+          offset={{ x: 0, y: -12 }}
         >
           <span className="keycap">E</span>
           <span>Inspect Seller Stand · Ask ${SELLER_ASK}</span>
-        </button>
+        </AnchoredButton>
       )}
 
-      {anchors.nearby === 'plot-lease' && noOverlayOpen && (
-        <button
+      {nearby === 'plot-lease' && noOverlayOpen && (
+        <AnchoredButton
           type="button"
           className="world-prompt"
-          onClick={() => setActiveModal('plot-lease')}
-          style={{ left: anchors.ownStand.x, top: anchors.ownStand.y - 12 }}
+          onClick={() => actions.openModal('plot-lease')}
+          select={selectOwnStand}
+          offset={{ x: 0, y: -12 }}
         >
           <span className="keycap">E</span>
           <span>
@@ -1325,132 +526,58 @@ export function App() {
                 : 'Leased Plot · Needs Stall Kit ($12)'
               : `Sign Lease ($${neighborhood.dailyRent}/day)`}
           </span>
-        </button>
+        </AnchoredButton>
       )}
 
       {/* Always-Visible Floating Overhead Sign Pills for All 3 Union Square Market Stalls */}
       {neighborhoodId === 'market' && noOverlayOpen && (
         <>
-          <button
+          <AnchoredButton
             type="button"
-            className={`market-sign-pill ${anchors.nearby === 'market-stalls' ? 'is-nearby' : ''}`}
-            onClick={() => {
-              soundEngine.playClick();
-              setActiveModal('market-stalls');
-            }}
-            style={{
-              left: anchors.marketAnchors.stalls.x,
-              top: anchors.marketAnchors.stalls.y - 10,
-            }}
+            className={`market-sign-pill ${nearby === 'market-stalls' ? 'is-nearby' : ''}`}
+            onClick={() => actions.openModal('market-stalls', { click: true })}
+            select={selectMarketStalls}
+            offset={{ x: 0, y: -10 }}
           >
-            {anchors.nearby === 'market-stalls' && <span className="keycap">E</span>}
+            {nearby === 'market-stalls' && <span className="keycap">E</span>}
             <img src={icons.market} alt="" className="px-icon-sm" />
             <span>Stall Kits · $12</span>
-          </button>
+          </AnchoredButton>
 
-          <button
+          <AnchoredButton
             type="button"
-            className={`market-sign-pill ${anchors.nearby === 'market-pitchers' ? 'is-nearby' : ''}`}
-            onClick={() => {
-              soundEngine.playClick();
-              setActiveModal('market-pitchers');
-            }}
-            style={{
-              left: anchors.marketAnchors.pitchers.x,
-              top: anchors.marketAnchors.pitchers.y - 10,
-            }}
+            className={`market-sign-pill ${nearby === 'market-pitchers' ? 'is-nearby' : ''}`}
+            onClick={() => actions.openModal('market-pitchers', { click: true })}
+            select={selectMarketPitchers}
+            offset={{ x: 0, y: -10 }}
           >
-            {anchors.nearby === 'market-pitchers' && <span className="keycap">E</span>}
+            {nearby === 'market-pitchers' && <span className="keycap">E</span>}
             <img src={icons.pitcher} alt="" className="px-icon-sm" />
             <span>Glass Pitchers · $10</span>
-          </button>
+          </AnchoredButton>
 
-          <button
+          <AnchoredButton
             type="button"
-            className={`market-sign-pill ${anchors.nearby === 'market-lemons' ? 'is-nearby' : ''}`}
-            onClick={() => {
-              soundEngine.playClick();
-              setActiveModal('market-lemons');
-            }}
-            style={{
-              left: anchors.marketAnchors.lemons.x,
-              top: anchors.marketAnchors.lemons.y - 10,
-            }}
+            className={`market-sign-pill ${nearby === 'market-lemons' ? 'is-nearby' : ''}`}
+            onClick={() => actions.openModal('market-lemons', { click: true })}
+            select={selectMarketLemons}
+            offset={{ x: 0, y: -10 }}
           >
-            {anchors.nearby === 'market-lemons' && <span className="keycap">E</span>}
+            {nearby === 'market-lemons' && <span className="keycap">E</span>}
             <img src={icons.lemon} alt="" className="px-icon-sm" />
             <span>Fresh Lemons · $5</span>
-          </button>
+          </AnchoredButton>
         </>
       )}
 
       {/* In-World Customer Queue Patience Bars */}
-      {anchors.queue.map((cust) => {
-        const pct = Math.max(0, Math.min(100, Math.round(cust.patienceRatio * 100)));
-        const barColor =
-          cust.patienceRatio > 0.55
-            ? '#5fd16d'
-            : cust.patienceRatio > 0.28
-            ? '#ffe066'
-            : '#ff6b6b';
-        return (
-          <div
-            key={cust.id}
-            className="patience-anchor"
-            style={{ left: cust.x, top: cust.y - 6 }}
-          >
-            {cust.isFront && <span className="patience-next-tag">Next</span>}
-            <div className="patience-track">
-              <div
-                className="patience-fill"
-                style={{ width: `${pct}%`, background: barColor }}
-              />
-            </div>
-          </div>
-        );
-      })}
+      <PatienceBars />
 
       {/* Escalating Sale Pop-Numbers & Perfect Brew Bursts */}
-      {salePops.map((pop, idx) => {
-        const fontSize = pop.isPerfect ? 18 : Math.min(24, 15 + (pop.combo - 1) * 2);
-        const popClass = pop.isPerfect
-          ? 'sale-pop is-perfect game-num'
-          : pop.combo >= 4
-          ? 'sale-pop is-fire game-num'
-          : pop.combo >= 2
-          ? 'sale-pop is-hot game-num'
-          : 'sale-pop game-num';
-        return (
-          <div
-            key={pop.id}
-            className={popClass}
-            style={{
-              left: anchors.ownStand.x,
-              top: anchors.ownStand.y - 76 - idx * 24,
-              fontSize,
-            }}
-          >
-            {pop.text}
-          </div>
-        );
-      })}
+      <SalePopLayer />
 
       {/* In-World Floating Accounting Toasts */}
-      {toasts.map((t, idx) => {
-        const pt = t.anchor === 'own-stand' ? anchors.ownStand : anchors.sellerStand;
-        return (
-          <div
-            key={t.id}
-            className={`ledger-toast ${t.tone} game-num`}
-            style={{
-              left: pt.x,
-              top: pt.y - 46 - idx * 30,
-            }}
-          >
-            <span>{t.text}</span>
-          </div>
-        );
-      })}
+      <ToastLayer />
 
       {/* Bottom Area: Stall Workbench Bar (when INSIDE stand) OR Action Dock */}
       <div className="bottom-dock-wrap">
@@ -1576,16 +703,12 @@ export function App() {
                   className="gbtn gbtn-gold"
                   onPointerDown={() => {
                     if (brewKind === 'keep-in-tube') {
-                      spaceHeldRef.current = true;
+                      actions.setSpaceHeld(true);
                     }
                   }}
-                  onPointerUp={() => {
-                    spaceHeldRef.current = false;
-                  }}
-                  onPointerLeave={() => {
-                    spaceHeldRef.current = false;
-                  }}
-                  onClick={lockBrewGame}
+                  onPointerUp={() => actions.setSpaceHeld(false)}
+                  onPointerLeave={() => actions.setSpaceHeld(false)}
+                  onClick={actions.lockBrewGame}
                   style={{ padding: '6px 10px', fontSize: 12 }}
                 >
                   <span>
@@ -1605,7 +728,7 @@ export function App() {
                 <button
                   type="button"
                   className="gbtn gbtn-gold"
-                  onClick={startBrewGame}
+                  onClick={actions.startBrewGame}
                   disabled={state.cupsInStock <= 0 || brewedCups >= state.cupsInStock}
                   style={{ padding: '6px 10px', fontSize: 12 }}
                 >
@@ -1631,7 +754,7 @@ export function App() {
                     🔥 x{combo} STREAK
                   </span>
                 ) : (
-                  <span className="wb-step-meta game-num">Queue: {anchors.queue.length}/4</span>
+                  <span className="wb-step-meta game-num">Queue: {queueLength}/4</span>
                 )}
               </div>
               <div className="wb-timer-track">
@@ -1643,14 +766,14 @@ export function App() {
               <button
                 type="button"
                 className="gbtn gbtn-green"
-                onClick={startServeFrontCustomer}
-                disabled={brewedCups < 1 || anchors.queue.length === 0 || serveProgress !== null}
+                onClick={actions.startServeFrontCustomer}
+                disabled={brewedCups < 1 || queueLength === 0 || serveProgress !== null}
                 style={{ padding: '6px 10px', fontSize: 12 }}
               >
                 <span>
                   {serveProgress !== null
                     ? 'Pouring...'
-                    : anchors.queue.length === 0
+                    : queueLength === 0
                     ? 'Waiting for Line'
                     : 'Serve Next Customer'}
                 </span>
@@ -1674,10 +797,7 @@ export function App() {
                       key={price}
                       type="button"
                       className={`wb-price-btn ${state.pricePerCup === price ? 'is-selected' : ''}`}
-                      onClick={() => {
-                        soundEngine.playClick();
-                        setState((prev) => ({ ...prev, pricePerCup: price }));
-                      }}
+                      onClick={() => actions.setPrice(price)}
                     >
                       <span className="wb-price-num game-num">${price}</span>
                       <span className="wb-price-pct game-num">{pct}%</span>
@@ -1697,7 +817,7 @@ export function App() {
                 <button
                   type="button"
                   className="gbtn"
-                  onClick={hireWorker}
+                  onClick={actions.hireWorker}
                   style={{ padding: '5px 8px', fontSize: 11 }}
                   title="Widens the brew timing sweet spot (+$3/day wages)"
                 >
@@ -1708,7 +828,7 @@ export function App() {
                 <button
                   type="button"
                   className="gbtn gbtn-green"
-                  onClick={hireManager}
+                  onClick={actions.hireManager}
                   style={{ padding: '5px 8px', fontSize: 11 }}
                   title="Auto-brews & serves queued customers (+$5/day wages)"
                 >
@@ -1724,7 +844,7 @@ export function App() {
               <button
                 type="button"
                 className="gbtn gbtn-green"
-                onClick={() => handleSelectNeighborhood('market')}
+                onClick={() => actions.selectNeighborhood('market')}
                 style={{ padding: '5px 10px', fontSize: 11.5 }}
               >
                 <img src={icons.market} alt="" className="px-icon-sm" />
@@ -1734,7 +854,7 @@ export function App() {
                 <button
                   type="button"
                   className="gbtn gbtn-slate"
-                  onClick={exitStand}
+                  onClick={actions.exitStand}
                   style={{ padding: '5px 9px', fontSize: 11, flex: 1 }}
                 >
                   Step Out
@@ -1742,7 +862,7 @@ export function App() {
                 <button
                   type="button"
                   className="gbtn gbtn-red"
-                  onClick={divestCurrentStand}
+                  onClick={actions.divestCurrentStand}
                   style={{ padding: '5px 8px', fontSize: 11 }}
                   title="Liquidate this stand at 70% salvage value (+$8.40 Cash, -$12.00 Equip, -$0.60/d Hurdle)"
                 >
@@ -1789,11 +909,11 @@ export function App() {
                 </div>
               )}
 
-              {anchors.nearby === 'plot-lease' && (
+              {nearby === 'plot-lease' && (
                 <button
                   type="button"
                   className="gbtn gbtn-gold"
-                  onClick={() => setActiveModal('plot-lease')}
+                  onClick={() => actions.openModal('plot-lease')}
                 >
                   <span className="keycap">E</span>
                   <span>
@@ -1806,69 +926,69 @@ export function App() {
                 </button>
               )}
 
-              {anchors.nearby === 'own-stand' && (
-                <button type="button" className="gbtn gbtn-gold" onClick={enterStand}>
+              {nearby === 'own-stand' && (
+                <button type="button" className="gbtn gbtn-gold" onClick={actions.enterStand}>
                   <span className="keycap">E</span>
                   <span>Step Inside Stand</span>
                 </button>
               )}
 
-              {anchors.nearby === 'seller-stand' && (
+              {nearby === 'seller-stand' && (
                 <button
                   type="button"
                   className="gbtn"
-                  onClick={() => setActiveModal('seller-stand')}
+                  onClick={() => actions.openModal('seller-stand')}
                 >
                   <span className="keycap">E</span>
                   <span>Inspect Seller</span>
                 </button>
               )}
 
-              {anchors.nearby === 'market-stalls' && (
+              {nearby === 'market-stalls' && (
                 <button
                   type="button"
                   className="gbtn gbtn-green"
-                  onClick={() => setActiveModal('market-stalls')}
+                  onClick={() => actions.openModal('market-stalls')}
                 >
                   <span className="keycap">E</span>
                   <span>Buy Stall Kit ($12)</span>
                 </button>
               )}
 
-              {anchors.nearby === 'market-lemons' && (
+              {nearby === 'market-lemons' && (
                 <button
                   type="button"
                   className="gbtn gbtn-green"
-                  onClick={() => setActiveModal('market-lemons')}
+                  onClick={() => actions.openModal('market-lemons')}
                 >
                   <span className="keycap">E</span>
                   <span>Buy Lemons ($5)</span>
                 </button>
               )}
 
-              {anchors.nearby === 'market-pitchers' && (
+              {nearby === 'market-pitchers' && (
                 <button
                   type="button"
                   className="gbtn gbtn-green"
-                  onClick={() => setActiveModal('market-pitchers')}
+                  onClick={() => actions.openModal('market-pitchers')}
                 >
                   <span className="keycap">E</span>
                   <span>Buy Pitchers ($10)</span>
                 </button>
               )}
 
-              {neighborhoodId === 'market' && !anchors.nearby && (
+              {neighborhoodId === 'market' && !nearby && (
                 <button
                   type="button"
                   className="gbtn gbtn-gold"
-                  onClick={() => handleSelectNeighborhood(lastBusinessNeighborhood)}
+                  onClick={() => actions.selectNeighborhood(lastBusinessNeighborhood)}
                 >
                   <span>Back to {lastBusinessDistrict.shortName} →</span>
                 </button>
               )}
             </div>
 
-            {!anchors.nearby && !tutorialStep && (
+            {!nearby && !tutorialStep && (
               <div className="dock-hint">
                 {neighborhoodId === 'market'
                   ? 'Walk to the Lemon Stall (right) or Gear Stall (left) and press [E]'
@@ -1895,7 +1015,7 @@ export function App() {
             <button
               type="button"
               className="icon-close-btn"
-              onClick={() => setBooksOpen(false)}
+              onClick={actions.closeBooks}
               aria-label="Close Books"
             >
               ✕
@@ -2036,7 +1156,7 @@ export function App() {
                       type="button"
                       className="gbtn gbtn-slate"
                       style={{ flex: 1, padding: '6px 8px', fontSize: 11 }}
-                      onClick={sellUsedPitcher}
+                      onClick={actions.sellUsedPitcher}
                       title="70% salvage value: Cash +$7, Equip -$10, lowers 5% hurdle by -$0.50/day"
                     >
                       Sell Pitcher (+$7)
@@ -2047,7 +1167,7 @@ export function App() {
                       type="button"
                       className="gbtn gbtn-red"
                       style={{ flex: 1, padding: '6px 8px', fontSize: 11 }}
-                      onClick={divestCurrentStand}
+                      onClick={actions.divestCurrentStand}
                       title="70% salvage value: Cash +$8.40, Equip -$12, lowers 5% hurdle by -$0.60/day"
                     >
                       Divest Stand (+$8.40)
@@ -2092,7 +1212,7 @@ export function App() {
 
       {/* Union Square Supply Market — Lemon Vendor Modal */}
       {activeModal === 'market-lemons' && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+        <div className="modal-backdrop" onClick={actions.closeModal}>
           <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -2105,7 +1225,7 @@ export function App() {
               <button
                 type="button"
                 className="icon-close-btn"
-                onClick={() => setActiveModal(null)}
+                onClick={actions.closeModal}
                 aria-label="Close"
               >
                 ✕
@@ -2167,7 +1287,7 @@ export function App() {
                     type="button"
                     className="gbtn gbtn-green"
                     style={{ flex: 1 }}
-                    onClick={buyLemons}
+                    onClick={actions.buyLemons}
                     disabled={state.cash < 5}
                   >
                     <img src={icons.lemon} alt="" className="px-icon-sm" />
@@ -2176,7 +1296,7 @@ export function App() {
                   <button
                     type="button"
                     className="gbtn gbtn-gold"
-                    onClick={() => handleSelectNeighborhood(lastBusinessNeighborhood)}
+                    onClick={() => actions.selectNeighborhood(lastBusinessNeighborhood)}
                   >
                     Back to {lastBusinessDistrict.shortName} →
                   </button>
@@ -2189,7 +1309,7 @@ export function App() {
 
       {/* Marked Sidewalk Plot — Sign Lease / Build Stand Modal */}
       {activeModal === 'plot-lease' && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+        <div className="modal-backdrop" onClick={actions.closeModal}>
           <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -2208,7 +1328,7 @@ export function App() {
               <button
                 type="button"
                 className="icon-close-btn"
-                onClick={() => setActiveModal(null)}
+                onClick={actions.closeModal}
                 aria-label="Close"
               >
                 ✕
@@ -2249,11 +1369,11 @@ export function App() {
                 </div>
 
                 {currentPlotStatus === 'empty' ? (
-                  <button type="button" className="gbtn gbtn-gold" onClick={signLease}>
+                  <button type="button" className="gbtn gbtn-gold" onClick={actions.signLease}>
                     <span>Sign Lease (${neighborhood.dailyRent}/day)</span>
                   </button>
                 ) : state.stallKits >= 1 ? (
-                  <button type="button" className="gbtn gbtn-green" onClick={buildStandOnPlot}>
+                  <button type="button" className="gbtn gbtn-green" onClick={actions.buildStandOnPlot}>
                     <span>Build Stand Here (Uses 1 Stall Kit)</span>
                   </button>
                 ) : (
@@ -2265,7 +1385,7 @@ export function App() {
                     <button
                       type="button"
                       className="gbtn gbtn-green"
-                      onClick={() => handleSelectNeighborhood('market')}
+                      onClick={() => actions.selectNeighborhood('market')}
                     >
                       <img src={icons.market} alt="" className="px-icon-sm" />
                       <span>Go to Union Square Supply Market →</span>
@@ -2280,7 +1400,7 @@ export function App() {
 
       {/* Union Square Supply Market — Left Stall: Carpentry & Stall Kits Vendor Modal */}
       {activeModal === 'market-stalls' && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+        <div className="modal-backdrop" onClick={actions.closeModal}>
           <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -2293,7 +1413,7 @@ export function App() {
               <button
                 type="button"
                 className="icon-close-btn"
-                onClick={() => setActiveModal(null)}
+                onClick={actions.closeModal}
                 aria-label="Close"
               >
                 ✕
@@ -2357,7 +1477,7 @@ export function App() {
                     type="button"
                     className="gbtn gbtn-green"
                     style={{ flex: 1 }}
-                    onClick={buyStallKit}
+                    onClick={actions.buyStallKit}
                     disabled={state.cash < STALL_KIT_COST}
                   >
                     <img src={icons.market} alt="" className="px-icon-sm" />
@@ -2366,7 +1486,7 @@ export function App() {
                   <button
                     type="button"
                     className="gbtn gbtn-gold"
-                    onClick={() => handleSelectNeighborhood(lastBusinessNeighborhood)}
+                    onClick={() => actions.selectNeighborhood(lastBusinessNeighborhood)}
                   >
                     Back to {lastBusinessDistrict.shortName} →
                   </button>
@@ -2379,7 +1499,7 @@ export function App() {
 
       {/* Union Square Supply Market — Center Stall: Glassware & Pitchers Vendor Modal */}
       {activeModal === 'market-pitchers' && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+        <div className="modal-backdrop" onClick={actions.closeModal}>
           <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -2392,7 +1512,7 @@ export function App() {
               <button
                 type="button"
                 className="icon-close-btn"
-                onClick={() => setActiveModal(null)}
+                onClick={actions.closeModal}
                 aria-label="Close"
               >
                 ✕
@@ -2454,7 +1574,7 @@ export function App() {
                     type="button"
                     className="gbtn gbtn-green"
                     style={{ flex: 1 }}
-                    onClick={buyPitcher}
+                    onClick={actions.buyPitcher}
                     disabled={state.cash < 10}
                   >
                     <img src={icons.pitcher} alt="" className="px-icon-sm" />
@@ -2464,7 +1584,7 @@ export function App() {
                     <button
                       type="button"
                       className="gbtn gbtn-slate"
-                      onClick={sellUsedPitcher}
+                      onClick={actions.sellUsedPitcher}
                       title="70% salvage value: Cash +$7, Equip -$10, Hurdle -$0.50/day"
                     >
                       <span>Sell Used Pitcher (+$7)</span>
@@ -2473,7 +1593,7 @@ export function App() {
                   <button
                     type="button"
                     className="gbtn gbtn-gold"
-                    onClick={() => handleSelectNeighborhood(lastBusinessNeighborhood)}
+                    onClick={() => actions.selectNeighborhood(lastBusinessNeighborhood)}
                   >
                     Back to {lastBusinessDistrict.shortName} →
                   </button>
@@ -2486,7 +1606,7 @@ export function App() {
 
       {/* Seller Due Diligence & Sealed-Bid Dossier Modal */}
       {activeModal === 'seller-stand' && (
-        <div className="modal-backdrop" onClick={() => setActiveModal(null)}>
+        <div className="modal-backdrop" onClick={actions.closeModal}>
           <div className="modal-shell is-wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
@@ -2496,7 +1616,7 @@ export function App() {
               <button
                 type="button"
                 className="icon-close-btn"
-                onClick={() => setActiveModal(null)}
+                onClick={actions.closeModal}
                 aria-label="Close"
               >
                 ✕
@@ -2578,7 +1698,7 @@ export function App() {
                           type="button"
                           className="diligence-chip"
                           disabled={alreadyAsked || qaLog.length >= 3}
-                          onClick={() => submitQuestion(chip)}
+                          onClick={() => actions.askQuestion(chip)}
                         >
                           {alreadyAsked ? `✓ ${chip}` : chip}
                         </button>
@@ -2640,17 +1760,14 @@ export function App() {
                         type="button"
                         className="gbtn gbtn-green"
                         style={{ flex: 1 }}
-                        onClick={submitSealedBid}
+                        onClick={() => actions.submitSealedBid(bidInput)}
                       >
                         Submit Sealed Bid (${validBid || 0})
                       </button>
                       <button
                         type="button"
                         className="gbtn gbtn-slate"
-                        onClick={() => {
-                          soundEngine.playClick();
-                          setActiveModal(null);
-                        }}
+                        onClick={actions.walkAwayFromSeller}
                       >
                         Walk Away
                       </button>
@@ -2794,7 +1911,7 @@ export function App() {
                 type="button"
                 className="gbtn gbtn-gold"
                 style={{ padding: '10px 18px', fontSize: 14, alignSelf: 'flex-end' }}
-                onClick={startNextDay}
+                onClick={actions.startNextDay}
               >
                 <span>
                   {eodRecord.day >= state.maxDays
@@ -2811,14 +1928,14 @@ export function App() {
       {mapOpen && (
         <ManhattanMapModal
           currentId={neighborhoodId}
-          onSelect={handleSelectNeighborhood}
-          onClose={() => setMapOpen(false)}
+          onSelect={actions.selectNeighborhood}
+          onClose={actions.closeMap}
         />
       )}
 
       {/* Choose Your Founder Character-Select Overlay */}
       {founderModalOpen && (
-        <div className="founder-backdrop" onClick={() => setFounderModalOpen(false)}>
+        <div className="founder-backdrop" onClick={actions.closeFounderModal}>
           <div className="modal-shell is-founder" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
@@ -2830,7 +1947,7 @@ export function App() {
               <button
                 type="button"
                 className="icon-close-btn"
-                onClick={() => setFounderModalOpen(false)}
+                onClick={actions.closeFounderModal}
                 aria-label="Close Founder Select"
               >
                 ✕
@@ -2851,10 +1968,7 @@ export function App() {
                       key={founder.id}
                       type="button"
                       className={`founder-card ${isSelected ? 'is-selected' : ''}`}
-                      onClick={() => {
-                        soundEngine.playClick();
-                        setFounderSpecies(founder.id);
-                      }}
+                      onClick={() => actions.pickFounder(founder.id)}
                     >
                       <div className="founder-figure">
                         <img
@@ -2882,14 +1996,7 @@ export function App() {
                 type="button"
                 className="gbtn gbtn-gold"
                 style={{ padding: '9px 20px', fontSize: 13.5 }}
-                onClick={() => {
-                  soundEngine.initOnGesture();
-                  if (!soundEngine.isMuted()) {
-                    soundEngine.startMusic();
-                  }
-                  soundEngine.playClick();
-                  setFounderModalOpen(false);
-                }}
+                onClick={actions.startFromFounderModal}
               >
                 Open My Stand →
               </button>

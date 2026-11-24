@@ -16,7 +16,8 @@
     "pure-rand": "^8.4.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.170.0"
+    "three": "^0.170.0",
+    "zustand": "^5.1.0"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.2",
