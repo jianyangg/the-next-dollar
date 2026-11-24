@@ -1,4 +1,4 @@
-import { MotionConfig } from 'motion/react';
+import { LazyMotion, MotionConfig } from 'motion/react';
 import { useEffect, useRef } from 'react';
 import { soundEngine } from './audio/soundEngine';
 import { connectScene } from './state/connectScene';
@@ -15,6 +15,11 @@ import { SellerDealModal } from './ui/SellerDealModal';
 import { TutorialBar } from './ui/TutorialBar';
 import { WorldPrompts } from './ui/WorldPrompts';
 import { PatienceBars, SalePopLayer, ToastLayer } from './ui/WorldOverlays';
+
+// Dynamic import: the animation features arrive as a separate chunk right after first paint.
+// `strict` makes a stray `motion.*` component throw instead of silently pulling the full
+// engine back into the bundle; the UI must use the lightweight `m.*` components.
+const loadMotionFeatures = () => import('./motionFeatures').then((mod) => mod.default);
 
 /**
  * App is LAYOUT ONLY: a mount point for the 3D scene plus the list of UI pieces.
@@ -65,6 +70,7 @@ export function App() {
     // reducedMotion="user": if the OS asks for reduced motion, Motion skips transform/layout
     // animations (opacity fades still play) for the whole UI.
     <MotionConfig reducedMotion="user">
+    <LazyMotion features={loadMotionFeatures} strict>
     <div className="game-stage">
       {/* 3D HD-2D Canvas */}
       <div ref={mountRef} className="game-canvas-mount" />
@@ -107,6 +113,7 @@ export function App() {
       {/* Choose Your Founder Character-Select Overlay */}
       <FounderModal />
     </div>
+    </LazyMotion>
     </MotionConfig>
   );
 }

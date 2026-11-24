@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { MotionConfig } from 'motion/react';
+import { domAnimation, LazyMotion, MotionConfig } from 'motion/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../audio/soundEngine', () => ({ soundEngine: new Proxy({}, { get: () => () => {} }) }));
@@ -29,7 +29,9 @@ describe('ToastLayer / SalePopLayer enter and exit', () => {
       // reducedMotion="always" drops transform animations; the opacity fade-out still runs,
       // so AnimatePresence still has a real exit to wait for.
       <MotionConfig reducedMotion="always">
-        <ToastLayer />
+        <LazyMotion features={domAnimation} strict>
+          <ToastLayer />
+        </LazyMotion>
       </MotionConfig>
     );
     expect(screen.queryByText('+$2.00 Sale')).toBeNull();
@@ -50,7 +52,9 @@ describe('ToastLayer / SalePopLayer enter and exit', () => {
   it('shows and then removes a sale pop the same way', async () => {
     render(
       <MotionConfig reducedMotion="always">
-        <SalePopLayer />
+        <LazyMotion features={domAnimation} strict>
+          <SalePopLayer />
+        </LazyMotion>
       </MotionConfig>
     );
     act(() => {

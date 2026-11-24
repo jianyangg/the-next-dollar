@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render } from '@testing-library/react';
 import { Profiler } from 'react';
+import { domAnimation, LazyMotion } from 'motion/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -85,7 +86,7 @@ describe('per-frame brew mini-game state', () => {
     };
 
     const { container } = render(
-      <>
+      <LazyMotion features={domAnimation} strict>
         <Profiler id="hud" onRender={count('hud')}>
           <Hud />
         </Profiler>
@@ -98,7 +99,7 @@ describe('per-frame brew mini-game state', () => {
         <Profiler id="brew" onRender={count('brew')}>
           <BrewStep />
         </Profiler>
-      </>
+      </LazyMotion>
     );
 
     // Sanity: all four really are on screen (a component that renders nothing could
@@ -144,7 +145,7 @@ describe('per-frame brew mini-game state', () => {
       renders[id] += 1;
     };
     const { container } = render(
-      <>
+      <LazyMotion features={domAnimation} strict>
         <Profiler id="hud" onRender={count('hud')}>
           <Hud />
         </Profiler>
@@ -157,7 +158,7 @@ describe('per-frame brew mini-game state', () => {
         <Profiler id="serve" onRender={count('serve')}>
           <ServeStep />
         </Profiler>
-      </>
+      </LazyMotion>
     );
     const fill = container.querySelector<HTMLElement>('.wb-timer-fill');
     expect(fill).not.toBeNull();

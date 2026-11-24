@@ -1,4 +1,5 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import {
   getDailyHurdleCharge,
   getDailyWages,
@@ -57,7 +58,7 @@ function BooksDrawerBody() {
   const clearsHurdle = projectedNopat >= dailyHurdle;
 
   return (
-    <motion.aside className="books-drawer" aria-label="Financial Statements" {...drawerMotion}>
+    <m.aside className="books-drawer" aria-label="Financial Statements" {...drawerMotion}>
       <div className="drawer-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <img src={icons.book} alt="" className="px-icon" />
@@ -258,6 +259,6 @@ function BooksDrawerBody() {
           )}
         </div>
       </div>
-    </motion.aside>
+    </m.aside>
   );
 }

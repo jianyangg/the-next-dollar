@@ -1,4 +1,5 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useGameStore } from '../state/gameStore';
 import { FOUNDER_CATALOG } from '../world/pixelArt';
@@ -21,8 +22,8 @@ function FounderModalBody() {
   const selectedFounder = FOUNDER_CATALOG.find((f) => f.id === founderSpecies) ?? FOUNDER_CATALOG[0];
 
   return (
-    <motion.div className="founder-backdrop" onClick={actions.closeFounderModal} {...backdropMotion}>
-      <motion.div className="modal-shell is-founder" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
+    <m.div className="founder-backdrop" onClick={actions.closeFounderModal} {...backdropMotion}>
+      <m.div className="modal-shell is-founder" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div>
             <div className="modal-kicker">The Next Dollar · NYC Lemonade Tycoon</div>
@@ -87,7 +88,7 @@ function FounderModalBody() {
             Open My Stand →
           </button>
         </div>
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
-import { motion, useAnimate, useTransform } from 'motion/react';
+import { useAnimate, useTransform } from 'motion/react';
+import * as m from 'motion/react-m';
 import { useShallow } from 'zustand/react/shallow';
 import { type StirKey, sweetSpots } from '../core/brewing';
 import type { BrewGameState } from '../core/minigames';
@@ -83,7 +84,7 @@ function TripleSqueezeGauge({ targets, step }: { targets: readonly number[]; ste
           }}
         />
       ))}
-      <motion.div className="wb-skill-needle" style={{ left: needleLeft }} />
+      <m.div className="wb-skill-needle" style={{ left: needleLeft }} />
     </div>
   );
 }
@@ -97,8 +98,8 @@ function TubeGauge() {
   const dropLeft = useStorePercent(selectTubeDrop);
   return (
     <div className="wb-skill-gauge" aria-label="Keep in Tube pressure gauge">
-      <motion.div className="wb-skill-perfect" style={{ left: tubeLeft, width: `${tubeWidth * 100}%` }} />
-      <motion.div className="wb-tube-drop" style={{ left: dropLeft }} title="Lemon Drop" />
+      <m.div className="wb-skill-perfect" style={{ left: tubeLeft, width: `${tubeWidth * 100}%` }} />
+      <m.div className="wb-tube-drop" style={{ left: dropLeft }} title="Lemon Drop" />
     </div>
   );
 }
@@ -127,7 +128,7 @@ function StirGauge({ seq, index }: { seq: readonly StirKey[]; index: number }) {
         ))}
       </div>
       <div className="wb-timer-track">
-        <motion.div className="wb-timer-fill is-brew" style={{ width: fuseWidth }} />
+        <m.div className="wb-timer-fill is-brew" style={{ width: fuseWidth }} />
       </div>
     </div>
   );
@@ -143,9 +144,9 @@ function BullseyeGauge() {
   const needleLeft = useStorePercent(selectNeedle);
   return (
     <div className="wb-skill-gauge" aria-label="Counter-Moving Bullseye gauge">
-      <motion.div className="wb-skill-good" style={{ left: bullseyeLeft, width: `${goodHalf * 200}%` }} />
-      <motion.div className="wb-skill-perfect" style={{ left: bullseyeLeft, width: `${perfectHalf * 200}%` }} />
-      <motion.div className="wb-skill-needle" style={{ left: needleLeft }} />
+      <m.div className="wb-skill-good" style={{ left: bullseyeLeft, width: `${goodHalf * 200}%` }} />
+      <m.div className="wb-skill-perfect" style={{ left: bullseyeLeft, width: `${perfectHalf * 200}%` }} />
+      <m.div className="wb-skill-needle" style={{ left: needleLeft }} />
     </div>
   );
 }
@@ -170,7 +171,7 @@ function TubeBadge() {
   const text = useTransform(fill, (v) => `${Math.round(v * 100)}%`);
   return (
     <>
-      KEEP IN TUBE! <motion.span>{text}</motion.span>
+      KEEP IN TUBE! <m.span>{text}</m.span>
     </>
   );
 }

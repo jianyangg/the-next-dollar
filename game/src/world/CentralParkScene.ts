@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { playStep } from '../audio/soundEngine';
-import { PostFx } from './postfx';
+// Type-only: erased at build time. The real module (and the `postprocessing` library it
+// pulls in) is fetched by `import('./postfx')` below, and only when effects are enabled.
+import type { PostFx } from './postfx';
 import {
   MARKET_LEMONS_POS as MARKET_LEMONS_XZ,
   MARKET_PITCHERS_POS as MARKET_PITCHERS_XZ,
@@ -208,7 +210,9 @@ export class CentralParkScene {
   private timeOfDayProgress = 0;
   private streetlampBulbMat = new THREE.MeshBasicMaterial({ color: '#fff3c4' });
   private fxQuality: FxQuality;
-  private postfx: PostFx;
+  // null while the postfx chunk is still downloading, and forever when quality is 'off'.
+  // Until it is set, frames are drawn with a plain renderer.render (see renderFrame).
+  private postfx: PostFx | null = null;
   /** Light-source materials that get an HDR colour boost so only they bloom. */
   private glowEntries: GlowEntry[] = [];
   /** 0 (day) .. 1 (dusk): current lamp intensity / 1.55. Drives glow gain and bloom. */
@@ -333,8 +337,7 @@ export class CentralParkScene {
     this.camera.position.set(this.playerPos.x * 0.78, 10.9, this.playerPos.z + 14.3);
     this.camera.lookAt(this.playerPos.x * 0.78, 0.55, this.playerPos.z - 0.8);
 
-    this.postfx = new PostFx(this.renderer, this.scene, this.camera, this.fxQuality);
-    this.postfx.setSize(container.clientWidth, Math.max(container.clientHeight, 1));
+    if (this.fxQuality !== 'off') void this.loadPostFx(this.fxQuality);
     // Streetlamp bulbs: no extra glow by day (stay under the bloom threshold),
     // ~3x HDR at dusk so the lamps visibly bloom. Colour is refreshed per
     // keyframe in applyAtmosphere.
@@ -693,7 +696,7 @@ export class CentralParkScene {
       if (lamp) lamp.base.copy(this.streetlampBulbMat.color);
       for (const entry of this.glowEntries) this.applyGlowGain(entry);
     }
-    this.postfx.setNightAmount(this.nightAmount);
+    this.postfx?.setNightAmount(this.nightAmount);
   }
 
   /**
@@ -3056,8 +3059,35 @@ export class CentralParkScene {
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h);
-    this.postfx.setSize(w, h);
+    this.postfx?.setSize(w, h);
   };
+
+  /**
+   * Download the post-processing chunk and switch the render loop over to it.
+   *
+   * Why async: `postprocessing` is a large library, and `?fx=off` / low-end devices never
+   * need it. A dynamic import() makes the bundler emit it as a separate file that is only
+   * requested when we reach this line. Until it resolves, frames render plainly.
+   *
+   * Race to guard: the user could leave the page (dispose()) while the download is in
+   * flight. Building a PostFx then would allocate GPU buffers on a dead renderer and leak
+   * them, so we re-check `disposed` after the await.
+   */
+  private async loadPostFx(quality: FxQuality): Promise<void> {
+    try {
+      const { PostFx } = await import('./postfx');
+      if (this.disposed) return;
+      const fx = new PostFx(this.renderer, this.scene, this.camera, quality);
+      // Bring the new chain up to date with state that was set while it was loading.
+      fx.setSize(this.container.clientWidth, Math.max(this.container.clientHeight, 1));
+      fx.setNightAmount(this.nightAmount);
+      this.postfx = fx;
+    } catch (err) {
+      // No silent fallback to fake data: the plain render keeps the game playable, but the
+      // failure (e.g. offline chunk fetch) must be visible in the console.
+      console.error('Post-processing failed to load; rendering without effects.', err);
+    }
+  }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     const k = e.key.toLowerCase();
@@ -3509,11 +3539,12 @@ export class CentralParkScene {
       this.shuffleQueueForward();
     }
 
-    this.postfx.render(dt);
+    if (this.postfx) this.postfx.render(dt);
+    else this.renderer.render(this.scene, this.camera); // postfx chunk not ready yet (or fx=off)
     // Centre the tilt-shift sharp band on the player's body (0.9 units up from
     // the feet), as a 0..1 fraction of the canvas height. Uses last-frame-
     // equivalent state; PostFx smooths it, so the one-frame lag is invisible.
-    this.postfx.setFocusScreenY(
+    this.postfx?.setFocusScreenY(
       this.projectToScreen(this.playerPos, 0.9).y / Math.max(this.container.clientHeight, 1)
     );
 
@@ -3628,7 +3659,8 @@ export class CentralParkScene {
     window.removeEventListener('keyup', this.handleKeyUp);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.disposeGpuResources();
-    this.postfx.dispose();
+    this.postfx?.dispose();
+    this.postfx = null;
     this.renderer.dispose();
     // Ask the browser to drop the WebGL context now instead of waiting for GC;
     // browsers cap live contexts (~16) and warn when a page leaks them.

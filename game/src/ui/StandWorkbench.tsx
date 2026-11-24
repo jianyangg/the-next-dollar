@@ -1,4 +1,5 @@
-import { motion, useTransform } from 'motion/react';
+import { useTransform } from 'motion/react';
+import * as m from 'motion/react-m';
 import { getDailyWages, MANAGER_DAILY_WAGE, WORKER_DAILY_WAGE } from '../core/sliceModel';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useQueueLength } from '../state/anchorStore';
@@ -63,7 +64,7 @@ export function ServeStep() {
         {combo >= 2 ? <ComboBadge combo={combo} /> : <span className="wb-step-meta game-num">Queue: {queueLength}/4</span>}
       </div>
       <div className="wb-timer-track">
-        <motion.div className="wb-timer-fill" style={{ width: pourWidth }} />
+        <m.div className="wb-timer-fill" style={{ width: pourWidth }} />
       </div>
       <button
         type="button"

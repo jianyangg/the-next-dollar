@@ -1,4 +1,5 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import type { DayRecord } from '../core/sliceModel';
 import { getRunSeed } from '../core/runRandom';
 import { getNeighborhood } from '../core/neighborhoods';
@@ -32,8 +33,8 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
   const neighborhood = getNeighborhood(neighborhoodId);
 
   return (
-    <motion.div className="modal-backdrop" {...backdropMotion}>
-      <motion.div className="modal-shell is-wide" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
+    <m.div className="modal-backdrop" {...backdropMotion}>
+      <m.div className="modal-shell is-wide" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.sun} alt="" className="px-icon-lg" />
@@ -123,7 +124,7 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
             </span>
           </button>
         </div>
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   );
 }

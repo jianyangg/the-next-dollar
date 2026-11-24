@@ -1,4 +1,5 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import { getNeighborhood } from '../core/neighborhoods';
 import { STALL_KIT_COST } from '../core/sliceModel';
 import { selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
@@ -20,8 +21,8 @@ function PlotLeaseModalBody() {
   const neighborhood = getNeighborhood(neighborhoodId);
 
   return (
-    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
-      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
+    <m.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <m.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.map} alt="" className="px-icon-lg" />
@@ -98,7 +99,7 @@ function PlotLeaseModalBody() {
             )}
           </div>
         </div>
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   );
 }

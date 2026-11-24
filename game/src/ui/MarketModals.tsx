@@ -1,4 +1,5 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import { STALL_KIT_COST } from '../core/sliceModel';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useGameStore } from '../state/gameStore';
@@ -42,8 +43,8 @@ function LemonModalBody() {
   const portraits = getPortraits();
 
   return (
-    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
-      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
+    <m.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <m.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.lemon} alt="" className="px-icon-lg" />
@@ -122,8 +123,8 @@ function LemonModalBody() {
             </div>
           </div>
         </div>
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   );
 }
 
@@ -142,8 +143,8 @@ function StallKitModalBody() {
   const portraits = getPortraits();
 
   return (
-    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
-      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
+    <m.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <m.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.market} alt="" className="px-icon-lg" />
@@ -224,8 +225,8 @@ function StallKitModalBody() {
             </div>
           </div>
         </div>
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   );
 }
 
@@ -244,8 +245,8 @@ function PitcherModalBody() {
   const portraits = getPortraits();
 
   return (
-    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
-      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
+    <m.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <m.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.pitcher} alt="" className="px-icon-lg" />
@@ -334,8 +335,8 @@ function PitcherModalBody() {
             </div>
           </div>
         </div>
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   );
 }
 

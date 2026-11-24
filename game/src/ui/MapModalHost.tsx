@@ -1,4 +1,5 @@
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import { useGameStore } from '../state/gameStore';
 import { ManhattanMapModal } from './ManhattanMapModal';
 import { EASE_IN } from './motionPresets';
@@ -15,14 +16,14 @@ export function MapModalHost() {
   return (
     <AnimatePresence>
       {mapOpen && (
-        <motion.div
+        <m.div
           key="map"
           initial={{ opacity: 1 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, pointerEvents: 'none', transition: { duration: 0.14, ease: EASE_IN } }}
         >
           <ManhattanMapModal currentId={neighborhoodId} onSelect={actions.selectNeighborhood} onClose={actions.closeMap} />
-        </motion.div>
+        </m.div>
       )}
     </AnimatePresence>
   );

@@ -1,5 +1,6 @@
 import React, { useRef } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
+import * as m from 'motion/react-m';
 import type { LedgerToast } from '../core/sliceModel';
 import { type SalePop, useGameStore } from '../state/gameStore';
 import { EASE_IN, EASE_OUT } from './motionPresets';
@@ -105,7 +106,7 @@ export function PatienceBars() {
  *   outer `.world-float`  <- `useAnchorPoint` writes `left`/`top` on it every frame, and CSS
  *                            centres it with a fixed `translate(-50%, -100%)`. Motion never
  *                            touches this element.
- *   inner `motion.div`    <- Motion animates ONLY `opacity` and the `transform` (y, scale).
+ *   inner `m.div`    <- Motion animates ONLY `opacity` and the `transform` (y, scale).
  *
  * Because the two elements own different CSS properties, they can never fight over the same
  * one. Stacking order (the n-th toast sits n * 30px higher) is a Motion `y` value, so when
@@ -126,7 +127,7 @@ function ToastItem({ toast, index }: { toast: LedgerToast; index: number }) {
       offset={{ x: 0, y: -46 }}
       className="world-float is-toast"
     >
-      <motion.div
+      <m.div
         className={`ledger-toast ${toast.tone} game-num`}
         initial={{ opacity: 0, y: y + 12 }}
         animate={{
@@ -137,7 +138,7 @@ function ToastItem({ toast, index }: { toast: LedgerToast; index: number }) {
         exit={{ opacity: 0, y: y - 18, transition: { duration: 0.28, ease: EASE_IN } }}
       >
         <span>{toast.text}</span>
-      </motion.div>
+      </m.div>
     </AnchoredDiv>
   );
 }
@@ -169,7 +170,7 @@ function SalePopItem({ pop, index }: { pop: SalePop; index: number }) {
   const y = -index * POP_STACK_PX;
   return (
     <AnchoredDiv select={selectOwnStand} offset={{ x: 0, y: -76 }} className="world-float is-pop">
-      <motion.div
+      <m.div
         className={popClass}
         style={{ fontSize }}
         initial={{ opacity: 0, scale: 0.55, y: y + 14 }}
@@ -187,7 +188,7 @@ function SalePopItem({ pop, index }: { pop: SalePop; index: number }) {
         exit={{ opacity: 0, scale: 0.95, y: y - 62, transition: { duration: 0.3, ease: EASE_IN } }}
       >
         {pop.text}
-      </motion.div>
+      </m.div>
     </AnchoredDiv>
   );
 }
