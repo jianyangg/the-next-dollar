@@ -2,6 +2,7 @@ import { cosmeticRandom, gameplayRandom } from '../core/runRandom';
 import { CentralParkScene } from '../world/CentralParkScene';
 import { publishAnchors } from './anchorStore';
 import { selectCurrentPlotStatus, selectStandOpen, useGameStore } from './gameStore';
+import { INPUT_PRIORITY, onInputLayerPushed, pushInputLayer } from './input';
 import { registerScene } from './sceneBridge';
 
 /** Compare two small arrays element by element (our selectors return fixed-size tuples). */
@@ -38,6 +39,15 @@ export function connectScene(container: HTMLElement): () => void {
     { gameplay: gameplayRandom, cosmetic: cosmeticRandom }
   );
   registerScene(scene);
+
+  // The scene is the lowest input layer: keys reach it only if no menu or window
+  // above used them. Opening any layer drops held movement keys.
+  const removeWorldLayer = pushInputLayer({
+    priority: INPUT_PRIORITY.world,
+    onKeyDown: scene.handleKeyDown,
+    onKeyUp: scene.handleKeyUp,
+  });
+  const stopReleasing = onInputLayerPushed(() => scene.releaseKeys());
 
   // Each entry pushes one slice of game state into the scene. `fireImmediately`
   // applies the current value once at connect time, so a freshly built scene
@@ -81,6 +91,8 @@ export function connectScene(container: HTMLElement): () => void {
   return () => {
     // Stop listening BEFORE disposing so no store update can reach a dead scene.
     unsubscribers.forEach((unsubscribe) => unsubscribe());
+    removeWorldLayer();
+    stopReleasing();
     registerScene(null);
     scene.dispose();
   };

@@ -31,7 +31,8 @@ import * as P from '../core/purchases';
 import { applySale } from '../core/sales';
 import { createInitialState, type SliceState } from '../core/sliceModel';
 import { resetAnchorStore } from './anchorStore';
-import { resetGameStore, useGameStore } from './gameStore';
+import type { SellerClient } from '../deal/sellerClient';
+import { resetGameStore, setSellerClientForTests, useGameStore } from './gameStore';
 
 const store = () => useGameStore.getState();
 const actions = () => useGameStore.getState().actions;
@@ -92,7 +93,21 @@ describe('shopping actions match the pure core rules', () => {
     expect(soundEngine.playBuy).not.toHaveBeenCalled();
     const toast = store().toasts.at(-1);
     expect(toast?.tone).toBe('negative');
-    expect(toast?.text).toBe('Not enough cash ($5 needed)');
+    expect(toast?.text).toBe('Need $5');
+    expect(toast?.chips).toEqual([]);
+  });
+
+  it('a purchase floats the money that moved, computed from the economy', () => {
+    setEconomy({ cash: 30 });
+    actions().buyLemons();
+    const toast = store().toasts.at(-1);
+    expect(toast?.text).toBe('+10 cups');
+    expect(toast?.chips).toEqual([
+      { kind: 'cash', delta: -5 },
+      { kind: 'stock', delta: 5 },
+      { kind: 'profit', delta: 0 },
+      { kind: 'line', delta: 0.25 },
+    ]);
   });
 
   it('two rapid buyPitcher calls with $15 buy exactly one pitcher', () => {
@@ -118,7 +133,7 @@ describe('shopping actions match the pure core rules', () => {
     actions().hireWorker(); // any economy commit re-checks the tutorial rule
     expect(store().tutorialActive).toBe(false);
     expect(soundEngine.playPerfect).toHaveBeenCalledTimes(1);
-    expect(store().toasts.some((t) => t.text.startsWith('Tutorial complete!'))).toBe(true);
+    expect(store().toasts.some((t) => t.text === 'Tutorial done')).toBe(true);
     actions().hireWorker();
     expect(soundEngine.playPerfect).toHaveBeenCalledTimes(1);
   });
@@ -181,48 +196,96 @@ describe('day end', () => {
   });
 });
 
-describe('sealed bid', () => {
+describe('seller deal (deal machine + seller server client)', () => {
   const reservation = CENTRAL_PARK_DEAL.reservationPrice;
 
-  it('a bid at or above the hidden minimum wins the stand', () => {
+  /** A fake seller server with the real contract (see shared/sellerReply.ts). */
+  function fakeSeller() {
+    let remaining = 3;
+    const client: SellerClient = {
+      pitch: vi.fn(async () => ({ text: 'Fine stand.', source: 'model' as const, questionsEnabled: true, questionsRemaining: 3 })),
+      ask: vi.fn(async (_id: string, q: string) => {
+        remaining -= 1;
+        return { text: `About ${q}`, source: 'model' as const, questionsRemaining: remaining, refunded: false };
+      }),
+      close: vi.fn(async () => {}),
+    };
+    setSellerClientForTests(client);
+    return client;
+  }
+
+  /** Open the seller panel and wait for the pitch. */
+  async function openDeal() {
+    actions().openModal('seller-stand');
+    await vi.waitFor(() => expect(store().deal?.phase).toBe('idle'));
+  }
+
+  afterEach(() => setSellerClientForTests(null));
+
+  it('opening the panel fetches the pitch once; reopening keeps the same deal', async () => {
+    const client = fakeSeller();
+    await openDeal();
+    expect(store().deal?.pitch).toBe('Fine stand.');
+    actions().closeModal();
+    actions().openModal('seller-stand');
+    expect(client.pitch).toHaveBeenCalledTimes(1);
+  });
+
+  it('a bid at or above the hidden minimum wins the stand and closes the conversation', async () => {
+    const client = fakeSeller();
     setEconomy({ cash: reservation + 20 });
-    actions().submitSealedBid(String(reservation));
+    await openDeal();
+    actions().submitBid(reservation);
+    await vi.waitFor(() => expect(store().deal?.phase).toBe('won'));
     expect(store().economy.dealStatus).toBe('won');
     expect(store().economy.ownedStands).toBe(1);
     expect(store().economy.cash).toBe(20);
-    expect(store().bidMessage).toBe(`Accepted! Stand joined your chain at $${reservation}.`);
+    expect(client.close).toHaveBeenCalledTimes(1);
   });
 
-  it('a bid below the minimum is rejected and closes the deal without spending cash', () => {
+  it('a bid below the minimum is rejected and closes the deal without spending cash', async () => {
+    fakeSeller();
     setEconomy({ cash: reservation + 20 });
-    actions().submitSealedBid(String(reservation - 1));
+    await openDeal();
+    actions().submitBid(reservation - 1);
+    await vi.waitFor(() => expect(store().deal?.phase).toBe('rejected'));
     expect(store().economy.dealStatus).toBe('rejected');
     expect(store().economy.cash).toBe(reservation + 20);
-    expect(store().bidMessage).toContain('declined');
   });
 
-  it('a bid above the cash on hand is refused and the deal stays open', () => {
+  it('a bid above the cash on hand is refused and the deal stays open', async () => {
+    fakeSeller();
     setEconomy({ cash: 30 });
-    actions().submitSealedBid('45');
+    await openDeal();
+    actions().submitBid(45);
+    await vi.waitFor(() => expect(store().deal?.bidError).toEqual({ kind: 'insufficient-cash', cash: 30 }));
+    expect(store().deal?.phase).toBe('idle');
     expect(store().economy.dealStatus).toBe('open');
-    expect(store().economy.cash).toBe(30);
-    expect(store().bidMessage).toBe('Insufficient cash: you have $30.00.');
     expect(soundEngine.playReject).toHaveBeenCalled();
   });
 
-  it('ignores a non-numeric bid', () => {
-    actions().submitSealedBid('abc');
-    expect(store().bidMessage).toBeNull();
-    expect(store().economy.dealStatus).toBe('open');
+  it('asks go to the server; the server count decides when asking ends', async () => {
+    const client = fakeSeller();
+    await openDeal();
+    for (const q of ['a?', 'b?', 'c?']) {
+      actions().askSeller(q);
+      await vi.waitFor(() => expect(store().deal?.phase).toBe('idle'));
+    }
+    actions().askSeller('d?');
+    expect(client.ask).toHaveBeenCalledTimes(3);
+    expect(store().deal?.qa.map((e) => e.a)).toEqual(['About a?', 'About b?', 'About c?']);
+    expect(store().deal?.canAsk).toBe(false);
   });
-});
 
-describe('seller questions', () => {
-  it('allows at most three questions and ignores blanks', () => {
-    actions().askQuestion('   ');
-    expect(store().qaLog).toHaveLength(0);
-    for (const q of ['a?', 'b?', 'c?', 'd?']) actions().askQuestion(q);
-    expect(store().qaLog.map((e) => e.q)).toEqual(['a?', 'b?', 'c?']);
+  it('walking away is final for the career', async () => {
+    const client = fakeSeller();
+    await openDeal();
+    actions().walkAwayFromDeal();
+    await vi.waitFor(() => expect(store().economy.dealStatus).toBe('walked-away'));
+    expect(store().activeModal).toBeNull();
+    expect(client.close).toHaveBeenCalledTimes(1);
+    actions().submitBid(100);
+    expect(store().deal?.phase).toBe('walkedAway');
   });
 });
 
@@ -247,5 +310,14 @@ describe('navigation', () => {
     expect(store().mapOpen).toBe(false);
     actions().handleEscape();
     expect(store().booksOpen).toBe(false);
+  });
+
+  it('Escape closes Books opened over the stand, and only then leaves the stand', () => {
+    useGameStore.setState({ founderModalOpen: false, workingAtStand: true, booksOpen: true });
+    actions().handleEscape();
+    expect(store().booksOpen).toBe(false);
+    expect(store().workingAtStand).toBe(true);
+    actions().handleEscape();
+    expect(store().workingAtStand).toBe(false);
   });
 });

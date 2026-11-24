@@ -14,9 +14,8 @@ import { SliceState } from './sliceModel';
  *   `PublicDealView` therefore makes leaking the minimum a type error, not a
  *   matter of remembering.
  *
- * The one deal below is the Central Park seller that App.tsx previously hard-coded
- * across SELLER_PERIODS, SELLER_ASK, SELLER_HIDDEN_MIN and the keyword answers in
- * `answerSellerQuestion`. Every number and fact is copied from there unchanged.
+ * The one deal below is the Central Park seller. Its numbers and facts were moved here
+ * unchanged from the original hard-coded prototype, so the economy did not shift.
  */
 export interface Deal extends PublicDealView {
   /** Hidden minimum the seller accepts. Engine-only. */
@@ -31,8 +30,11 @@ export type { BookPeriod, OffBookFact, PublicDealView } from '../../shared/deals
  * registry in shared/deals, so the Worker and the game cannot drift apart. The hidden
  * minimum is added here, in src/core only: the server never imports this file.
  */
+/** The Central Park seller's id in the server registry (shared/deals). */
+export const CENTRAL_PARK_DEAL_ID = 'central-park-seller-1';
+
 export const CENTRAL_PARK_DEAL: Deal = {
-  ...PUBLIC_DEALS['central-park-seller-1'].deal,
+  ...PUBLIC_DEALS[CENTRAL_PARK_DEAL_ID].deal,
   reservationPrice: 42,
 };
 

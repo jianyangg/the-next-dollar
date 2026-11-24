@@ -385,8 +385,8 @@ export class CentralParkScene {
       this.resizeObserver = new ResizeObserver(this.handleResize);
       this.resizeObserver.observe(container);
     }
-    window.addEventListener('keydown', this.handleKeyDown);
-    window.addEventListener('keyup', this.handleKeyUp);
+    // Keys arrive through the game's input router (state/input.ts), not a window
+    // listener of our own, so a menu on top can stop WASD from walking the player.
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
 
     this.clock.start();
@@ -597,10 +597,28 @@ export class CentralParkScene {
       bulbColor: THREE.Color;
     }
 
+    // Pre-dawn: the day opens in blue half-light with the streetlamps still on, so a
+    // day reads dark -> bright -> dark. The sun comes up over the first ~12% of the day.
+    const dawnSky = new THREE.Color('#3a4a7a');
+    const dawnFog = new THREE.Color('#46557f');
+
     const isBroadway = this.currentNeighborhood === 'broadway';
     const keyframes: TimeKeyframe[] = [
       {
         t: 0.0,
+        sky: dawnSky,
+        fog: dawnFog,
+        sunPos: new THREE.Vector3(20, 6, 10),
+        sunColor: new THREE.Color('#9fb6ff'),
+        sunIntensity: 0.55,
+        hemiSky: new THREE.Color('#7f93c8'),
+        hemiGround: new THREE.Color('#2f3445'),
+        hemiIntensity: 0.5,
+        lampIntensity: 1.3,
+        bulbColor: new THREE.Color('#ffd86b'),
+      },
+      {
+        t: 0.12,
         sky: sunriseSky,
         fog: sunriseFog,
         sunPos: new THREE.Vector3(18, 12.5, 10),
@@ -3096,22 +3114,39 @@ export class CentralParkScene {
     }
   }
 
-  private handleKeyDown = (e: KeyboardEvent): void => {
+  /**
+   * World keys, called by the input router's lowest layer. Returns true when the key
+   * was used (movement, or [E]/Space next to something), so the router stops there.
+   */
+  handleKeyDown = (e: KeyboardEvent): boolean => {
     const k = e.key.toLowerCase();
     if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
       this.keys.add(k);
       this.route = null; // manual steering overrides click-to-walk
-    } else if (k === 'e' || (k === ' ' && !this.workingAtStand)) {
+      return true;
+    }
+    if (k === 'e' || (k === ' ' && !this.workingAtStand)) {
+      // Interacting is a deliberate act: only a fresh press counts. A key held since a
+      // window's "Leave" (or since the last interaction) repeats; swallow the repeats so
+      // the window you just left does not pop straight back open.
+      if (e.repeat) return true;
       const nearby = this.getNearbyTarget();
       if (nearby) {
         this.callbacks.onInteract(nearby);
+        return true;
       }
     }
+    return false;
   };
 
-  private handleKeyUp = (e: KeyboardEvent): void => {
+  handleKeyUp = (e: KeyboardEvent): void => {
     this.keys.delete(e.key.toLowerCase());
   };
+
+  /** Forget held movement keys (a menu or window just opened on top of the world). */
+  releaseKeys(): void {
+    this.keys.clear();
+  }
 
   private handlePointerDown = (e: PointerEvent): void => {
     if (this.workingAtStand || this.koTimer > 0) return;
@@ -3662,8 +3697,6 @@ export class CentralParkScene {
     window.removeEventListener('resize', this.handleResize);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
-    window.removeEventListener('keydown', this.handleKeyDown);
-    window.removeEventListener('keyup', this.handleKeyUp);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.disposeGpuResources();
     this.postfx?.dispose();

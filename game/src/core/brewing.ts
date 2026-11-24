@@ -54,6 +54,21 @@ export function pickChallenge(last: BrewKind | null | undefined, rand: () => num
 }
 
 /**
+ * Lemons not yet brewed, in cups' worth.
+ *
+ * HOW STOCK IS COUNTED: `cupsInStock` is every cup's worth of lemons you own, INCLUDING
+ * the ones already squeezed into the pitcher (`brewedCups` of them). Brewing does not
+ * change it; selling a cup takes one off both. That matches the accounting (the lemons
+ * stay inventory until a cup is sold, then they become cost of goods sold), but it is
+ * not what a player means by "lemons". The player sees two piles:
+ *   lemons left = cupsInStock - brewedCups   (brewing moves cups from here...)
+ *   ready       = brewedCups                 (...to here; a sale takes one from here)
+ */
+export function lemonCupsLeft(cupsInStock: number, brewedCups: number): number {
+  return Math.max(0, cupsInStock - brewedCups);
+}
+
+/**
  * Add a finished brew's batch to the brewed pool, never exceeding stock.
  * `added` is the real increase (0 when already full).
  * Note: App's toast text uses `added || batch`, so a full pool still displays

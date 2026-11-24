@@ -104,10 +104,10 @@ describe('per-frame brew mini-game state', () => {
 
     // Sanity: all four really are on screen (a component that renders nothing could
     // trivially "not re-render" and make this test meaningless).
-    expect(container.querySelector('.top-hud')).not.toBeNull();
-    expect(container.querySelector('.tutorial-banner')).not.toBeNull();
-    expect(container.querySelector('.books-drawer')).not.toBeNull();
-    expect(container.querySelector('.wb-skill-needle')).not.toBeNull();
+    expect(container.querySelector('.hud')).not.toBeNull();
+    expect(container.querySelector('.world-goal')).not.toBeNull();
+    expect(container.querySelector('.books-sheet')).not.toBeNull();
+    expect(container.querySelector('.stand-needle')).not.toBeNull();
 
     const before = { ...renders };
 
@@ -122,10 +122,10 @@ describe('per-frame brew mini-game state', () => {
 
     // The needle really moved. Motion writes motion values to the DOM on its own frame
     // loop (outside React), so wait for that flush instead of expecting it synchronously.
-    const needle = container.querySelector<HTMLElement>('.wb-skill-needle');
+    const needle = container.querySelector<HTMLElement>('.stand-needle');
     await vi.waitFor(() => expect(needle?.style.left).toBe('100%'));
     await vi.waitFor(() =>
-      expect(container.querySelector<HTMLElement>('.wb-skill-perfect')?.style.left).toBe('80%')
+      expect(container.querySelector<HTMLElement>('.stand-zone-perfect')?.style.left).toBe('80%')
     );
     // 30 continuous frames cost the brew component NO React renders at all (only discrete
     // changes like a new challenge or a landed step may re-render it)...
@@ -160,7 +160,7 @@ describe('per-frame brew mini-game state', () => {
         </Profiler>
       </LazyMotion>
     );
-    const fill = container.querySelector<HTMLElement>('.wb-timer-fill');
+    const fill = container.querySelector<HTMLElement>('.stand-pour-fill');
     expect(fill).not.toBeNull();
     const before = { ...renders };
 

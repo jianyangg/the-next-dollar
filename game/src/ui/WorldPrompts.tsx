@@ -1,5 +1,4 @@
 import { CENTRAL_PARK_DEAL } from '../core/deal';
-import { getNeighborhood } from '../core/neighborhoods';
 import {
   selectMarketLemons,
   selectMarketPitchers,
@@ -10,7 +9,9 @@ import {
 } from '../state/anchorStore';
 import { type GameData, selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
 import { getIcons } from './assets';
+import { Key } from './kit/Money';
 import { AnchoredButton } from './WorldOverlays';
+import './styles/world.css';
 
 const SELLER_ASK = CENTRAL_PARK_DEAL.askingPrice;
 
@@ -19,110 +20,95 @@ export const selectNoOverlayOpen = (s: GameData): boolean =>
   !s.activeModal && !s.founderModalOpen && !s.mapOpen && !s.workingAtStand && !s.eodRecord;
 
 /**
- * The floating [E] prompts above the stands and the three Union Square market sign
- * pills. Each is an `AnchoredButton`, so its screen position is written straight to the
- * DOM every frame; React only decides which ones EXIST (a few times per minute).
+ * The floating prompts above the stands and the three Union Square market signs.
+ * Each is a small sign plate: an [E] key bullet plus ONE verb ("Open", "Lease", "Build",
+ * "Talk", "Shop"). Prices and rules are not repeated here; the window that opens shows
+ * them. The one exception is the seller's asking price, an engine number, which rides
+ * along as a paper tag.
+ *
+ * Each is an `AnchoredButton`, so its screen position is written straight to the DOM
+ * every frame; React only decides which ones EXIST (a few times per minute).
  */
 export function WorldPrompts() {
   const actions = useGameStore((s) => s.actions);
   const noOverlayOpen = useGameStore(selectNoOverlayOpen);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
-  const pricePerCup = useGameStore((s) => s.economy.pricePerCup);
-  const stallKits = useGameStore((s) => s.economy.stallKits);
   const currentPlotStatus = useGameStore(selectCurrentPlotStatus);
   const nearby = useNearbyTarget();
 
   const icons = getIcons();
-  const neighborhood = getNeighborhood(neighborhoodId);
+  // A leased plot is built on; an empty one is leased first.
+  const plotVerb = currentPlotStatus === 'leased' ? 'Build' : 'Lease';
 
   return (
     <>
-      {/* In-World Floating [E] Interaction Prompts */}
       {nearby === 'own-stand' && noOverlayOpen && (
         <AnchoredButton
           type="button"
-          className="world-prompt"
+          className="pt-sign world-sign"
           onClick={actions.enterStand}
           select={selectOwnStand}
           offset={{ x: 0, y: -12 }}
         >
-          <span className="keycap">E</span>
-          <span>Work Behind Counter (${pricePerCup}/cup)</span>
+          <Key k="E" />
+          <span className="pt-disp world-sign-word">Open</span>
         </AnchoredButton>
       )}
 
       {nearby === 'seller-stand' && noOverlayOpen && (
         <AnchoredButton
           type="button"
-          className="world-prompt seller"
+          className="pt-sign world-sign"
           onClick={() => actions.openModal('seller-stand')}
           select={selectSellerStand}
           offset={{ x: 0, y: -12 }}
         >
-          <span className="keycap">E</span>
-          <span>Inspect Seller Stand · Ask ${SELLER_ASK}</span>
+          <Key k="E" />
+          <span className="pt-disp world-sign-word">Talk</span>
+          {/* Paper tag: the asking price is a real engine number. */}
+          <span className="pt-paper world-ask pt-num">${SELLER_ASK}</span>
         </AnchoredButton>
       )}
 
       {nearby === 'plot-lease' && noOverlayOpen && (
         <AnchoredButton
           type="button"
-          className="world-prompt"
+          className="pt-sign world-sign"
           onClick={() => actions.openModal('plot-lease')}
           select={selectOwnStand}
           offset={{ x: 0, y: -12 }}
         >
-          <span className="keycap">E</span>
-          <span>
-            {currentPlotStatus === 'leased'
-              ? stallKits >= 1
-                ? 'Build Stand Here (1 Kit)'
-                : 'Leased Plot · Needs Stall Kit ($12)'
-              : `Sign Lease ($${neighborhood.dailyRent}/day)`}
-          </span>
+          <Key k="E" />
+          <span className="pt-disp world-sign-word">{plotVerb}</span>
         </AnchoredButton>
       )}
 
-      {/* Always-Visible Floating Overhead Sign Pills for All 3 Union Square Market Stalls */}
+      {/* The three Union Square stalls are always signposted; the key shows when close. */}
       {neighborhoodId === 'market' && noOverlayOpen && (
         <>
-          <AnchoredButton
-            type="button"
-            className={`market-sign-pill ${nearby === 'market-stalls' ? 'is-nearby' : ''}`}
-            onClick={() => actions.openModal('market-stalls', { click: true })}
-            select={selectMarketStalls}
-            offset={{ x: 0, y: -10 }}
-          >
-            {nearby === 'market-stalls' && <span className="keycap">E</span>}
-            <img src={icons.market} alt="" className="px-icon-sm" />
-            <span>Stall Kits · $12</span>
-          </AnchoredButton>
-
-          <AnchoredButton
-            type="button"
-            className={`market-sign-pill ${nearby === 'market-pitchers' ? 'is-nearby' : ''}`}
-            onClick={() => actions.openModal('market-pitchers', { click: true })}
-            select={selectMarketPitchers}
-            offset={{ x: 0, y: -10 }}
-          >
-            {nearby === 'market-pitchers' && <span className="keycap">E</span>}
-            <img src={icons.pitcher} alt="" className="px-icon-sm" />
-            <span>Glass Pitchers · $10</span>
-          </AnchoredButton>
-
-          <AnchoredButton
-            type="button"
-            className={`market-sign-pill ${nearby === 'market-lemons' ? 'is-nearby' : ''}`}
-            onClick={() => actions.openModal('market-lemons', { click: true })}
-            select={selectMarketLemons}
-            offset={{ x: 0, y: -10 }}
-          >
-            {nearby === 'market-lemons' && <span className="keycap">E</span>}
-            <img src={icons.lemon} alt="" className="px-icon-sm" />
-            <span>Fresh Lemons · $5</span>
-          </AnchoredButton>
+          {MARKET_SIGNS.map((sign) => (
+            <AnchoredButton
+              key={sign.target}
+              type="button"
+              className={`pt-sign world-sign ${nearby === sign.target ? 'is-nearby' : 'is-idle'}`}
+              onClick={() => actions.openModal(sign.target, { click: true })}
+              select={sign.select}
+              offset={{ x: 0, y: -10 }}
+            >
+              {nearby === sign.target && <Key k="E" />}
+              <img src={icons[sign.icon]} alt="" className="world-sign-icon" />
+              <span className="pt-disp world-sign-word">{nearby === sign.target ? 'Shop' : sign.noun}</span>
+            </AnchoredButton>
+          ))}
         </>
       )}
     </>
   );
 }
+
+/** The three market stalls: which store target each opens, its anchor, icon and short noun. */
+const MARKET_SIGNS = [
+  { target: 'market-stalls', select: selectMarketStalls, icon: 'market', noun: 'Kits' },
+  { target: 'market-pitchers', select: selectMarketPitchers, icon: 'pitcher', noun: 'Pitchers' },
+  { target: 'market-lemons', select: selectMarketLemons, icon: 'lemon', noun: 'Lemons' },
+] as const;

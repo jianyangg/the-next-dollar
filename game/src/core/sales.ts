@@ -35,9 +35,11 @@ export function applyWalkout(prev: SliceState, reviewId: number): SliceState {
   return { ...prev, reviews, ratingAvg };
 }
 
-/** Label for the floating "+$3!!" pop; more exclamation marks as the combo grows. */
+/**
+ * Label for the floating sale pop: the cash in, plus the combo count once it reaches 2.
+ * The UI shows the excitement with size and colour (bigger, line-yellow combos), so the
+ * text stays plain: no exclamation marks or emoji.
+ */
 export function salePopLabel(price: number, combo: number): string {
-  if (combo >= 4) return `+$${price}!!! 🔥 x${combo}`;
-  if (combo >= 2) return `+$${price}!! x${combo}`;
-  return `+$${price}!`;
+  return combo >= 2 ? `+$${price} x${combo}` : `+$${price}`;
 }

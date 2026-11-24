@@ -1,12 +1,16 @@
 import { AnimatePresence } from 'motion/react';
-import * as m from 'motion/react-m';
+import { buildStand } from '../core/purchases';
 import { getNeighborhood } from '../core/neighborhoods';
 import { STALL_KIT_COST } from '../core/sliceModel';
 import { selectCurrentPlotStatus, useGameStore } from '../state/gameStore';
-import { getIcons } from './assets';
-import { backdropMotion, modalShellMotion } from './motionPresets';
+import { PaperChip, PurchasePreviewView, ShopWindow, type ShopRow } from './shop/ShopWindow';
+import { previewPurchase } from './shop/preview';
 
-/** Marked sidewalk plot: sign the lease, then build a stand on it with a Stall Kit. */
+/**
+ * Marked sidewalk plot: sign the lease, then build a stand on it with a Stall Kit.
+ * Same three states as before (empty / leased with a kit / leased without one); each is
+ * now a menu row whose preview comes from the real rule (core/purchases).
+ */
 export function PlotLeaseModal() {
   const open = useGameStore((s) => s.activeModal === 'plot-lease');
   return <AnimatePresence>{open && <PlotLeaseModalBody key="plot-lease" />}</AnimatePresence>;
@@ -15,91 +19,57 @@ export function PlotLeaseModal() {
 function PlotLeaseModalBody() {
   const actions = useGameStore((s) => s.actions);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
-  const stallKits = useGameStore((s) => s.economy.stallKits);
+  const economy = useGameStore((s) => s.economy);
   const currentPlotStatus = useGameStore(selectCurrentPlotStatus);
-  const icons = getIcons();
   const neighborhood = getNeighborhood(neighborhoodId);
+  // Rent per day is an engine number (core/neighborhoods), shown on paper.
+  const rent = <PaperChip label="RENT/DAY" value={`$${neighborhood.dailyRent}`} />;
+  const buildPreview = previewPurchase(economy, (s) => buildStand(s, neighborhoodId), STALL_KIT_COST);
+
+  let actionRow: ShopRow;
+  if (currentPlotStatus === 'empty') {
+    actionRow = {
+      id: 'sign-lease',
+      label: 'Sign lease',
+      value: `$${neighborhood.dailyRent}/day`,
+      onSelect: actions.signLease,
+      // Leasing moves no money today (rent starts at day close), so the rent IS the preview.
+      preview: <PurchasePreviewView preview={{ kind: 'none' }}>{rent}</PurchasePreviewView>,
+    };
+  } else if (economy.stallKits >= 1) {
+    const kitDelta = buildPreview.kind === 'chips' ? buildPreview.after.stallKits - buildPreview.before.stallKits : 0;
+    actionRow = {
+      id: 'build-stand',
+      label: 'Build stand',
+      value: '1 kit',
+      onSelect: actions.buildStandOnPlot,
+      preview: (
+        <PurchasePreviewView preview={buildPreview}>
+          {kitDelta !== 0 && <PaperChip label="KITS" value={`${kitDelta}`} />}
+          {rent}
+        </PurchasePreviewView>
+      ),
+    };
+  } else {
+    actionRow = {
+      id: 'to-market',
+      label: 'Get a kit',
+      value: `$${STALL_KIT_COST}`,
+      onSelect: () => actions.selectNeighborhood('market'),
+      // The build rule itself refuses with "no-stall-kit", so the preview is its real kit price.
+      preview: <PurchasePreviewView preview={buildPreview} />,
+    };
+  }
+
+  const rows: ShopRow[] = [actionRow, { id: 'leave', label: 'Leave', onSelect: actions.closeModal }];
 
   return (
-    <m.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
-      <m.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
-        <div className="modal-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <img src={icons.map} alt="" className="px-icon-lg" />
-            <div>
-              <div className="modal-kicker">
-                {neighborhood.name} · {currentPlotStatus === 'leased' ? 'Leased Plot' : 'For Lease'}
-              </div>
-              <div className="modal-title">
-                {currentPlotStatus === 'leased' ? 'Ready to Place Lemonade Stand' : 'Sign Sidewalk Plot Lease'}
-              </div>
-            </div>
-          </div>
-          <button type="button" className="icon-close-btn" onClick={actions.closeModal} aria-label="Close">
-            ✕
-          </button>
-        </div>
-
-        <div className="modal-body">
-          <div className="vendor-card">
-            <div className="vendor-card-head">
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 900 }}>{neighborhood.name} Corner</div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>
-                  {neighborhood.crowdLabel} · Typical price {neighborhood.typicalPrice}
-                </div>
-              </div>
-              <span className="vendor-price-badge game-num">${neighborhood.dailyRent}/day</span>
-            </div>
-
-            <div style={{ fontSize: 12.5, lineHeight: 1.45, color: 'var(--text-soft)' }}>
-              {neighborhood.description}
-            </div>
-
-            <div className="impact-list">
-              <div className="impact-line">
-                <span>Plot Status</span>
-                <span className="game-num">
-                  {currentPlotStatus === 'leased' ? 'LEASED (Ready for Stall Kit)' : 'EMPTY (For Lease)'}
-                </span>
-              </div>
-              <div className="impact-line">
-                <span>Daily Lease Rent</span>
-                <span className="game-num val-amber">-${neighborhood.dailyRent}.00/day</span>
-              </div>
-              <div className="impact-line">
-                <span>Stall Kits in Inventory</span>
-                <span className="game-num">{stallKits}</span>
-              </div>
-            </div>
-
-            {currentPlotStatus === 'empty' ? (
-              <button type="button" className="gbtn gbtn-gold" onClick={actions.signLease}>
-                <span>Sign Lease (${neighborhood.dailyRent}/day)</span>
-              </button>
-            ) : stallKits >= 1 ? (
-              <button type="button" className="gbtn gbtn-green" onClick={actions.buildStandOnPlot}>
-                <span>Build Stand Here (Uses 1 Stall Kit)</span>
-              </button>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-gold)' }}>
-                  You need a Wooden Stall Kit (${STALL_KIT_COST}) from Union Square Supply Market to build
-                  here.
-                </div>
-                <button
-                  type="button"
-                  className="gbtn gbtn-green"
-                  onClick={() => actions.selectNeighborhood('market')}
-                >
-                  <img src={icons.market} alt="" className="px-icon-sm" />
-                  <span>Go to Union Square Supply Market →</span>
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </m.div>
-    </m.div>
+    <ShopWindow
+      title={`${neighborhood.shortName} plot`}
+      menuLabel="Plot lease"
+      stats={[{ label: 'KITS', value: String(economy.stallKits) }]}
+      rows={rows}
+      onClose={actions.closeModal}
+    />
   );
 }

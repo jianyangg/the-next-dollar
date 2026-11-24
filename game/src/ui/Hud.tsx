@@ -4,26 +4,52 @@ import { FOUNDER_CATALOG } from '../world/pixelArt';
 import { useGameStore } from '../state/gameStore';
 import { getIcons, getPortraits } from './assets';
 import { fmtSignedMoney } from './format';
+import { CountUp, Key } from './kit/Money';
+import './styles/hud.css';
 
 /**
- * Top bar: founder crest + district + day clock, then value/rating ticker and the
- * Sound / Map / Books buttons.
+ * The heads-up display: three "sign plates" bolted over the 3D scene.
+ *   top-left     founder portrait, Day N/30, place name, clock bar (+ 1x/2x speed)
+ *   top-right    cash (big, counts up) and the running "Value created"
+ *   bottom-right [M] Map, [B] Books and a sound toggle
  *
- * The day clock advances every animation frame, but this bar only shows it as a
- * whole-percent bar and an "8:15 AM" label. So instead of subscribing to the raw
- * `timeProgress` (which would re-render the HUD 60 times a second) we subscribe to the
- * two DERIVED values below: React compares them with `Object.is` and only re-renders
- * when the percent or the label text actually changes (a few times per game minute).
+ * The star rating is not here on purpose: a game HUD shows a few things at a glance, and
+ * the rating is a result of service, so it sits on the stand's paper stock tag instead.
+ *
+ * RE-RENDER DISCIPLINE (unchanged from the old bar): the day clock advances every
+ * animation frame, but this component only shows it as a whole-percent bar and an
+ * "8:15 AM" label. So instead of subscribing to the raw `timeProgress` (which would
+ * re-render the HUD 60 times a second) we subscribe to the two DERIVED values below.
+ * React compares them with `Object.is` and only re-renders when the percent or the
+ * label text actually changes (a few times per game minute).
  */
+
+// Module-level formatters keep the SAME function identity on every render. CountUp
+// restarts its animation effect when `format` changes, so an inline arrow would be wrong.
+const fmtCash = (v: number): string => `$${v.toFixed(2)}`;
+
+/** Speaker icon drawn inline (no emoji, no extra image). A cross means muted. */
+function SoundIcon({ muted }: { muted: boolean }) {
+  return (
+    <svg className="hud-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor" />
+      {muted ? (
+        <path d="M15 9l6 6M21 9l-6 6" stroke="currentColor" strokeWidth="3" fill="none" />
+      ) : (
+        <path d="M15 8q3 4 0 8M18 5q6 7 0 14" stroke="currentColor" strokeWidth="3" fill="none" />
+      )}
+    </svg>
+  );
+}
+
 export function Hud() {
   const actions = useGameStore((s) => s.actions);
   const founderSpecies = useGameStore((s) => s.founderSpecies);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
   const day = useGameStore((s) => s.economy.day);
   const maxDays = useGameStore((s) => s.economy.maxDays);
+  const cash = useGameStore((s) => s.economy.cash);
   const totalValueCreated = useGameStore((s) => s.economy.totalValueCreated);
-  const ratingAvg = useGameStore((s) => s.economy.ratingAvg);
-  const reviewCount = useGameStore((s) => s.economy.reviews.length);
   const clockSpeed = useGameStore((s) => s.clockSpeed);
   const muted = useGameStore((s) => s.muted);
   const mapOpen = useGameStore((s) => s.mapOpen);
@@ -37,98 +63,87 @@ export function Hud() {
   const selectedFounder = FOUNDER_CATALOG.find((f) => f.id === founderSpecies) ?? FOUNDER_CATALOG[0];
 
   return (
-    <header className="top-hud">
-      {/* Left: Founder & District Crest */}
-      <div className="career-crest">
+    <header className="hud">
+      {/* Top-left plate: who, which day, where, how far through the day. */}
+      <div className="pt-sign hud-plate hud-left">
         <button
           type="button"
-          className="crest-avatar-btn"
+          className="hud-portrait-btn"
           onClick={actions.openFounderModal}
-          title={`Founder: ${selectedFounder.name} (${selectedFounder.title}) — Click to switch`}
-          aria-label="Choose Your Founder"
+          title={`${selectedFounder.name}: change founder`}
+          aria-label="Choose your founder"
         >
-          <img
-            src={portraits[founderSpecies]}
-            alt={selectedFounder.name}
-            className="crest-avatar-img pixel-portrait"
-          />
+          <img src={portraits[founderSpecies]} alt={selectedFounder.name} className="hud-portrait" />
         </button>
-        <div className="crest-meta">
-          <div className="crest-row">
-            <span className="crest-location">{neighborhood.shortName}</span>
-            <span className="crest-day game-num">
-              <img src={icons.sun} alt="" className="px-icon-sm" />
-              <span>
-                Day {day}/{maxDays} · {clockLabel}
-              </span>
+        <div className="hud-left-body">
+          <div className="hud-left-top">
+            <span className="pt-disp hud-day">
+              Day {day}/{maxDays}
             </span>
             <button
               type="button"
-              className={`clock-speed-btn game-num ${clockSpeed === 2 ? 'is-fast' : ''}`}
+              className={`hud-speed ${clockSpeed === 2 ? 'is-fast' : ''}`}
               onClick={actions.toggleClockSpeed}
-              title="Toggle Day Clock Speed (1x = 120s, 2x = 60s)"
-              aria-label={`Clock Speed ${clockSpeed}x`}
+              aria-label={`Clock speed ${clockSpeed}x`}
+              title="Clock speed"
             >
               {clockSpeed}x
             </button>
           </div>
-          <div className="crest-progress-track" aria-label={`Day ${day} Clock ${clockLabel}`}>
-            <div className="crest-progress-fill" style={{ width: `${dayClockPct}%` }} />
+          <div className="hud-place">{neighborhood.shortName}</div>
+          <div className="hud-clock" aria-label={`Day ${day} clock ${clockLabel}`}>
+            <div className="pt-track hud-clock-track">
+              <i style={{ width: `${dayClockPct}%` }} />
+            </div>
+            <span className="pt-num hud-clock-time">{clockLabel}</span>
           </div>
         </div>
       </div>
 
-      {/* Right: Compact Value/Rating Ticker + Action Buttons */}
-      <div className="top-hud-right">
-        <div className="finance-ticker">
-          <div className="ticker-stat" title="Cumulative Value Created (EVA)">
-            <div>
-              <div className="ticker-label">Value Created</div>
-              <div className={`ticker-value game-num ${totalValueCreated >= 0 ? 'positive' : 'negative'}`}>
-                {fmtSignedMoney(totalValueCreated)}
-              </div>
-            </div>
-          </div>
-          <div className="ticker-stat" title="Customer Satisfaction Rating">
-            <div>
-              <div className="ticker-label">Rating</div>
-              <div className="ticker-value game-num" style={{ color: 'var(--accent-gold)' }}>
-                ★ {ratingAvg.toFixed(1)} ({reviewCount})
-              </div>
-            </div>
-          </div>
+      {/* Top-right plate: the two money numbers a player watches. */}
+      <div className="pt-sign hud-plate hud-right">
+        <div className="hud-cash" aria-label="Cash">
+          <img src={icons.coin} alt="" className="hud-coin" />
+          <CountUp value={cash} format={fmtCash} className="pt-disp hud-cash-num" />
         </div>
-
-        <div className="hud-actions">
-          <button
-            type="button"
-            className={`gbtn ${muted ? 'gbtn-slate' : ''}`}
-            onClick={actions.toggleSound}
-            title={muted ? 'Unmute game audio' : 'Mute game audio'}
-            aria-label={muted ? 'Sound Off' : 'Sound On'}
-          >
-            <span>{muted ? 'Sound Off' : 'Sound On'}</span>
-          </button>
-          <button
-            type="button"
-            className={`gbtn gbtn-green ${mapOpen ? 'is-active' : ''}`}
-            onClick={() => actions.toggleMap({ click: true })}
-          >
-            <img src={icons.map} alt="" className="px-icon-sm" />
-            <span>NY Map</span>
-            <span className="keycap">M</span>
-          </button>
-          <button
-            type="button"
-            className={`gbtn ${booksOpen ? 'is-active' : ''}`}
-            onClick={() => actions.toggleBooks({ click: true })}
-          >
-            <img src={icons.book} alt="" className="px-icon-sm" />
-            <span>Books</span>
-            <span className="keycap">B</span>
-          </button>
+        <div className="hud-value">
+          <span className="hud-value-label">Value created</span>
+          <CountUp
+            value={totalValueCreated}
+            format={fmtSignedMoney}
+            className={`pt-num hud-value-num ${totalValueCreated >= 0 ? 'pt-gain-sign' : 'pt-cost-sign'}`}
+          />
         </div>
       </div>
+
+      {/* Bottom-right: navigation bullets and the sound toggle. */}
+      <nav className="hud-keys" aria-label="Game menu">
+        <button
+          type="button"
+          className={`pt-sign hud-nav ${mapOpen ? 'is-active' : ''}`}
+          onClick={() => actions.toggleMap({ click: true })}
+        >
+          <Key k="M" nav />
+          <span className="pt-disp hud-nav-word">Map</span>
+        </button>
+        <button
+          type="button"
+          className={`pt-sign hud-nav ${booksOpen ? 'is-active' : ''}`}
+          onClick={() => actions.toggleBooks({ click: true })}
+        >
+          <Key k="B" nav />
+          <span className="pt-disp hud-nav-word">Books</span>
+        </button>
+        <button
+          type="button"
+          className="pt-sign hud-nav hud-sound"
+          onClick={actions.toggleSound}
+          aria-label={muted ? 'Sound off' : 'Sound on'}
+          title={muted ? 'Sound off' : 'Sound on'}
+        >
+          <SoundIcon muted={muted} />
+        </button>
+      </nav>
     </header>
   );
 }

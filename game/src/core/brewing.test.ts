@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BREW_CHALLENGE_KINDS, applyBrewOutcome, pickChallenge, sweetSpots } from './brewing';
+import { BREW_CHALLENGE_KINDS, applyBrewOutcome, lemonCupsLeft, pickChallenge, sweetSpots } from './brewing';
 
 describe('sweetSpots', () => {
   it('uses base widths with one pitcher and no workers', () => {
@@ -62,5 +62,17 @@ describe('applyBrewOutcome', () => {
   it('clamps to cups in stock', () => {
     expect(applyBrewOutcome('perfect', 8, 10)).toEqual({ brewedCups: 10, added: 2 });
     expect(applyBrewOutcome('good', 10, 10)).toEqual({ brewedCups: 10, added: 0 });
+  });
+});
+
+describe('lemonCupsLeft', () => {
+  it('brewing moves cups from lemons to ready; a sale takes one from ready only', () => {
+    // 10 cups of lemons bought, nothing brewed: 10 lemons, 0 ready.
+    expect(lemonCupsLeft(10, 0)).toBe(10);
+    // Brew 4: cupsInStock stays 10, brewedCups 4 -> 6 lemons left (and 4 ready).
+    expect(lemonCupsLeft(10, 4)).toBe(6);
+    // Sell 1: the engine takes one off both (10 -> 9, 4 -> 3) -> lemons still 6.
+    expect(lemonCupsLeft(9, 3)).toBe(6);
+    expect(lemonCupsLeft(3, 5)).toBe(0); // never negative
   });
 });

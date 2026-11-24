@@ -1,0 +1,282 @@
+/*
+ * Stand + dock screens (Paper Trail): the menu you use behind the counter, the brew
+ * gauge, and the "press E" plate shown while walking.
+ *
+ * Classes start with `stand-` or `dock-`. Every colour, size and spacing comes from
+ * styles/tokens.css, so a change there restyles these screens too. Surfaces keep one
+ * meaning each: SIGN (black) = controls, PAPER (cream) = engine numbers.
+ */
+
+/* One full-screen, click-through layer: only the plates inside it catch the mouse, so
+   the 3D world underneath stays clickable (walk-by-click). */
+.dock-root {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-dock);
+  pointer-events: none;
+}
+
+/* ---------- Bottom-left corner: the menu sign + the paper stock tag ---------- */
+.stand-corner {
+  position: absolute;
+  left: var(--s-5);
+  bottom: var(--s-5);
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-4);
+  /* Ends before the bottom-right key row, so a wide brew gauge never covers [M] Map. */
+  max-width: calc(100vw - var(--s-5) - var(--s-4) - var(--dock-clear-w) - var(--s-4));
+  pointer-events: auto;
+}
+.stand-sign {
+  width: 340px;
+  flex: none;
+  /* On a short window the open Price/Staff row would push the sign up over the HUD:
+     cap it below the HUD and let the sign scroll instead. */
+  max-height: calc(100vh - var(--hud-clear) - var(--s-5));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.stand-sub {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding-top: var(--s-2);
+  border-top: 3px solid var(--sign-2);
+}
+/* A label with its Key bullet in front. */
+.stand-lab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+/* The price / staff row: the choice already in force is underlined. */
+.stand-picked {
+  text-decoration: underline;
+  text-decoration-thickness: 4px;
+  text-underline-offset: 4px;
+}
+/* Pour progress: green, not yellow, because yellow is reserved for THE LINE. */
+.stand-sign .pt-track > i {
+  background: var(--gain-sign);
+}
+
+/* ---------- Ten pixel customers: lit = would buy at this price ---------- */
+.stand-custs {
+  display: flex;
+  gap: var(--s-1);
+}
+.stand-cust {
+  width: 22px;
+  height: 34px;
+  background: var(--sign-2);
+  /* A stepped head-and-shoulders silhouette: pixel art with no image file. */
+  clip-path: polygon(
+    25% 0, 75% 0, 75% 30%, 100% 40%, 100% 100%, 0 100%, 0 40%, 25% 30%
+  );
+}
+.stand-cust.is-lit {
+  background: var(--gain-sign);
+}
+
+/* ---------- Paper stock tag: engine numbers, no sentences ---------- */
+.stand-tag {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  margin-bottom: 12px; /* room for the torn bottom edge of the paper */
+  padding: var(--s-3) var(--s-4) var(--s-4);
+}
+.stand-tag-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--t-body);
+}
+.stand-tag-label {
+  font-weight: 800;
+  color: var(--ink-dim);
+}
+.stand-icon {
+  width: 32px;
+  height: 32px;
+  image-rendering: pixelated;
+}
+.stand-num {
+  font-family: var(--f-num);
+  font-weight: 700;
+  font-size: var(--t-big);
+  line-height: 1;
+}
+.stand-num.is-low {
+  color: var(--cost-paper);
+}
+.stand-combo {
+  display: inline-block;
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+}
+
+/* ---------- Brew gauge: one big sign, third in the bottom-left row ---------- */
+.stand-gauge {
+  /* Third item of the stand corner row: grows to 560px, shrinks to fit the window. */
+  flex: 0 1 560px;
+  min-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  pointer-events: auto;
+}
+.stand-gauge-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+}
+.stand-gauge-name {
+  font-family: var(--f-display);
+  font-size: var(--t-title);
+  letter-spacing: 1px;
+}
+.stand-gauge-num {
+  font-family: var(--f-display);
+  font-size: var(--t-giant);
+  line-height: 1;
+  color: var(--sign-text);
+}
+.stand-bar {
+  position: relative;
+  height: 56px;
+  background: var(--sign-2);
+  border: var(--px) solid var(--outline);
+  overflow: hidden;
+}
+.stand-zone-good,
+.stand-zone-perfect {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.stand-zone-good {
+  background: var(--key-act);
+}
+.stand-zone-perfect {
+  background: var(--gain-sign);
+}
+.stand-needle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  transform: translateX(-50%);
+  background: var(--sign-text);
+  border-left: 2px solid var(--outline);
+  border-right: 2px solid var(--outline);
+  pointer-events: none;
+}
+.stand-drop {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  width: 20px;
+  transform: translateX(-50%);
+  background: var(--sign-text);
+  border: 3px solid var(--outline);
+  pointer-events: none;
+}
+.stand-gauge .pt-track {
+  height: 20px;
+}
+.stand-gauge .pt-track > i {
+  background: var(--cost-sign);
+}
+/* The action button: a big Key bullet and one verb (or the stir key sequence). */
+.stand-act {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  min-height: 72px;
+  padding: var(--s-2) var(--s-4) 6px;
+  background: var(--sign-2);
+  color: var(--sign-text);
+  border: var(--px) solid var(--sign-text);
+  font-family: var(--f-display);
+  font-size: 36px;
+  cursor: pointer;
+}
+.stand-act:active {
+  transform: translate(var(--px), var(--px));
+}
+.stand-gauge .pt-key {
+  min-width: 56px;
+  height: 56px;
+  border-radius: 28px;
+  font-size: 28px;
+}
+.stand-keys {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+}
+/* Stir keys: done ones are dim, the one to press now is big. */
+.stand-keys .pt-key.is-done {
+  opacity: 0.35;
+}
+.stand-keys .pt-key.is-active {
+  transform: scale(1.25);
+}
+.stand-keys .pt-key.is-todo {
+  background: var(--sign-2);
+  color: var(--sign-dim);
+}
+
+/* ---------- Walking dock: a small sign with [E] + one verb ---------- */
+.dock-plate {
+  position: absolute;
+  left: 50%;
+  bottom: var(--s-5);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  pointer-events: auto;
+}
+.dock-act {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-1) var(--s-3) 0;
+  background: transparent;
+  color: var(--sign-text);
+  border: var(--px) solid transparent;
+  font-family: var(--f-display);
+  font-size: var(--t-title);
+  cursor: pointer;
+}
+.dock-act:hover,
+.dock-act:focus-visible {
+  background: var(--sign-2);
+  border-color: var(--accent);
+  outline: none;
+}
+.dock-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+}
+/* Stock tag while walking sits bottom-left, like at the stand. */
+.dock-stock {
+  position: absolute;
+  left: var(--s-5);
+  bottom: var(--s-5);
+  pointer-events: auto;
+}

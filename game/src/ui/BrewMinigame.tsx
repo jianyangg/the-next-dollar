@@ -5,11 +5,13 @@ import { useShallow } from 'zustand/react/shallow';
 import { type StirKey, sweetSpots } from '../core/brewing';
 import type { BrewGameState } from '../core/minigames';
 import { type GameState, useGameStore } from '../state/gameStore';
-import { getIcons } from './assets';
+import { Key } from './kit/Money';
 import { useStoreMotionValue, useStorePercent } from './useStoreMotionValue';
+import './styles/stand.css';
 
 /**
- * Step 1 of the stall workbench: the four rotating arcade brew challenges.
+ * The brew mini-games: four rotating arcade challenges shown as ONE big gauge on a
+ * black sign, with one Key bullet for the action and big display-font numbers.
  *
  * PERFORMANCE NOTE: the store replaces `brewGame` ~60 times a second while a challenge
  * runs (needle, lemon drop, tube centre, fuse...). Re-rendering React that often is waste,
@@ -72,11 +74,11 @@ function TripleSqueezeGauge({ targets, step }: { targets: readonly number[]; ste
   const tHalf = Math.min(0.11, 0.068 + Math.max(0, pitchers - 1) * 0.012 + workers * 0.015);
   const needleLeft = useStorePercent(selectNeedle);
   return (
-    <div className="wb-skill-gauge" aria-label="Triple Squeeze timing gauge">
+    <div className="stand-bar" aria-label="Triple Squeeze timing gauge">
       {targets.map((tCenter, idx) => (
         <div
           key={idx}
-          className={idx === step ? 'wb-skill-perfect' : 'wb-skill-good'}
+          className={idx === step ? 'stand-zone-perfect' : 'stand-zone-good'}
           style={{
             left: `${tCenter * 100}%`,
             width: `${tHalf * 200}%`,
@@ -84,7 +86,7 @@ function TripleSqueezeGauge({ targets, step }: { targets: readonly number[]; ste
           }}
         />
       ))}
-      <m.div className="wb-skill-needle" style={{ left: needleLeft }} />
+      <m.div className="stand-needle" style={{ left: needleLeft }} />
     </div>
   );
 }
@@ -97,39 +99,19 @@ function TubeGauge() {
   const tubeLeft = useStorePercent(selectTubeCenter);
   const dropLeft = useStorePercent(selectTubeDrop);
   return (
-    <div className="wb-skill-gauge" aria-label="Keep in Tube pressure gauge">
-      <m.div className="wb-skill-perfect" style={{ left: tubeLeft, width: `${tubeWidth * 100}%` }} />
-      <m.div className="wb-tube-drop" style={{ left: dropLeft }} title="Lemon Drop" />
+    <div className="stand-bar" aria-label="Keep in Tube pressure gauge">
+      <m.div className="stand-zone-perfect" style={{ left: tubeLeft, width: `${tubeWidth * 100}%` }} />
+      <m.div className="stand-drop" style={{ left: dropLeft }} />
     </div>
   );
 }
 
-/** Rapid Stir: press the highlighted keys before the fuse burns out. */
-function StirGauge({ seq, index }: { seq: readonly StirKey[]; index: number }) {
+/** Rapid Stir: the fuse burns down while you press the highlighted keys in order. */
+function StirFuse() {
   const fuseWidth = useStorePercent(selectFuse, 'whole');
-  const stirShake = useGameStore((s) => s.stirShake);
-  const [scope, animate] = useAnimate<HTMLDivElement>();
-
-  // The store raises `stirShake` for 180 ms after a wrong key. The store decides WHEN (and
-  // that it was a mistake); this effect only plays the wobble when the flag turns on.
-  useEffect(() => {
-    if (!stirShake || !scope.current) return;
-    const controls = animate(scope.current, { x: [0, -4, 4, 0] }, { duration: 0.18, ease: 'easeInOut' });
-    return () => controls.stop();
-  }, [stirShake, animate, scope]);
-
   return (
-    <div ref={scope} className="wb-stir-wrap">
-      <div className="wb-stir-keys game-num">
-        {seq.map((k, idx) => (
-          <span key={idx} className={`wb-stir-key ${idx < index ? 'is-done' : idx === index ? 'is-active' : ''}`}>
-            {k === 'SPACE' ? '␣' : k}
-          </span>
-        ))}
-      </div>
-      <div className="wb-timer-track">
-        <m.div className="wb-timer-fill is-brew" style={{ width: fuseWidth }} />
-      </div>
+    <div className="pt-track">
+      <m.i style={{ width: fuseWidth }} />
     </div>
   );
 }
@@ -143,12 +125,58 @@ function BullseyeGauge() {
   const bullseyeLeft = useStorePercent(selectBullseye);
   const needleLeft = useStorePercent(selectNeedle);
   return (
-    <div className="wb-skill-gauge" aria-label="Counter-Moving Bullseye gauge">
-      <m.div className="wb-skill-good" style={{ left: bullseyeLeft, width: `${goodHalf * 200}%` }} />
-      <m.div className="wb-skill-perfect" style={{ left: bullseyeLeft, width: `${perfectHalf * 200}%` }} />
-      <m.div className="wb-skill-needle" style={{ left: needleLeft }} />
+    <div className="stand-bar" aria-label="Counter-Moving Bullseye gauge">
+      <m.div className="stand-zone-good" style={{ left: bullseyeLeft, width: `${goodHalf * 200}%` }} />
+      <m.div className="stand-zone-perfect" style={{ left: bullseyeLeft, width: `${perfectHalf * 200}%` }} />
+      <m.div className="stand-needle" style={{ left: needleLeft }} />
     </div>
   );
+}
+
+/** "42%": a live motion value, so the number updates without a React render. */
+function TubePercent() {
+  const fill = useStoreMotionValue(selectTubeFill);
+  const text = useTransform(fill, (v) => `${Math.round(v * 100)}%`);
+  return <m.span>{text}</m.span>;
+}
+
+/** Plain-word name of the running challenge (a few words, no sentences). */
+function gameName(kind: BrewDiscrete['kind']): string {
+  switch (kind) {
+    case 'triple-squeeze':
+      return 'Squeeze';
+    case 'keep-in-tube':
+      return 'Hold it';
+    case 'rapid-stir':
+      return 'Stir';
+    default:
+      return 'Bullseye';
+  }
+}
+
+/** The big number in the sign's corner: progress for the challenge, if it has any. */
+function GaugeNumber({ game }: { game: BrewDiscrete }) {
+  switch (game.kind) {
+    case 'triple-squeeze':
+      return <>{game.hits}/3</>;
+    case 'keep-in-tube':
+      return <TubePercent />;
+    case 'rapid-stir':
+      return <>{game.index}/{game.seq.length}</>;
+    default:
+      return null;
+  }
+}
+
+/** One verb for the action button. */
+function gameVerb(kind: BrewDiscrete['kind']): string {
+  switch (kind) {
+    case 'keep-in-tube':
+      return 'Thrust';
+    case 'triple-squeeze':
+    default:
+      return 'Squeeze';
+  }
 }
 
 /** The moving gauge for whichever challenge is running. */
@@ -159,115 +187,79 @@ function BrewGauge({ game }: { game: BrewDiscrete }) {
     case 'keep-in-tube':
       return <TubeGauge />;
     case 'rapid-stir':
-      return <StirGauge seq={game.seq} index={game.index} />;
+      return <StirFuse />;
     default:
       return <BullseyeGauge />;
   }
 }
 
-/** "KEEP IN TUBE! 42%": the percentage is a live motion value, so it updates without a render. */
-function TubeBadge() {
-  const fill = useStoreMotionValue(selectTubeFill);
-  const text = useTransform(fill, (v) => `${Math.round(v * 100)}%`);
+/** Rapid stir keys as big Key bullets, in order: done = dim, now = big, later = grey. */
+function StirKeys({ seq, index }: { seq: readonly StirKey[]; index: number }) {
+  const stirShake = useGameStore((s) => s.stirShake);
+  const [scope, animate] = useAnimate<HTMLSpanElement>();
+
+  // The store raises `stirShake` for 180 ms after a wrong key. The store decides WHEN (and
+  // that it was a mistake); this effect only plays the wobble when the flag turns on.
+  useEffect(() => {
+    if (!stirShake || !scope.current) return;
+    const controls = animate(scope.current, { x: [0, -4, 4, 0] }, { duration: 0.18, ease: 'easeInOut' });
+    return () => controls.stop();
+  }, [stirShake, animate, scope]);
+
   return (
-    <>
-      KEEP IN TUBE! <m.span>{text}</m.span>
-    </>
+    <span ref={scope} className="stand-keys">
+      {seq.map((k, idx) => (
+        <span
+          key={idx}
+          className={`pt-key ${idx < index ? 'is-done' : idx === index ? 'is-active' : 'is-todo'}`}
+          aria-hidden="true"
+        >
+          {k === 'SPACE' ? 'Space' : k}
+        </span>
+      ))}
+    </span>
   );
 }
 
-/** Header badge: the challenge name plus its progress. */
-function BrewBadge({ game }: { game: BrewDiscrete | null }) {
-  if (!game) return <>Step 1 · Brew</>;
-  switch (game.kind) {
-    case 'triple-squeeze':
-      return <>TRIPLE SQUEEZE ({game.hits}/3)</>;
-    case 'keep-in-tube':
-      return <TubeBadge />;
-    case 'rapid-stir':
-      return <>RAPID STIR! ({game.index}/5)</>;
-    default:
-      return <>MOVING BULLSEYE!</>;
-  }
-}
-
-/** Label on the big gold action button while a challenge is running. */
-function brewButtonLabel(game: BrewDiscrete): string {
-  switch (game.kind) {
-    case 'keep-in-tube':
-      return 'HOLD / TAP THRUST!';
-    case 'rapid-stir':
-      return `STIR [${game.seq[game.index] ?? 'SPACE'}]`;
-    case 'triple-squeeze':
-      return `SQUEEZE (${game.step + 1}/3)!`;
-    default:
-      return 'SQUEEZE!';
-  }
-}
-
+/**
+ * The brew sign. Renders nothing until a challenge starts (the menu's Brew item, or [F],
+ * starts it in the store). React re-renders only when a challenge starts/ends or a step/key
+ * lands, NOT per frame: `useShallow` compares the discrete fields one by one, and the
+ * moving parts above are motion values (see the note at the top).
+ */
 export function BrewStep() {
   const actions = useGameStore((s) => s.actions);
-  // Discrete parts only: React re-renders when the challenge starts/ends or a step/key
-  // lands, NOT per frame (see the note at the top). `useShallow` compares field by field.
-  const brewGame = useGameStore(useShallow(selectDiscrete));
-  const brewedCups = useGameStore((s) => s.brewedCups);
-  const cupsInStock = useGameStore((s) => s.economy.cupsInStock);
-  const pitchers = useGameStore((s) => s.economy.pitchers);
-  const icons = getIcons();
-
-  const brewPct = cupsInStock > 0 ? Math.min(100, Math.round((brewedCups / cupsInStock) * 100)) : 0;
+  const game = useGameStore(useShallow(selectDiscrete));
+  if (!game) return null;
 
   return (
-    <div className="workbench-step" style={{ minWidth: 232 }}>
-      <div className="wb-step-head">
-        <span className="wb-step-badge">
-          <BrewBadge game={brewGame} />
-        </span>
-        <span className="wb-step-meta game-num">
-          {brewedCups}/{cupsInStock} ready
+    <div className="pt-sign stand-gauge" role="group" aria-label="Brew">
+      <div className="stand-gauge-head">
+        <span className="stand-gauge-name">{gameName(game.kind)}</span>
+        <span className="stand-gauge-num">
+          <GaugeNumber game={game} />
         </span>
       </div>
-
-      {brewGame ? (
-        <BrewGauge game={brewGame} />
-      ) : (
-        <div className="wb-brew-track">
-          <div className="wb-brew-fill" style={{ width: `${brewPct}%` }} />
-        </div>
-      )}
-
-      {brewGame ? (
-        <button
-          type="button"
-          className="gbtn gbtn-gold"
-          onPointerDown={() => {
-            if (brewGame.kind === 'keep-in-tube') {
-              actions.setSpaceHeld(true);
-            }
-          }}
-          onPointerUp={() => actions.setSpaceHeld(false)}
-          onPointerLeave={() => actions.setSpaceHeld(false)}
-          onClick={actions.lockBrewGame}
-          style={{ padding: '6px 10px', fontSize: 12 }}
-        >
-          <span>{brewButtonLabel(brewGame)}</span>
-          <span className="keycap">
-            {brewGame.kind === 'rapid-stir' ? brewGame.seq[brewGame.index] ?? 'Space' : 'Space'}
-          </span>
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="gbtn gbtn-gold"
-          onClick={actions.startBrewGame}
-          disabled={cupsInStock <= 0 || brewedCups >= cupsInStock}
-          style={{ padding: '6px 10px', fontSize: 12 }}
-        >
-          <img src={icons.lemon} alt="" className="px-icon-sm" />
-          <span>{pitchers < 1 ? 'Need Pitcher!' : cupsInStock <= 0 ? 'Out of Lemons!' : 'Brew Pitcher'}</span>
-          <span className="keycap">F</span>
-        </button>
-      )}
+      <BrewGauge game={game} />
+      <button
+        type="button"
+        className="stand-act"
+        onPointerDown={() => {
+          if (game.kind === 'keep-in-tube') actions.setSpaceHeld(true);
+        }}
+        onPointerUp={() => actions.setSpaceHeld(false)}
+        onPointerLeave={() => actions.setSpaceHeld(false)}
+        onClick={actions.lockBrewGame}
+      >
+        {game.kind === 'rapid-stir' ? (
+          <StirKeys seq={game.seq} index={game.index} />
+        ) : (
+          <>
+            <Key k="Space" />
+            {gameVerb(game.kind)}
+          </>
+        )}
+      </button>
     </div>
   );
 }

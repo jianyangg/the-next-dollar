@@ -1,0 +1,152 @@
+/*
+ * Seller deal screen. Tokens only (src/styles/tokens.css); shared pieces from kit.css.
+ * Layout: speech on the left, the seller's books on paper on the right, the action
+ * plate (menu / question box / bid dial / result) across the bottom.
+ */
+.seller-scrim { overflow-y: auto; }
+
+.seller-window {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  grid-template-areas:
+    'head head'
+    'talk books'
+    'act  act';
+  gap: var(--s-5);
+  width: min(1100px, 100%);
+  color: var(--sign-text);
+}
+
+.seller-head {
+  grid-area: head;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.seller-title { font-size: var(--t-title); }
+.seller-ask {
+  background: var(--paper);
+  color: var(--ink);
+  border: var(--px) solid var(--outline);
+  box-shadow: var(--shadow-sm);
+  padding: 6px var(--s-4) 2px;
+  font-size: var(--t-title);
+  transform: rotate(2deg);
+}
+.seller-ask small {
+  font-family: var(--f-body);
+  font-size: var(--t-small);
+  font-weight: 800;
+  letter-spacing: 1px;
+  margin-right: var(--s-2);
+}
+
+/* ---- Speech ---- */
+.seller-talk { grid-area: talk; display: flex; flex-direction: column; gap: var(--s-4); min-width: 0; }
+.seller-speech { display: flex; gap: var(--s-4); align-items: flex-start; }
+.seller-portrait { display: flex; flex-direction: column; align-items: center; gap: var(--s-1); flex: none; }
+.seller-portrait img {
+  width: 96px;
+  height: 96px;
+  background: var(--sign-2);
+  border: var(--px) solid var(--outline);
+}
+.seller-name { font-size: var(--t-small); }
+.seller-speech-col { display: flex; flex-direction: column; gap: var(--s-2); flex: 1; min-width: 0; }
+.seller-balloon { min-height: 64px; }
+.seller-status { font-size: var(--t-big); color: var(--cost-sign); }
+
+/* "Thinking" dots: drawn, not words, so nothing is put in the seller's mouth. */
+.seller-thinking {
+  display: inline-block;
+  width: 60px;
+  height: 16px;
+  background:
+    radial-gradient(circle, var(--ink) 5px, transparent 6px) 0 50% / 20px 16px repeat-x;
+  animation: seller-dots 900ms steps(3) infinite;
+}
+@keyframes seller-dots {
+  0% { width: 20px; }
+  100% { width: 80px; }
+}
+
+.seller-log { list-style: none; display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; }
+.seller-log li { display: flex; flex-direction: column; gap: 2px; font-size: var(--t-small); }
+.seller-log-q { color: var(--sign-dim); }
+.seller-log-q::before { content: "Q "; color: var(--sign-dim); }
+.seller-log-a { color: var(--sign-text); }
+
+/* ---- Books ---- */
+.seller-books { grid-area: books; min-width: 0; overflow-x: auto; }
+.seller-books-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--s-2); }
+.seller-books-title .pt-disp { font-size: var(--t-big); }
+
+/* ---- Action plate ---- */
+.seller-actions { grid-area: act; }
+.seller-menu { display: flex; flex-direction: column; gap: var(--s-2); }
+.seller-pips-row { display: flex; justify-content: space-between; align-items: center; font-size: var(--t-body); }
+
+.seller-ask-form { display: flex; flex-direction: column; gap: var(--s-3); }
+.seller-input {
+  width: 100%;
+  min-height: 48px;
+  padding: var(--s-2) var(--s-3);
+  background: var(--paper);
+  color: var(--ink);
+  border: var(--px) solid var(--outline);
+  font-family: var(--f-body);
+  font-size: var(--t-read);
+}
+.seller-input:focus-visible { outline: var(--px) solid var(--accent); outline-offset: 2px; }
+.seller-form-row { display: flex; align-items: center; gap: var(--s-3); justify-content: flex-end; }
+.seller-form-row .pt-dim { margin-right: auto; }
+
+.seller-bid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--s-5);
+  align-items: center;
+}
+.seller-dial { display: flex; flex-direction: column; align-items: center; gap: var(--s-1); }
+.seller-dial-row { display: flex; align-items: center; gap: var(--s-2); }
+.seller-dial-btn {
+  width: 46px;
+  height: 46px;
+  background: var(--sign-2);
+  color: var(--accent);
+  border: var(--px) solid var(--outline);
+  font-size: var(--t-body);
+  cursor: pointer;
+}
+.seller-dial-value { font-size: var(--t-giant); min-width: 130px; text-align: center; color: var(--sign-text); }
+
+.seller-meter-col { display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; }
+.seller-meter-cap { display: flex; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; font-size: var(--t-body); }
+/* "Must earn" figure: highlighted like a marker pen in line-yellow (text stays ink). */
+.seller-line-text { color: var(--sign-text); box-shadow: inset 0 -8px 0 var(--line); }
+.seller-meter { position: relative; height: 38px; background: var(--sign-2); border: var(--px) solid var(--outline); }
+.seller-meter-earn { position: absolute; left: 0; top: 0; bottom: 0; background: var(--gain-sign); }
+/* THE LINE: the 5% a day this bid must earn, as a hazard-striped marker. */
+.seller-meter-need {
+  position: absolute;
+  top: -10px;
+  bottom: -10px;
+  width: 10px;
+  margin-left: -5px;
+  border: 2px solid var(--outline);
+  background: repeating-linear-gradient(135deg, var(--line) 0 6px, var(--outline) 6px 12px);
+  transition: left var(--dur-panel) steps(4);
+}
+.seller-bid-error { font-size: var(--t-big); color: var(--cost-sign); }
+.seller-bid-buttons { display: flex; flex-direction: column; gap: var(--s-2); }
+
+.seller-outcome { display: flex; align-items: center; gap: var(--s-5); flex-wrap: wrap; }
+.seller-stamp { font-size: var(--t-hero); padding: var(--s-2) var(--s-4); }
+.seller-outcome-bid { font-size: var(--t-title); }
+
+@media (max-width: 860px) {
+  .seller-window { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'head' 'talk' 'books' 'act'; }
+  .seller-bid { grid-template-columns: minmax(0, 1fr); }
+}

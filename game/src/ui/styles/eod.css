@@ -1,0 +1,103 @@
+/*
+ * End-of-day receipt ("eodr-" classes). Paper = the engine's numbers; the dark scrim is
+ * the shared .pt-scrim from kit.css. The ".pt-paper.eodr-x" double selectors beat the kit's
+ * single-class rules no matter which stylesheet loads first.
+ */
+.eodr-frame {
+  /* Scrolls on short screens; the paper's torn edge hangs below, so leave room for it. */
+  max-height: 100%;
+  width: min(1040px, 100%);
+  overflow-y: auto;
+  padding: var(--s-2) var(--s-2) var(--s-6);
+}
+.eodr-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: var(--s-5);
+  align-items: start;
+  color: var(--sign-text);
+}
+.eodr-head {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-4);
+}
+.eodr-title { margin: 0; font-size: var(--t-hero); color: var(--sign-text); }
+.eodr-where { font-size: var(--t-body); color: var(--sign-dim); }
+
+/* ---- Receipt rows ---- */
+.pt-paper.eodr-receipt { padding: var(--s-3) var(--s-5) var(--s-5); }
+.eodr-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: var(--s-2) 0;
+  border-bottom: 2px dashed var(--rule);
+  font-size: var(--t-read);
+  /* Rows "snap" in (steps), like sprites, instead of a smooth web fade. */
+  transition: opacity var(--dur-cursor) steps(2), transform var(--dur-cursor) steps(2);
+}
+.eodr-row.is-hidden { opacity: 0; transform: translateY(var(--s-2)); }
+.eodr-how { margin-left: var(--s-3); font-size: var(--t-body); font-weight: 600; color: var(--ink-dim); }
+.eodr-num { font-size: var(--t-big); }
+.eodr-row.is-total {
+  padding: var(--s-3) var(--s-2);
+  border-top: var(--px) solid var(--ink);
+  border-bottom: var(--px) solid var(--ink);
+  background: var(--paper-2);
+  font-weight: 800;
+}
+/* THE LINE row: the 5% charge wears the hazard stripes (pt-line-row supplies the band). */
+.eodr-row.is-line {
+  margin-top: var(--s-3);
+  padding: var(--s-3) var(--s-2) var(--s-3) calc(12px + var(--s-2));
+  border: var(--px) solid var(--ink);
+  font-weight: 800;
+}
+.eodr-row.is-line .eodr-how { color: var(--ink); }
+.eodr-row.is-final { border: 0; padding: var(--s-4) var(--s-2) var(--s-1); font-family: var(--f-display); font-size: var(--t-title); }
+.eodr-final-num { font-size: var(--t-giant); }
+
+/* ---- Split bar: how much of the profit the 5% line took ---- */
+.eodr-split { margin-top: var(--s-4); transition: opacity var(--dur-cursor) steps(2); }
+.eodr-split.is-hidden { opacity: 0; }
+.eodr-split-bar { display: flex; height: 34px; border: var(--px) solid var(--ink); }
+.eodr-split-take { border-right: var(--px) solid var(--ink); }
+.eodr-split-keep { flex: 1; background: var(--gain-paper); }
+.eodr-split-cap {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+  font-size: var(--t-body);
+  color: var(--ink-dim);
+}
+.eodr-short { margin-top: var(--s-2); font-size: var(--t-body); font-weight: 800; }
+
+/* ---- Side column ---- */
+.eodr-side { display: flex; flex-direction: column; gap: var(--s-5); }
+.pt-stamp.eodr-stamp {
+  align-self: center;
+  width: 132px;
+  height: 132px;
+  font-size: 84px;
+  transition: transform var(--dur-stamp) var(--ease-stamp), opacity var(--dur-stamp);
+}
+.pt-stamp.eodr-stamp.is-gain { color: var(--gain-sign); }
+.pt-stamp.eodr-stamp.is-cost { color: var(--cost-sign); }
+.pt-stamp.eodr-stamp.is-flat { color: var(--sign-text); }
+/* Before landing: big and invisible, so it "slams down" to its place. */
+.pt-stamp.eodr-stamp.is-pre { transform: rotate(-8deg) scale(1.9); opacity: 0; }
+
+.pt-paper.eodr-run { padding: var(--s-3) var(--s-4) var(--s-4); margin-bottom: var(--s-2); }
+.eodr-run-label { font-size: var(--t-body); font-weight: 800; color: var(--ink-dim); }
+.eodr-run-big { font-size: var(--t-giant); line-height: 1.05; margin-bottom: var(--s-2); }
+.eodr-next { align-self: stretch; }
+.eodr-seed { font-size: var(--t-small); color: var(--sign-dim); text-align: right; }
+
+@media (max-width: 760px) {
+  .eodr-card { grid-template-columns: minmax(0, 1fr); }
+}

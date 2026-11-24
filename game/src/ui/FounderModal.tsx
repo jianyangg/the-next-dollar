@@ -2,11 +2,28 @@ import { AnimatePresence } from 'motion/react';
 import * as m from 'motion/react-m';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useGameStore } from '../state/gameStore';
-import { FOUNDER_CATALOG } from '../world/pixelArt';
+import { FOUNDER_CATALOG, type FounderSpecies } from '../world/pixelArt';
 import { getStandingSprites } from './assets';
+import { CursorMenu, type CursorMenuItem } from './kit/CursorMenu';
+import { Key } from './kit/Money';
+import { PaperChip } from './shop/ShopWindow';
 import { backdropMotion, modalShellMotion } from './motionPresets';
+import './styles/founder.css';
 
-/** "Choose Your Founder" character-select overlay (also the game's opening screen). */
+/**
+ * Two-word trait shown under each founder (the old tagline paragraphs are gone).
+ * Typed as a Record over every founder id, so adding a founder without a trait is a
+ * compile error instead of a blank label at runtime.
+ */
+const TRAIT: Record<FounderSpecies, string> = {
+  squirrel: 'Park Hustler',
+  shiba: 'Block Strategist',
+  panda: 'Campus Founder',
+  penguin: 'Uptown Operator',
+  bunny: 'Street Analyst',
+};
+
+/** Character-select screen (also the game's opening screen). */
 export function FounderModal() {
   const open = useGameStore((s) => s.founderModalOpen);
   // AnimatePresence keeps the body mounted until its exit animation has played.
@@ -17,77 +34,58 @@ function FounderModalBody() {
   const actions = useGameStore((s) => s.actions);
   const founderSpecies = useGameStore((s) => s.founderSpecies);
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
-  const standingSprites = getStandingSprites();
+  const cash = useGameStore((s) => s.economy.cash);
+  const sprites = getStandingSprites();
   const neighborhood = getNeighborhood(neighborhoodId);
-  const selectedFounder = FOUNDER_CATALOG.find((f) => f.id === founderSpecies) ?? FOUNDER_CATALOG[0];
+
+  // Confirming a founder (E, Enter or a click) picks them AND starts the run: in a
+  // character-select screen "choose" and "go" are one action. The store still gets both
+  // calls, so the hero in the scene is swapped before the window closes.
+  const items: CursorMenuItem[] = FOUNDER_CATALOG.map((founder) => ({
+    id: founder.id,
+    label: (
+      <span className="fpick-card">
+        <span className="fpick-figure">
+          <img src={sprites[founder.id]} alt={founder.name} className="fpick-sprite" />
+        </span>
+        <span className="pt-disp fpick-name">{founder.name}</span>
+        <span className="fpick-trait">{TRAIT[founder.id]}</span>
+        {founder.id === founderSpecies && <span className="fpick-current">Playing</span>}
+      </span>
+    ),
+    onSelect: () => {
+      actions.pickFounder(founder.id);
+      actions.startFromFounderModal();
+    },
+  }));
 
   return (
-    <m.div className="founder-backdrop" onClick={actions.closeFounderModal} {...backdropMotion}>
-      <m.div className="modal-shell is-founder" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
-        <div className="modal-header">
-          <div>
-            <div className="modal-kicker">The Next Dollar · NYC Lemonade Tycoon</div>
-            <div className="modal-title" style={{ fontSize: 20 }}>
-              Choose Your Founder
-            </div>
+    <m.div className="pt-scrim fpick-scrim" onClick={actions.closeFounderModal} {...backdropMotion}>
+      <m.div
+        className="pt-sign fpick-window"
+        role="dialog"
+        aria-label="Choose your founder"
+        onClick={(e) => e.stopPropagation()}
+        {...modalShellMotion}
+      >
+        <header className="pt-titlebar fpick-head">
+          <h2 className="pt-disp fpick-title">Pick your founder</h2>
+          <div className="fpick-stats">
+            <PaperChip label="CASH" value={`$${cash.toFixed(2)}`} />
+            <PaperChip label="START" value={neighborhood.shortName} />
           </div>
-          <button
-            type="button"
-            className="icon-close-btn"
-            onClick={actions.closeFounderModal}
-            aria-label="Close Founder Select"
-          >
-            ✕
-          </button>
-        </div>
+        </header>
 
-        <div className="modal-body">
-          <p className="founder-intro-narration">
-            A heatwave has swept Manhattan into a full-blown lemonade craze. Your parents believed in you and
-            slipped <strong>$30</strong> into your hand to kickstart your business—lease a corner, stock up at
-            Union Square Market, and build a New York empire in 30 days.
-          </p>
-          <div className="founder-grid">
-            {FOUNDER_CATALOG.map((founder) => {
-              const isSelected = founder.id === founderSpecies;
-              return (
-                <button
-                  key={founder.id}
-                  type="button"
-                  className={`founder-card ${isSelected ? 'is-selected' : ''}`}
-                  onClick={() => actions.pickFounder(founder.id)}
-                >
-                  <div className="founder-figure">
-                    <img
-                      src={standingSprites[founder.id]}
-                      alt={founder.name}
-                      className="founder-portrait-img pixel-portrait"
-                    />
-                    <span className="founder-ground-shadow" aria-hidden="true" />
-                  </div>
-                  <div className="founder-name">{founder.name}</div>
-                  <div className="founder-title-pill">{founder.title}</div>
-                  <div className="founder-tagline">{founder.tagline}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        <CursorMenu items={items} label="Founders" orientation="row" blocking className="fpick-menu" initialId={founderSpecies} />
 
-        <div className="founder-footer">
-          <div className="founder-chosen-summary">
-            Playing as <strong>{selectedFounder.name}</strong> ({selectedFounder.title}) · Starting in{' '}
-            <strong>{neighborhood.name}</strong>
-          </div>
-          <button
-            type="button"
-            className="gbtn gbtn-gold"
-            style={{ padding: '9px 20px', fontSize: 13.5 }}
-            onClick={actions.startFromFounderModal}
-          >
-            Open My Stand →
-          </button>
-        </div>
+        <footer className="fpick-keys">
+          <span className="fpick-key">
+            <Key k="E" /> Play
+          </span>
+          <span className="fpick-key">
+            <Key k="Esc" nav /> Close
+          </span>
+        </footer>
       </m.div>
     </m.div>
   );

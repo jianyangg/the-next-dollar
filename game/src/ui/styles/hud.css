@@ -1,0 +1,105 @@
+/*
+ * HUD sign plates (see ui/Hud.tsx). Colours, sizes and layers all come from tokens.css.
+ * The wrapper ignores the mouse so the 3D scene underneath stays clickable; only the
+ * plates themselves take pointer events.
+ */
+.hud {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-hud);
+  pointer-events: none;
+}
+.hud-plate {
+  position: absolute;
+  pointer-events: auto;
+}
+
+/* ---------- Top-left: founder, day, place, clock ---------- */
+.hud-left {
+  top: var(--s-4);
+  left: var(--s-4);
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  min-width: 300px;
+}
+.hud-portrait-btn {
+  flex: none;
+  padding: 0;
+  background: var(--sign-2);
+  border: var(--px) solid var(--outline);
+  cursor: pointer;
+  line-height: 0;
+}
+.hud-portrait-btn:hover { border-color: var(--accent); }
+.hud-portrait-btn:focus-visible { outline: var(--px) solid var(--accent); outline-offset: 2px; }
+.hud-portrait {
+  width: 64px;
+  height: 64px;
+  image-rendering: pixelated; /* keep the pixel art crisp when scaled up */
+}
+.hud-left-body { display: flex; flex-direction: column; gap: var(--s-1); flex: 1; min-width: 0; }
+.hud-left-top { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
+.hud-day { font-size: var(--t-title); }
+.hud-place { font-size: var(--t-body); color: var(--sign-dim); white-space: nowrap; }
+.hud-clock { display: flex; align-items: center; gap: var(--s-2); }
+.hud-clock-track { flex: 1; min-width: 80px; }
+.hud-clock-time { font-size: var(--t-small); white-space: nowrap; }
+
+/* The 1x/2x toggle is a small sign button: control blue (--accent) when the day runs fast. */
+.hud-speed {
+  min-width: 48px;
+  padding: 2px var(--s-2) 0;
+  background: var(--sign-2);
+  color: var(--sign-text);
+  border: 3px solid var(--outline);
+  font-family: var(--f-display);
+  font-size: var(--t-body);
+  cursor: pointer;
+}
+.hud-speed.is-fast { background: var(--accent); color: var(--ink); }
+.hud-speed:focus-visible { outline: var(--px) solid var(--accent); outline-offset: 2px; }
+
+/* ---------- Top-right: cash and value created ---------- */
+.hud-right {
+  top: var(--s-4);
+  right: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-1);
+  min-width: 220px;
+}
+.hud-cash { display: flex; align-items: center; gap: var(--s-2); }
+.hud-coin { width: 40px; height: 40px; image-rendering: pixelated; }
+.hud-cash-num { font-size: var(--t-hero); }
+.hud-value { display: flex; align-items: baseline; gap: var(--s-2); }
+.hud-value-label { font-size: var(--t-body); color: var(--sign-dim); }
+.hud-value-num { font-size: var(--t-big); }
+
+/* ---------- Bottom-right: M Map, B Books, sound ---------- */
+.hud-keys {
+  position: absolute;
+  max-width: var(--dock-clear-w); /* other panels keep this much room free */
+  right: var(--s-4);
+  bottom: var(--s-4);
+  display: flex;
+  gap: var(--s-3);
+  pointer-events: none; /* the gaps between buttons stay click-through */
+}
+.pt-sign.hud-nav {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 52px;
+  padding: var(--s-2) var(--s-3) var(--s-1);
+  cursor: pointer;
+  font: inherit;
+}
+.hud-nav-word { font-size: var(--t-big); }
+.hud-nav:hover { background: var(--sign-2); }
+.hud-nav.is-active { background: var(--sign-2); border-color: var(--accent); }
+.hud-nav:focus-visible { outline: var(--px) solid var(--accent); outline-offset: 2px; }
+.pt-sign.hud-sound { padding: var(--s-2); min-width: 52px; justify-content: center; }
+.hud-icon { width: 32px; height: 32px; }

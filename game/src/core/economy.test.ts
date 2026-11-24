@@ -105,9 +105,10 @@ describe('sales', () => {
   });
 
   it('labels the sale pop by combo size', () => {
-    expect(salePopLabel(3, 1)).toBe('+$3!');
-    expect(salePopLabel(3, 2)).toBe('+$3!! x2');
-    expect(salePopLabel(3, 4)).toBe('+$3!!! 🔥 x4');
+    // Plain text since the Paper Trail UI: excitement is shown by size and colour.
+    expect(salePopLabel(3, 1)).toBe('+$3');
+    expect(salePopLabel(3, 2)).toBe('+$3 x2');
+    expect(salePopLabel(3, 4)).toBe('+$3 x4');
   });
 });
 

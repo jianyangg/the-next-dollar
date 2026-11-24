@@ -40,12 +40,15 @@ const post = (path: string, body: unknown, env: Env, headers: Record<string, str
     env,
   );
 
-const pitchPath = `/api/deals/${DEAL_ID}/pitch`;
-const questionPath = `/api/deals/${DEAL_ID}/questions`;
-const closePath = `/api/deals/${DEAL_ID}/close`;
+const RUN_ID = '2f1c7a4e-9b3d-4c8a-a1e2-5d6f7a8b9c0d';
+const OTHER_RUN_ID = '7e3b9c1d-2a4f-4e6b-8c9d-0a1b2c3d4e5f';
+const base = (runId = RUN_ID) => `/api/runs/${runId}/deals/${DEAL_ID}`;
+const pitchPath = `${base()}/pitch`;
+const questionPath = `${base()}/questions`;
+const closePath = `${base()}/close`;
 const emptyEnv = () => fakeEnv(StubSellerModel.replying(GOOD_PITCH));
 
-describe('POST /api/deals/:dealId/pitch', () => {
+describe('POST /api/runs/:runId/deals/:dealId/pitch', () => {
   it('returns 200 with the pitch contract, for an empty JSON body', async () => {
     const res = await post(pitchPath, {}, emptyEnv());
     expect(res.status).toBe(200);
@@ -77,12 +80,12 @@ describe('POST /api/deals/:dealId/pitch', () => {
 
   it.each(['some-other-deal', 'bad%20id!', 'constructor', '__proto__', 'toString'])('returns 404 unknown-deal for deal id "%s"', async (id) => {
     const model = StubSellerModel.replying(GOOD_PITCH);
-    const res = await post(`/api/deals/${id}/pitch`, {}, fakeEnv(model));
+    const res = await post(`/api/runs/${RUN_ID}/deals/${id}/pitch`, {}, fakeEnv(model));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: 'unknown-deal' });
     expect(model.calls).toHaveLength(0);
     for (const route of ['questions', 'close']) {
-      const other = await post(`/api/deals/${id}/${route}`, { question: 'hi' }, fakeEnv(model));
+      const other = await post(`/api/runs/${RUN_ID}/deals/${id}/${route}`, { question: 'hi' }, fakeEnv(model));
       expect(other.status).toBe(404);
     }
   });
@@ -99,7 +102,7 @@ describe('POST /api/deals/:dealId/pitch', () => {
   });
 });
 
-describe('POST /api/deals/:dealId/questions', () => {
+describe('POST /api/runs/:runId/deals/:dealId/questions', () => {
   const env = () => fakeEnv(new StubSellerModel([{ type: 'reply', rawText: json(GOOD_PITCH) }, { type: 'reply', rawText: json(GOOD_LEASE_ANSWER) }]));
 
   it.each([
@@ -199,5 +202,26 @@ describe('per-IP rate limiting (optional binding)', () => {
     const rateLimiter = { limit: async () => ({ success: true }) };
     const res = await post(pitchPath, {}, fakeEnv(StubSellerModel.replying(GOOD_PITCH), { rateLimiter }), { 'cf-connecting-ip': '203.0.113.7' });
     expect(res.status).toBe(200);
+  });
+});
+
+describe('run-scoped conversations', () => {
+  it('rejects a run id that is not a UUID v4 with 400 invalid-run', async () => {
+    const env = emptyEnv();
+    for (const bad of ['global', 'central-park-seller-1', '00000000-0000-0000-0000-000000000000']) {
+      const res = await post(`/api/runs/${bad}/deals/${DEAL_ID}/pitch`, {}, env);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid-run' });
+    }
+  });
+
+  it("closing a deal in one run does not close it in another player's run", async () => {
+    const env = emptyEnv();
+    expect((await post(pitchPath, {}, env)).status).toBe(200);
+    expect((await post(closePath, undefined, env)).status).toBe(200);
+    expect((await post(pitchPath, {}, env)).status).toBe(409);
+
+    const other = await post(`${base(OTHER_RUN_ID)}/pitch`, {}, env);
+    expect(other.status).toBe(200);
   });
 });

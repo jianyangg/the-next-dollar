@@ -3,7 +3,11 @@ import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { newRandomSeed, parseSeed } from './core/rng';
 import { initRunRandom } from './core/runRandom';
-import './index.css';
+// Paper Trail design system: tokens first (every other sheet reads them), then base, then the kit.
+import './styles/fonts';
+import './styles/tokens.css';
+import './styles/base.css';
+import './styles/kit.css';
 
 // Pick the run seed BEFORE anything renders, so every random draw is reproducible.
 // `?seed=123` replays a run; a malformed seed is an error rather than being

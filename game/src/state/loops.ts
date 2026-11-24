@@ -1,4 +1,5 @@
 import { selectClockPaused, selectManagerIntervalMs, useGameStore } from './gameStore';
+import { INPUT_PRIORITY, pushInputLayer, startInputRouter } from './input';
 
 /**
  * The game's background loops, started once from App (`useEffect(() => startGameLoops(), [])`).
@@ -65,23 +66,24 @@ function startManager(): () => void {
 
 /**
  * Global keyboard shortcuts: [B] Books, [M] NY Map, [F] Brew, [Space] Squeeze/Serve,
- * [Esc] closes the top-most panel or steps out of the stand.
+ * stir keys during the rapid-stir mini-game, [Esc] closes the top-most panel or steps
+ * out of the stand.
  *
- * Registered ONCE: the handler reads the current state with `getState()` on every key
- * press instead of being rebuilt (and re-registered) whenever a panel opens.
+ * This is one layer of the input router (state/input.ts), sitting above the scene.
+ * It returns true for every key it uses, so the scene never also sees it (e.g. W
+ * during rapid-stir stirs instead of walking). Typing in text fields and browser
+ * shortcuts are filtered out by the router before any layer runs.
+ *
+ * It reads the current state with `getState()` on every press instead of being
+ * rebuilt whenever a panel opens.
  */
-export function handleGameKeyDown(e: KeyboardEvent): void {
+export function handleGameKeyDown(e: KeyboardEvent): boolean {
   const { actions, ...s } = useGameStore.getState();
-  const target = e.target as HTMLElement | null;
-  const isTyping =
-    target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable;
 
   if (e.key === 'Escape') {
     actions.handleEscape();
-    return;
+    return true;
   }
-
-  if (isTyping || e.metaKey || e.ctrlKey || e.altKey) return;
 
   const k = e.key.toLowerCase();
   const brewGameActive = s.brewGame !== null;
@@ -96,13 +98,13 @@ export function handleGameKeyDown(e: KeyboardEvent): void {
       if (pressed) {
         e.preventDefault();
         actions.stirKey(key);
-        return;
+        return true;
       }
     }
     if (e.code === 'Space') {
       e.preventDefault();
       actions.stirKey('SPACE');
-      return;
+      return true;
     }
   }
 
@@ -110,13 +112,19 @@ export function handleGameKeyDown(e: KeyboardEvent): void {
   if (k === 'b') {
     e.preventDefault();
     actions.toggleBooks();
-  } else if (k === 'm') {
+    return true;
+  }
+  if (k === 'm') {
     e.preventDefault();
     actions.toggleMap();
-  } else if (k === 'f' && s.workingAtStand && nothingOverlaying) {
+    return true;
+  }
+  if (k === 'f' && s.workingAtStand && nothingOverlaying) {
     e.preventDefault();
     if (!brewGameActive) actions.startBrewGame();
-  } else if (e.code === 'Space' && s.workingAtStand && nothingOverlaying) {
+    return true;
+  }
+  if (e.code === 'Space' && s.workingAtStand && nothingOverlaying) {
     e.preventDefault();
     actions.setSpaceHeld(true);
     if (brewGameActive) {
@@ -124,19 +132,26 @@ export function handleGameKeyDown(e: KeyboardEvent): void {
     } else {
       actions.startServeFrontCustomer();
     }
+    return true;
   }
+  return false;
 }
 
 export function handleGameKeyUp(e: KeyboardEvent): void {
   if (e.code === 'Space') useGameStore.getState().actions.setSpaceHeld(false);
 }
 
+/** Start the single window key listener and put the shortcut layer on it. */
 function startKeyboard(): () => void {
-  window.addEventListener('keydown', handleGameKeyDown);
-  window.addEventListener('keyup', handleGameKeyUp);
+  const stopRouter = startInputRouter();
+  const removeLayer = pushInputLayer({
+    priority: INPUT_PRIORITY.shortcuts,
+    onKeyDown: handleGameKeyDown,
+    onKeyUp: handleGameKeyUp,
+  });
   return () => {
-    window.removeEventListener('keydown', handleGameKeyDown);
-    window.removeEventListener('keyup', handleGameKeyUp);
+    removeLayer();
+    stopRouter();
   };
 }
 

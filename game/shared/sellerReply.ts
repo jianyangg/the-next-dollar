@@ -17,7 +17,7 @@ export const sellerReplySchema = z.object({ text: z.string() });
 // ---------------------------------------------------------------------------
 
 /**
- * POST /api/deals/:dealId/pitch. The body must be empty or `{}`. Any field at all
+ * POST /api/runs/:runId/deals/:dealId/pitch. The body must be empty or `{}`. Any field at all
  * (a persona, a deal, a price) is rejected with 400 rather than silently ignored,
  * so a tampered client gets a loud failure instead of a quiet no-op.
  */
@@ -39,7 +39,7 @@ export const pitchResponseSchema = z.strictObject({
 });
 export type PitchResponse = z.infer<typeof pitchResponseSchema>;
 
-/** POST /api/deals/:dealId/questions */
+/** POST /api/runs/:runId/deals/:dealId/questions */
 export const questionRequestSchema = z.strictObject({
   question: z.string().trim().min(1).max(MAX_QUESTION_CHARS),
 });
@@ -64,6 +64,8 @@ export type QuestionResponse = z.infer<typeof questionResponseSchema>;
 export const apiErrorSchema = z.strictObject({
   error: z.enum([
     'invalid-request',
+    /** 400: the run id in the URL is not a UUID v4. */
+    'invalid-run',
     /** 404: the deal id is not in the server's registry. */
     'unknown-deal',
     /** 404: a question was sent before the pitch. */

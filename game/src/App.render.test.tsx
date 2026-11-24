@@ -26,6 +26,8 @@ vi.mock('./world/CentralParkScene', () => {
     'setStandOpen',
     'setTimeOfDay',
     'burstSaleSparkles',
+    'releaseKeys',
+    'handleKeyUp',
   ];
   class FakeScene {
     record = { disposed: false, calls: {} as Record<string, unknown[][]> };
@@ -39,6 +41,9 @@ vi.mock('./world/CentralParkScene', () => {
     }
     serveFrontCustomer() {
       return null;
+    }
+    handleKeyDown() {
+      return false;
     }
     dispose() {
       this.record.disposed = true;
@@ -119,7 +124,7 @@ describe('<App /> and the per-frame anchor store', () => {
 
     // Put two customers in line (this legitimately renders two patience bars).
     act(() => publishAnchors(snapshot({ queue: [customer(1, 100, 1), customer(2, 140, 1)] })));
-    const bars = container.querySelectorAll<HTMLElement>('.patience-anchor');
+    const bars = container.querySelectorAll<HTMLElement>('.world-patience');
     expect(bars).toHaveLength(2);
 
     const commitsBefore = commits;
@@ -139,7 +144,7 @@ describe('<App /> and the per-frame anchor store', () => {
     expect(commits).toBe(commitsBefore);
     // ...yet the patience bars really moved (written straight to the DOM).
     expect(bars[0].style.left).toBe('200px');
-    expect(bars[0].querySelector<HTMLElement>('.patience-fill')?.style.width).toBe('50%');
+    expect(bars[0].querySelector<HTMLElement>('.world-patience-track > i')?.style.width).toBe('50%');
   });
 
   it('does re-render when a discrete anchor value (nearby) changes', () => {

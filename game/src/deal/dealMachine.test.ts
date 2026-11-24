@@ -4,14 +4,21 @@ import type { PublicDealView } from '../core/deal';
 import { CENTRAL_PARK_DEAL, resolveSealedBid, toPublicView } from '../core/deal';
 import { createInitialState, type SliceState } from '../core/sliceModel';
 import { canAsk, dealMachine, type BidVerdict, type QaEntry, MAX_QUESTION_CHARS, questionsLeft } from './dealMachine';
+import type { PitchResponse, QuestionResponse } from '../../shared/sellerReply';
+import { SellerApiError } from './sellerClient';
 
 const publicDeal = toPublicView(CENTRAL_PARK_DEAL);
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 interface Opts {
   pitchFails?: boolean;
+  /** The server sent its scripted template pitch (AI off or failed). */
+  templatePitch?: boolean;
   questionsEnabled?: boolean;
+  /** The server could not get a valid answer: neutral line, question refunded. */
   failAnswers?: boolean;
+  /** The request itself fails with this server error code. */
+  askErrorCode?: 'question-limit' | 'deal-closed' | 'network';
   /** Holds the answer until resolved; lets a test observe the `answering` state. */
   gate?: Promise<void>;
   cash?: number;
@@ -20,17 +27,29 @@ interface Opts {
 function start(o: Opts = {}) {
   // The live game state stays outside the machine, as in production.
   let game: SliceState = { ...createInitialState(), cash: o.cash ?? 100 };
+  // A tiny stand-in for the server's question ledger (the server is the authority).
+  let serverRemaining = 3;
   const machine = dealMachine.provide({
     actors: {
-      fetchPitch: fromPromise(async () => {
-        if (o.pitchFails) throw new Error('down');
-        return { text: 'Great stand!', questionsEnabled: o.questionsEnabled ?? true };
+      fetchPitch: fromPromise(async (): Promise<PitchResponse> => {
+        if (o.pitchFails) throw new SellerApiError('network', null);
+        if (o.templatePitch) {
+          return { text: 'Scripted pitch.', source: 'template' as const, questionsEnabled: false, questionsRemaining: 0 };
+        }
+        const enabled = o.questionsEnabled ?? true;
+        return { text: 'Great stand!', source: 'model' as const, questionsEnabled: enabled, questionsRemaining: enabled ? 3 : 0 };
       }),
-      askSeller: fromPromise(async ({ input }: { input: { deal: PublicDealView; history: QaEntry[]; question: string } }) => {
+      askSeller: fromPromise(
+        async ({ input }: { input: { deal: PublicDealView; history: QaEntry[]; question: string } }): Promise<QuestionResponse> => {
         await o.gate;
-        if (o.failAnswers) throw new Error('boom');
-        return { text: `answer to ${input.question}` };
-      }),
+        if (o.askErrorCode) throw new SellerApiError(o.askErrorCode, o.askErrorCode === 'network' ? null : 409);
+        if (o.failAnswers) {
+          return { text: 'Neutral line.', source: 'neutral' as const, questionsRemaining: serverRemaining, refunded: true };
+        }
+        serverRemaining -= 1;
+        return { text: `answer to ${input.question}`, source: 'model' as const, questionsRemaining: serverRemaining, refunded: false };
+        }
+      ),
       resolveBid: fromPromise(async ({ input }: { input: { bid: number } }) => {
         const r = resolveSealedBid(game, CENTRAL_PARK_DEAL, input.bid);
         if (r.kind === 'won' || r.kind === 'rejected') game = r.state;
@@ -59,14 +78,22 @@ describe('pitch', () => {
     const { actor } = await ready();
     const c = actor.getSnapshot().context;
     expect(c.pitch).toBe('Great stand!');
-    expect(c.pitchError).toBe(false);
+    expect(c.sellerOffline).toBe(false);
     expect(canAsk(actor.getSnapshot())).toBe(true);
   });
-  it('opens with pitchError and no invented text on failure', async () => {
+  it('opens with the seller offline and no invented text on failure', async () => {
     const { actor } = await ready({ pitchFails: true });
     const s = actor.getSnapshot();
     expect(s.context.pitch).toBeNull();
-    expect(s.context.pitchError).toBe(true);
+    expect(s.context.sellerOffline).toBe(true);
+    expect(canAsk(s)).toBe(false);
+  });
+  it("treats the server's scripted template pitch as offline, never as the seller's words", async () => {
+    const { actor } = await ready({ templatePitch: true });
+    const s = actor.getSnapshot();
+    expect(s.context.pitch).toBeNull();
+    expect(s.context.sellerOffline).toBe(true);
+    expect(JSON.stringify(s.context)).not.toContain('Scripted pitch.');
     expect(canAsk(s)).toBe(false);
   });
   it('respects questionsEnabled=false', async () => {
@@ -111,14 +138,23 @@ describe('questions', () => {
     expect(actor.getSnapshot().context.qa).toHaveLength(1);
     expect(actor.getSnapshot().context.bid).toBeUndefined();
   });
-  it('records a failed answer with error and counts it toward the limit', async () => {
+  it("a refunded no-answer keeps the question, hides the server's neutral line", async () => {
     const { actor } = await ready({ failAnswers: true });
     await ask(actor, 'q1');
-    expect(actor.getSnapshot().context.qa).toEqual([{ q: 'q1', a: null, error: true }]);
-    expect(questionsLeft(actor.getSnapshot())).toBe(2);
-    await ask(actor, 'q2');
-    await ask(actor, 'q3');
+    expect(actor.getSnapshot().context.qa).toEqual([{ q: 'q1', a: null, status: 'no-answer', refunded: true }]);
+    expect(questionsLeft(actor.getSnapshot())).toBe(3);
+    expect(JSON.stringify(actor.getSnapshot().context)).not.toContain('Neutral line.');
+  });
+  it('a failed request records an error; a question-limit refusal ends asking', async () => {
+    const { actor } = await ready({ askErrorCode: 'question-limit' });
+    await ask(actor, 'q1');
+    expect(actor.getSnapshot().context.qa[0]).toEqual({ q: 'q1', a: null, status: 'error', refunded: false });
     expect(canAsk(actor.getSnapshot())).toBe(false);
+  });
+  it('a network failure keeps the last known count', async () => {
+    const { actor } = await ready({ askErrorCode: 'network' });
+    await ask(actor, 'q1');
+    expect(questionsLeft(actor.getSnapshot())).toBe(3);
   });
 });
 
@@ -166,7 +202,9 @@ describe('sealed bid (resolveSealedBid, reservation 42, ask 60)', () => {
   it('a throwing resolveBid returns to idle with an error', async () => {
     const machine = dealMachine.provide({
       actors: {
-        fetchPitch: fromPromise(async () => ({ text: 'p', questionsEnabled: true as boolean })),
+        fetchPitch: fromPromise(
+          async (): Promise<PitchResponse> => ({ text: 'p', source: 'model', questionsEnabled: true, questionsRemaining: 3 })
+        ),
         resolveBid: fromPromise(async (): Promise<BidVerdict> => {
           throw new Error('x');
         }),

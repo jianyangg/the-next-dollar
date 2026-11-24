@@ -1,0 +1,64 @@
+/*
+ * Shops and plot lease: a SIGN window holding a cursor menu, with a PAPER preview under it.
+ * Only tokens.css values; classes start with `shop-` so they never meet the legacy sheet.
+ */
+.shop-window {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.shop-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.shop-portrait {
+  width: 64px;
+  height: 64px;
+  image-rendering: pixelated; /* keep pixel art crisp when scaled up */
+  border: var(--px) solid var(--outline);
+  background: var(--sign-2);
+}
+.shop-title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-title);
+  color: var(--sign-text);
+}
+.shop-stats {
+  display: flex;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.shop-menu .pt-menu-item { font-size: var(--t-big); }
+
+/* Reserve room for the tallest preview (a row of four chips) so nothing jumps. */
+.shop-preview-slot {
+  min-height: 124px;
+  padding-bottom: 16px; /* room for the paper's torn edge */
+}
+.shop-preview { padding-bottom: var(--s-4); }
+.shop-preview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.shop-need {
+  font-size: var(--t-title);
+  color: var(--ink);
+}
+
+.shop-keys {
+  display: flex;
+  gap: var(--s-5);
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+  color: var(--sign-dim);
+}
+.shop-key { display: inline-flex; align-items: center; gap: var(--s-2); }

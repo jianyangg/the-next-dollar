@@ -104,7 +104,8 @@ export interface SellerPort {
   ): Promise<AnswerOutcome>;
 }
 
-export type SessionErrorCode = Exclude<ApiError['error'], 'internal' | 'rate-limited'>;
+// invalid-run is checked by the Worker before a request reaches a session.
+export type SessionErrorCode = Exclude<ApiError['error'], 'internal' | 'rate-limited' | 'invalid-run'>;
 export type SessionResult<T> = { ok: true; value: T } | { ok: false; error: SessionErrorCode };
 
 const rawQuestionSchema = z.strictObject({ question: z.string() });
@@ -369,7 +370,7 @@ export function createSellerService(env: Env): SellerService {
   });
 }
 
-/** One instance of this class exists per deal id (the Worker uses `idFromName(dealId)`). */
+/** One instance of this class exists per (run, deal) pair (the Worker uses `idFromName(`${runId}:${dealId}`)`). */
 export class DealSessionDO implements DurableObject {
   private readonly session: DealSession;
 

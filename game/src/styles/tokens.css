@@ -1,0 +1,151 @@
+/*
+ * "Paper Trail" design tokens: the ONLY place raw colours, fonts, sizes and timings live.
+ *
+ * Every component stylesheet uses these names (var(--…)) instead of typing its own
+ * numbers. That is what makes twenty screens look like one game: change a value
+ * here and every screen follows. A guard test (src/styles/styleGuard.test.ts) fails
+ * if a component stylesheet types a raw hex colour or a font size under 16px.
+ *
+ * THE DESIGN IN ONE PARAGRAPH
+ *   Three surfaces, each with exactly one meaning, so the player always knows who is
+ *   "speaking":
+ *     - SIGN  (off-white plate, lemon-yellow cap/title bar) = game controls: HUD,
+ *                                     prompts, menus, windows.
+ *     - PAPER (cream ledger sheet)  = real numbers from the game engine: Books,
+ *                                     end-of-day receipt, a seller's books, money chips.
+ *     - BALLOON (white speech)      = what a seller SAYS (may be true, may be spin).
+ *   Plus one recurring device, THE LINE: yellow-and-dark HAZARD STRIPES that always mean
+ *   "the 5% daily cost of money tied up". The UI itself is sunny yellow, so plain yellow
+ *   can no longer carry that meaning; the stripe pattern does ("caution: this costs
+ *   you"). Same picture everywhere, so the game's one key concept is learned by sight.
+ */
+:root {
+  /* ---- SIGN surface (controls) ---- */
+  --sign: #fffaf0; /* off-white plate */
+  --sign-2: #ffefb3; /* inset: tracks, selected menu row (pale lemon) */
+  --sign-text: #2b2118; /* warm near-black ink */
+  --sign-dim: #6b5a2e;
+  --title: #ffd84d; /* lemon title bar / cap on every sign */
+
+  /* ---- PAPER surface (engine numbers) ---- */
+  --paper: #f4ecd8;
+  --paper-2: #e6dabd; /* totals row, pointed-at row */
+  --rule: #c7b88f; /* ledger rules */
+  --ink: #1f1b16;
+  --ink-dim: #5a5142;
+
+  /* ---- BALLOON surface (seller speech) ---- */
+  --balloon: #ffffff;
+  --highlight: #ffe9a3; /* a number in speech that matches a books cell */
+
+  /* ---- THE LINE (5% cost of money tied up): drawn as hazard stripes of these ---- */
+  --line: #f2c144;
+  --line-dark: #b98a12;
+  --line-light: #fbe7a1; /* the pale fill behind text on a 5% row or chip */
+  /* Controls: the menu cursor, focus rings, primary buttons, progress (sky blue, so it
+     never reads as the 5% line or as a title bar). */
+  --accent: #5aa9e6;
+  --warn-sign: #c25e00; /* "running low" (patience), between gain and cost */
+
+  /* ---- Money direction. Always shown WITH a + or − sign, never colour alone ---- */
+  --gain-paper: #1a6b37;
+  --cost-paper: #b3261e;
+  /* On the light signs the dark paper greens/reds are the readable ones. */
+  --gain-sign: #1a6b37;
+  --cost-sign: #b3261e;
+  --sticker: #ffd0c9; /* found-fact sticker on a books row */
+
+  /* ---- Key bullets (round route markers holding the key to press) ---- */
+  --key-act: #2f6fd6; /* act: E, Space, F */
+  --key-nav: #e8791c; /* navigate: M map, B books */
+  --key-text: #ffffff;
+
+  /* ---- Scene backdrops ---- */
+  --dusk: #6fb8de; /* river water on the map */
+  --land: #9fd38a; /* the shores beside Manhattan on the map */
+  --stage-bg: #87c9e8; /* behind the canvas before the scene draws */
+  /* Behind full-screen windows: a light warm wash, so the park still shows through. */
+  --scrim: rgba(255, 246, 222, 0.6);
+  --outline: #2b2118; /* warm dark brown: softer than black, still a crisp pixel edge */
+  --drop: rgba(43, 33, 24, 0.35); /* hard offset shadow, never blurred */
+  --pop-fill: #fffaf0; /* outlined text floating over the 3D scene */
+
+  /* ---- Type ----
+   * Jersey 20     big numbers, titles, prompts (pixel display face)
+   * Overpass      labels and speech (readable at length)
+   * Overpass Mono table numerals: every digit the same width, so columns line up
+   * All three are SIL Open Font Licence and self-hosted (src/styles/fonts.ts).
+   */
+  --f-display: 'Jersey 20', 'Courier New', monospace;
+  --f-body: 'Overpass', 'Helvetica Neue', Arial, sans-serif;
+  --f-num: 'Overpass Mono', 'Courier New', monospace;
+
+  /* Type scale. 16px is the floor: "no fine print, it's a game". */
+  --t-small: 16px; /* captions, column heads */
+  --t-body: 18px; /* labels */
+  --t-read: 21px; /* speech, table rows */
+  --t-big: 24px; /* menu items, chip numbers */
+  --t-title: 30px;
+  --t-hero: 40px; /* HUD cash */
+  --t-giant: 54px; /* bid dial, final value */
+
+  /* ---- Frame system ---- */
+  --px: 4px; /* one "UI pixel": outline width, shadow step */
+  --shadow: 6px 6px 0 var(--drop);
+  --shadow-sm: 4px 4px 0 var(--drop);
+
+  /* ---- Spacing scale ---- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  /* ---- Motion ----
+   * Panels and the cursor move in visible steps (steps()), like sprite animation,
+   * instead of a smooth web-app ease. Count-ups and stamps use real easing because
+   * they carry the "money arriving" feeling.
+   */
+  --dur-cursor: 80ms;
+  --dur-panel: 160ms;
+  --dur-tally-row: 280ms; /* gap between end-of-day rows printing */
+  --dur-count: 600ms;
+  --dur-stamp: 120ms;
+  --dur-chip: 1800ms; /* how long a money chip stays in the world */
+  --ease-count: cubic-bezier(0.215, 0.61, 0.355, 1); /* ease-out cubic */
+  --ease-stamp: cubic-bezier(0.2, 1.6, 0.4, 1); /* overshoot */
+
+  /* ---- Layers (z-index). One list, so nothing fights for "999" ---- */
+  /* Height kept clear under the top HUD plates, so docked panels (Books, the stand
+     menu) never cover the day, clock or value line. */
+  --hud-clear: 140px;
+  /* Space kept clear for the bottom-right key row (M Map, B Books, sound): its plates
+     are 52px tall + shadow, sitting 16px from the bottom; the row is at most 360px wide. */
+  --dock-clear-h: 88px;
+  --dock-clear-w: 360px;
+  --z-world: 10; /* prompts, chips, patience bars */
+  --z-hud: 20;
+  --z-dock: 30;
+  --z-drawer: 40;
+  --z-modal: 50;
+  --z-top: 60; /* founder select, first-run */
+}
+
+/* Base text for the whole UI. */
+body {
+  font-family: var(--f-body);
+  font-size: var(--t-body);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}

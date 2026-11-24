@@ -24,12 +24,21 @@
  * actor, built by the caller from the full `Deal` and the live cash balance.
  *
  * NO FALLBACK DATA
- * If the seller's service fails, the machine records the failure (`pitchError`,
- * `qa[i].error`) and invents no text. The UI renders an explicit "unavailable" state.
+ * If the seller's service fails, the machine records the failure and invents no text;
+ * the UI renders an explicit "unavailable" state. The server sometimes answers with
+ * stand-in words of its own: a scripted "template" pitch (AI off or failed) or a
+ * "neutral" line (an answer failed). The machine does NOT keep those as the seller's
+ * words: a template pitch becomes `sellerOffline` (no pitch text, no questions) and a
+ * neutral answer becomes `status: 'no-answer'` with `a: null`. Only words the AI seller
+ * actually said, after passing the server's checks, are shown as speech.
+ *
+ * QUESTION COUNT
+ * The server is the authority (it refunds failed answers, caps model calls), so the
+ * machine stores the server's `questionsRemaining` instead of counting locally.
  *
  * ACTORS THE CALLER MUST PROVIDE (via `dealMachine.provide({ actors: { ... } })`)
- * - `fetchPitch`  ({deal}) -> {text, questionsEnabled}
- * - `askSeller`   ({deal, history, question}) -> {text}
+ * - `fetchPitch`  ({deal}) -> the server's PitchResponse {text, source, questionsEnabled, questionsRemaining}
+ * - `askSeller`   ({deal, history, question}) -> the server's QuestionResponse {text, source, questionsRemaining, refunded}
  * - `resolveBid`  ({bid}) -> BidResolution-like result; it should also apply any
  *   state change (cash, ownership) as a side effect, because the machine keeps only
  *   the verdict, not the resulting game state.
@@ -37,7 +46,7 @@
  *
  * STATE CHART
  *   loadingPitch --pitch ok--> open
- *   loadingPitch --pitch error--> open (pitch: null, pitchError: true, questions off)
+ *   loadingPitch --pitch error or template--> open (pitch: null, sellerOffline, questions off)
  *   open.idle --ASK [guard]--> open.answering --done/error--> open.idle
  *   open.idle --SUBMIT_BID [bid finite and > 0]--> open.resolving
  *   open.resolving --won--> won (final) | --rejected--> rejected (final)
@@ -46,16 +55,25 @@
  *   CLOSE_PANEL: accepted by no state on purpose; closing the modal is UI-only.
  */
 import { assign, fromPromise, setup, type SnapshotFrom } from 'xstate';
+import type { PitchResponse, QuestionResponse } from '../../shared/sellerReply';
 import type { BidResolution, PublicDealView } from '../core/deal';
+import { SellerApiError } from './sellerClient';
 import { MAX_QUESTION_CHARS, MAX_QUESTIONS } from './limits';
 
 export { MAX_QUESTION_CHARS, MAX_QUESTIONS };
 
 export interface QaEntry {
   q: string;
-  /** null when the seller call failed; `error` is then true. Never invented text. */
+  /** The AI seller's checked answer; null unless status is 'answered'. Never invented text. */
   a: string | null;
-  error?: true;
+  /**
+   * answered:  the seller replied (a holds the words)
+   * no-answer: the server could not get a valid answer (its neutral line is not shown)
+   * error:     the request itself failed (network, closed deal, limit)
+   */
+  status: 'answered' | 'no-answer' | 'error';
+  /** True when the server did not charge this question against the limit. */
+  refunded: boolean;
 }
 
 export type BidError =
@@ -69,8 +87,11 @@ export type DealOutcome = 'won' | 'rejected' | 'walkedAway';
 export interface DealContext {
   deal: PublicDealView;
   pitch: string | null;
-  pitchError: boolean;
+  /** The seller is not talking: the pitch failed, or the server sent its scripted template. */
+  sellerOffline: boolean;
   questionsEnabled: boolean;
+  /** From the server; the client never counts on its own. */
+  questionsRemaining: number;
   qa: QaEntry[];
   /** The question currently being answered (only meaningful in open.answering). */
   pendingQuestion: string | null;
@@ -108,21 +129,17 @@ export const dealMachine = setup({
     output: {} as { outcome: DealOutcome; bid?: number },
   },
   actors: {
-    fetchPitch: fromPromise<
-      { text: string; questionsEnabled: boolean },
-      { deal: PublicDealView }
-    >(notProvided('fetchPitch')),
-    askSeller: fromPromise<
-      { text: string },
-      { deal: PublicDealView; history: QaEntry[]; question: string }
-    >(notProvided('askSeller')),
+    fetchPitch: fromPromise<PitchResponse, { deal: PublicDealView }>(notProvided('fetchPitch')),
+    askSeller: fromPromise<QuestionResponse, { deal: PublicDealView; history: QaEntry[]; question: string }>(
+      notProvided('askSeller')
+    ),
     resolveBid: fromPromise<BidVerdict, { bid: number }>(notProvided('resolveBid')),
   },
   guards: {
     canAskNow: ({ context, event }) =>
       event.type === 'ASK' &&
       context.questionsEnabled &&
-      context.qa.length < MAX_QUESTIONS &&
+      context.questionsRemaining > 0 &&
       event.question.trim().length > 0 &&
       event.question.trim().length <= MAX_QUESTION_CHARS,
     validBid: ({ event }) =>
@@ -145,8 +162,9 @@ export const dealMachine = setup({
   context: ({ input }) => ({
     deal: input.deal,
     pitch: null,
-    pitchError: false,
+    sellerOffline: false,
     questionsEnabled: false,
+    questionsRemaining: 0,
     qa: [],
     pendingQuestion: null,
   }),
@@ -158,14 +176,23 @@ export const dealMachine = setup({
         input: ({ context }) => ({ deal: context.deal }),
         onDone: {
           target: 'open',
-          actions: assign({
-            pitch: ({ event }) => event.output.text,
-            questionsEnabled: ({ event }) => event.output.questionsEnabled,
+          actions: assign(({ event }) => {
+            const r = event.output;
+            // A scripted template is not the seller speaking: treat it as offline.
+            if (r.source === 'template') {
+              return { pitch: null, sellerOffline: true, questionsEnabled: false, questionsRemaining: 0 };
+            }
+            return {
+              pitch: r.text,
+              sellerOffline: false,
+              questionsEnabled: r.questionsEnabled,
+              questionsRemaining: r.questionsRemaining,
+            };
           }),
         },
         onError: {
           target: 'open',
-          actions: assign({ pitch: null, pitchError: true, questionsEnabled: false }),
+          actions: assign({ pitch: null, sellerOffline: true, questionsEnabled: false, questionsRemaining: 0 }),
         },
       },
     },
@@ -189,23 +216,39 @@ export const dealMachine = setup({
             }),
             onDone: {
               target: 'idle',
-              actions: assign({
-                qa: ({ context, event }) => [
-                  ...context.qa,
-                  { q: context.pendingQuestion ?? '', a: event.output.text },
-                ],
-                pendingQuestion: null,
+              actions: assign(({ context, event }) => {
+                const r = event.output;
+                const answered = r.source === 'model';
+                return {
+                  qa: [
+                    ...context.qa,
+                    {
+                      q: context.pendingQuestion ?? '',
+                      a: answered ? r.text : null,
+                      status: answered ? ('answered' as const) : ('no-answer' as const),
+                      refunded: r.refunded,
+                    },
+                  ],
+                  questionsRemaining: r.questionsRemaining,
+                  pendingQuestion: null,
+                };
               }),
             },
             onError: {
-              // The question still counts: the server may have processed it.
               target: 'idle',
-              actions: assign({
-                qa: ({ context }) => [
-                  ...context.qa,
-                  { q: context.pendingQuestion ?? '', a: null, error: true as const },
-                ],
-                pendingQuestion: null,
+              actions: assign(({ context, event }) => {
+                const code = event.error instanceof SellerApiError ? event.error.code : null;
+                // Learn what we can from the server's refusal; otherwise keep the last known count.
+                const closed = code === 'deal-closed' || code === 'questions-disabled';
+                return {
+                  qa: [
+                    ...context.qa,
+                    { q: context.pendingQuestion ?? '', a: null, status: 'error' as const, refunded: false },
+                  ],
+                  questionsEnabled: closed ? false : context.questionsEnabled,
+                  questionsRemaining: code === 'question-limit' || closed ? 0 : context.questionsRemaining,
+                  pendingQuestion: null,
+                };
               }),
             },
           },
@@ -246,7 +289,7 @@ export type DealSnapshot = SnapshotFrom<typeof dealMachine>;
 /** Questions the player may still ask (0 when disabled, finished or limit reached). */
 export function questionsLeft(snapshot: DealSnapshot): number {
   if (!snapshot.context.questionsEnabled) return 0;
-  return Math.max(0, MAX_QUESTIONS - snapshot.context.qa.length);
+  return Math.max(0, Math.min(MAX_QUESTIONS, snapshot.context.questionsRemaining));
 }
 
 /** True when the UI should offer the question box: an ASK would be accepted. */

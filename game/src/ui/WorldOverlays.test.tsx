@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../audio/soundEngine', () => ({ soundEngine: new Proxy({}, { get: () => () => {} }) }));
 
+import { salePopLabel } from '../core/sales';
 import { resetAnchorStore } from '../state/anchorStore';
 import { resetGameStore, useGameStore } from '../state/gameStore';
 import { SalePopLayer, ToastLayer } from './WorldOverlays';
@@ -37,7 +38,7 @@ describe('ToastLayer / SalePopLayer enter and exit', () => {
     expect(screen.queryByText('+$2.00 Sale')).toBeNull();
 
     act(() => {
-      useGameStore.setState({ toasts: [{ id: 1, text: '+$2.00 Sale', tone: 'positive', anchor: 'own-stand' }] });
+      useGameStore.setState({ toasts: [{ id: 1, text: '+$2.00 Sale', tone: 'positive', anchor: 'own-stand', chips: [] }] });
     });
     expect(screen.getByText('+$2.00 Sale')).not.toBeNull();
 
@@ -49,6 +50,31 @@ describe('ToastLayer / SalePopLayer enter and exit', () => {
     await vi.waitFor(() => expect(screen.queryByText('+$2.00 Sale')).toBeNull(), { timeout: 3000 });
   });
 
+  it('renders money chips next to its text', () => {
+    render(
+      <MotionConfig reducedMotion="always">
+        <LazyMotion features={domAnimation} strict>
+          <ToastLayer />
+        </LazyMotion>
+      </MotionConfig>
+    );
+    act(() => {
+      useGameStore.setState({
+        toasts: [
+          {
+            id: 2,
+            text: 'Bought',
+            tone: 'neutral',
+            anchor: 'own-stand',
+            chips: [{ kind: 'cash', delta: -10 }],
+          },
+        ],
+      });
+    });
+    expect(screen.getByText('Bought')).not.toBeNull();
+    expect(screen.getByLabelText('CASH -$10.00')).not.toBeNull();
+  });
+
   it('shows and then removes a sale pop the same way', async () => {
     render(
       <MotionConfig reducedMotion="always">
@@ -58,12 +84,14 @@ describe('ToastLayer / SalePopLayer enter and exit', () => {
       </MotionConfig>
     );
     act(() => {
-      useGameStore.setState({ salePops: [{ id: 7, text: '+$3 x4', combo: 4, isPerfect: false }] });
+      useGameStore.setState({ salePops: [{ id: 7, text: salePopLabel(3, 4), combo: 4, isPerfect: false }] });
     });
-    expect(screen.getByText('+$3 x4')).not.toBeNull();
+    // The pop splits the engine text: the money big, the combo count in its own span.
+    expect(screen.getByText('+$3')).not.toBeNull();
+    expect(screen.getByText('x4')).not.toBeNull();
     act(() => {
       useGameStore.setState({ salePops: [] });
     });
-    await vi.waitFor(() => expect(screen.queryByText('+$3 x4')).toBeNull(), { timeout: 3000 });
+    await vi.waitFor(() => expect(screen.queryByText('+$3')).toBeNull(), { timeout: 3000 });
   });
 });

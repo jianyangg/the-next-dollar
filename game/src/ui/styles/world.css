@@ -1,0 +1,125 @@
+/*
+ * Things that float over the 3D world: the goal plate, [E] prompts, money notes,
+ * sale pops and patience bars (ui/TutorialBar.tsx, WorldPrompts.tsx, WorldOverlays.tsx).
+ * Everything comes from tokens.css; the surfaces (pt-sign, pt-paper, pt-track,
+ * pt-outlined) come from kit.css.
+ */
+
+/* ---------- Goal plate (tutorial), top centre ---------- */
+.pt-sign.world-goal {
+  position: absolute;
+  top: var(--s-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-hud);
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  white-space: nowrap;
+}
+.world-goal-part { display: inline-flex; align-items: center; gap: var(--s-2); }
+.world-goal-words { font-size: var(--t-title); }
+/* Skip is deliberately quiet: a small sign button, not part of the goal. */
+.world-goal-skip {
+  margin-left: var(--s-2);
+  padding: 2px var(--s-3) 0;
+  background: var(--sign-2);
+  color: var(--sign-dim);
+  border: 3px solid var(--outline);
+  font-family: var(--f-display);
+  font-size: var(--t-body);
+  cursor: pointer;
+}
+.world-goal-skip:hover { color: var(--sign-text); }
+.world-goal-skip:focus-visible { outline: var(--px) solid var(--accent); outline-offset: 2px; }
+
+/* ---------- [E] prompts and market signs ---------- */
+/* Anchored buttons: useAnchorPoint writes left/top; this transform centres the plate
+   above the point. The bob swaps between two transforms in 2 hard steps, like a sprite. */
+.pt-sign.world-sign {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  z-index: var(--z-world);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3) var(--s-1);
+  white-space: nowrap;
+  cursor: pointer;
+  font: inherit;
+  animation: world-bob 1s steps(1, end) infinite;
+}
+.world-sign:hover { background: var(--sign-2); }
+.world-sign:focus-visible { outline: var(--px) solid var(--accent); outline-offset: 2px; }
+/* A market sign you are not standing at stays still and a little quieter. */
+.world-sign.is-idle { animation: none; }
+.world-sign-word { font-size: var(--t-big); }
+.world-sign-icon { width: 28px; height: 28px; image-rendering: pixelated; }
+/* The seller's asking price: a small paper tag on the sign. */
+.pt-paper.world-ask {
+  padding: var(--s-1) var(--s-2) 0;
+  border-width: 3px;
+  border-bottom: 3px solid var(--ink);
+  box-shadow: none;
+  font-size: var(--t-body);
+}
+.pt-paper.world-ask::after { display: none; } /* no torn edge on a tiny tag */
+
+@keyframes world-bob {
+  0% { transform: translate(-50%, -100%); }
+  50% { transform: translate(-50%, calc(-100% - 4px)); }
+}
+
+/* ---------- Floating notes and sale pops ---------- */
+/* Anchored wrapper: useAnchorPoint writes left/top; Motion animates the inner elements. */
+.world-anchor {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
+  z-index: var(--z-world);
+}
+.world-anchor.is-pop { z-index: calc(var(--z-world) + 1); }
+
+.world-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  white-space: nowrap;
+}
+/* Tone colours are the SIGN-surface money colours; specificity beats pt-outlined's colour. */
+.pt-outlined.world-note-text { font-size: var(--t-title); color: var(--sign-text); }
+.world-note.is-positive .world-note-text { color: var(--gain-sign); }
+.world-note.is-negative .world-note-text { color: var(--cost-sign); }
+
+.world-pop {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-size: var(--t-hero);
+  white-space: nowrap;
+}
+.world-pop.is-hot { font-size: var(--t-giant); }
+.world-pop.is-fire { font-size: var(--t-giant); }
+.world-pop.is-perfect { font-size: var(--t-giant); color: var(--accent); }
+/* The combo count wears the control blue; yellow is kept for the 5% line. */
+.pt-outlined .world-pop-combo { font-size: var(--t-title); color: var(--accent); }
+
+/* ---------- Customer patience bars ---------- */
+.world-patience {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  pointer-events: none;
+  z-index: var(--z-world);
+}
+.world-patience-track { width: 64px; }
+/* The kit's pt-track > i is positioned by the kit; the fill colour is set per frame. */
+.pt-sign.world-next {
+  padding: 2px var(--s-2) 0;
+  font-size: var(--t-small);
+  box-shadow: none;
+}

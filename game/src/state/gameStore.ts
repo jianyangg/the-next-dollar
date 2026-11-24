@@ -1,20 +1,22 @@
+import { type Actor, createActor, fromPromise } from 'xstate';
 import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { applyBrewOutcome, type BrewKind, type BrewTier, pickChallenge, type StirKey } from '../core/brewing';
 import { advanceClock, type ClockSpeed, isClockPaused } from '../core/clock';
 import { closeDay as closeBooks, startNextDay as advanceToNextDay } from '../core/dayEnd';
-import { CENTRAL_PARK_DEAL, resolveSealedBid } from '../core/deal';
+import { CENTRAL_PARK_DEAL, CENTRAL_PARK_DEAL_ID, resolveSealedBid, toPublicView } from '../core/deal';
 import { type BrewGameState, initGame, pressGame, pressStirKey, stepGame } from '../core/minigames';
 import { getNeighborhood, type NeighborhoodId } from '../core/neighborhoods';
 import * as Purchases from '../core/purchases';
+import { ledgerChips, type MoneyChip } from '../core/ledgerChips';
 import { gameplayRandom } from '../core/runRandom';
 import { applySale, applyWalkout, salePopLabel } from '../core/sales';
-import { answerSellerQuestion } from '../core/sellerQuestions';
+import { dealMachine } from '../deal/dealMachine';
+import { type DealView, toDealView } from '../deal/dealView';
+import { createSellerClient, getRunId, type SellerClient } from '../deal/sellerClient';
 import {
   createInitialState,
-  createReviewFromPatience,
   type DayRecord,
-  type LedgerToast,
   MANAGER_DAILY_WAGE,
   type SliceState,
   STALL_KIT_COST,
@@ -64,11 +66,6 @@ import {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-export interface QaEntry {
-  q: string;
-  a: string;
-}
 
 export interface SalePop {
   id: number;
@@ -130,19 +127,30 @@ export interface GameData {
   muted: boolean;
 
   // --- feedback (floating text) and the id counters that name each item ---
-  toasts: LedgerToast[];
+  toasts: WorldNote[];
   salePops: SalePop[];
   nextToastId: number;
   nextPopId: number;
   nextReviewId: number;
 
-  // --- seller deal ui ---
-  qaLog: QaEntry[];
-  bidMessage: string | null;
+  // --- seller deal (a render-ready view of the deal machine; null until first opened) ---
+  deal: DealView | null;
 }
 
-export type ToastTone = LedgerToast['tone'];
-export type ToastAnchor = LedgerToast['anchor'];
+export type ToastTone = 'positive' | 'neutral' | 'negative';
+export type ToastAnchor = 'own-stand' | 'seller-stand';
+
+/**
+ * A note floating above a stand: a few words (`text`), the money that moved (`chips`,
+ * computed by core/ledgerChips), or both. Never a sentence: the UI shows it large.
+ */
+export interface WorldNote {
+  id: number;
+  text: string | null;
+  tone: ToastTone;
+  anchor: ToastAnchor;
+  chips: MoneyChip[];
+}
 
 export interface GameActions {
   // ui / meta
@@ -159,8 +167,8 @@ export interface GameActions {
   closeBooks: () => void;
   openModal: (modal: Exclude<ActiveModal, null>, opts?: { click?: boolean }) => void;
   closeModal: () => void;
-  /** "Walk Away" on the seller dossier. */
-  walkAwayFromSeller: () => void;
+  /** Walk away from the seller for good (the deal is final for the career). */
+  walkAwayFromDeal: () => void;
   skipTutorial: () => void;
   /** Escape key: closes the top-most layer (founder, map, modal, stand, books). */
   handleEscape: () => void;
@@ -201,13 +209,31 @@ export interface GameActions {
   closeDay: () => void;
   startNextDay: () => void;
 
-  // seller deal
-  askQuestion: (rawQuestion: string) => void;
-  submitSealedBid: (bidInput: string) => void;
+  // seller deal (each forwards to the deal machine, which enforces the rules)
+  askSeller: (question: string) => void;
+  submitBid: (bid: number) => void;
 }
 
 export interface GameState extends GameData {
   actions: GameActions;
+}
+
+// ---------------------------------------------------------------------------
+// Seller deal: one machine actor and one server client per run (module-level so the
+// store's actions and resetGameStore share them; tests swap the client in).
+// ---------------------------------------------------------------------------
+
+let dealActor: Actor<typeof dealMachine> | null = null;
+let sellerClient: SellerClient | null = null;
+
+function getSellerClient(): SellerClient {
+  sellerClient ??= createSellerClient({ runId: getRunId() });
+  return sellerClient;
+}
+
+/** Tests only: talk to a fake seller server instead of /api. */
+export function setSellerClientForTests(client: SellerClient | null): void {
+  sellerClient = client;
 }
 
 // ---------------------------------------------------------------------------
@@ -244,8 +270,7 @@ export function createInitialGameData(): GameData {
     nextToastId: 1,
     nextPopId: 1,
     nextReviewId: 1,
-    qaLog: [],
-    bidMessage: null,
+    deal: null,
   };
 }
 
@@ -294,12 +319,21 @@ export const useGameStore = create<GameState>()(
 
       // ---- feedback helpers --------------------------------------------------
 
-      const pushToast = (text: string, tone: ToastTone, anchor: ToastAnchor = 'own-stand'): void => {
+      /**
+       * Float a short note above a stand. `text` is a few words at most (the UI shows it
+       * big, so there is no room for sentences); `chips` are the money that moved.
+       */
+      const pushNote = (
+        text: string | null,
+        tone: ToastTone,
+        anchor: ToastAnchor,
+        chips: MoneyChip[] = []
+      ): void => {
         const id = get().nextToastId;
         patch(
           {
             nextToastId: id + 1,
-            toasts: [...get().toasts.slice(-4), { id, text, tone, anchor }],
+            toasts: [...get().toasts.slice(-4), { id, text, tone, anchor, chips }],
           },
           'pushToast'
         );
@@ -308,6 +342,11 @@ export const useGameStore = create<GameState>()(
           patch({ toasts: get().toasts.filter((t) => t.id !== id) }, 'expireToast');
         }, TOAST_LIFETIME_MS);
       };
+      const pushToast = (text: string, tone: ToastTone, anchor: ToastAnchor = 'own-stand'): void =>
+        pushNote(text, tone, anchor);
+      /** Money chips computed from the economy before and after an action (core/ledgerChips). */
+      const pushLedger = (before: SliceState, anchor: ToastAnchor, text: string | null = null): void =>
+        pushNote(text, 'neutral', anchor, ledgerChips(before, get().economy));
 
       const pushSalePop = (text: string, comboCount: number, isPerfect = false): void => {
         const id = get().nextPopId;
@@ -341,7 +380,7 @@ export const useGameStore = create<GameState>()(
         if (get().tutorialActive && next.totalRevenue > 0) {
           patch({ tutorialActive: false }, 'completeTutorial');
           soundEngine.playPerfect();
-          pushToast('Tutorial complete! Build your NYC empire before Day 30.', 'positive', 'own-stand');
+          pushToast('Tutorial done', 'positive', 'own-stand');
         }
       };
 
@@ -383,14 +422,14 @@ export const useGameStore = create<GameState>()(
         patch({ spaceHeld: false, brewGame: null, brewedCups }, 'finishBrew');
         if (tier === 'perfect') {
           soundEngine.playPerfect();
-          pushSalePop(`✨ PERFECT BREW! +${added}`, Math.max(3, get().combo), true);
-          pushToast(`✨ PERFECT BREW! +${added}`, 'positive', 'own-stand');
+          // One celebration only: the pop at the stand (it used to fire a toast too).
+          pushSalePop(`Perfect +${added}`, Math.max(3, get().combo), true);
         } else if (tier === 'good') {
           soundEngine.playBrew();
-          pushToast(`GOOD BREW! +${added}`, 'positive', 'own-stand');
+          pushToast(`Good +${added}`, 'positive', 'own-stand');
         } else {
           soundEngine.playReject();
-          pushToast(`Sour batch (+${added})`, 'negative', 'own-stand');
+          pushToast(`Sour +${added}`, 'negative', 'own-stand');
         }
       };
 
@@ -426,6 +465,61 @@ export const useGameStore = create<GameState>()(
         getScene()?.burstSaleSparkles(nextCombo);
         pushSalePop(salePopLabel(s.economy.pricePerCup, nextCombo), nextCombo);
         return nextCombo;
+      };
+
+      // ---- seller deal -------------------------------------------------------
+
+      /**
+       * The machine's `resolveBid` step: compare the sealed bid once (core/deal.ts, the
+       * only reader of the hidden minimum), apply the result to the economy, and float
+       * the money that moved. Returns the verdict for the machine.
+       */
+      const resolveBidNow = (bid: number) => {
+        const before = get().economy;
+        const result = resolveSealedBid(before, CENTRAL_PARK_DEAL, bid);
+        if (result.kind === 'won') {
+          commitEconomy(result.state, 'sealedBidWon');
+          soundEngine.playBuy();
+          pushLedger(before, 'seller-stand', 'Stand bought');
+        } else if (result.kind === 'rejected') {
+          commitEconomy(result.state, 'sealedBidRejected');
+          soundEngine.playReject();
+          pushToast('No deal', 'neutral', 'seller-stand');
+        } else {
+          soundEngine.playReject();
+        }
+        return result;
+      };
+
+      /**
+       * Start the deal machine the first time the seller panel opens (that is when the
+       * pitch is requested). One actor per run: a deal is final for the career, so it is
+       * never restarted.
+       */
+      const startDealIfNeeded = (): void => {
+        if (dealActor) return;
+        const client = getSellerClient();
+        const dealId = CENTRAL_PARK_DEAL_ID;
+        const machine = dealMachine.provide({
+          actors: {
+            fetchPitch: fromPromise(() => client.pitch(dealId)),
+            askSeller: fromPromise(({ input }) => client.ask(dealId, input.question)),
+            resolveBid: fromPromise(async ({ input }) => resolveBidNow(input.bid)),
+          },
+        });
+        const actor = createActor(machine, { input: { deal: toPublicView(CENTRAL_PARK_DEAL) } });
+        actor.subscribe((snapshot) => {
+          patch({ deal: toDealView(snapshot) }, 'dealSnapshot');
+          if (snapshot.status !== 'done') return;
+          if (snapshot.output?.outcome === 'walkedAway') {
+            commitEconomy({ ...get().economy, dealStatus: 'walked-away' }, 'dealWalkedAway');
+          }
+          // Free the server's conversation. If this call fails the server's own expiry
+          // closes it within a day, so a warning (not a player-facing error) is right.
+          client.close(dealId).catch((err: unknown) => console.warn('[seller] close failed', err));
+        });
+        dealActor = actor;
+        actor.start();
       };
 
       // ---- the actions -------------------------------------------------------
@@ -474,10 +568,13 @@ export const useGameStore = create<GameState>()(
         openModal: (modal, opts) => {
           if (opts?.click) soundEngine.playClick();
           patch({ activeModal: modal }, 'openModal');
+          if (modal === 'seller-stand') startDealIfNeeded();
         },
+        // Closing the panel is UI only: the deal (and its conversation) stays as it was.
         closeModal: () => patch({ activeModal: null }, 'closeModal'),
-        walkAwayFromSeller: () => {
+        walkAwayFromDeal: () => {
           soundEngine.playClick();
+          dealActor?.send({ type: 'WALK_AWAY' });
           patch({ activeModal: null }, 'walkAway');
         },
 
@@ -491,8 +588,10 @@ export const useGameStore = create<GameState>()(
           if (s.founderModalOpen) actions.closeFounderModal();
           else if (s.mapOpen) actions.closeMap();
           else if (s.activeModal) actions.closeModal();
-          else if (s.workingAtStand) actions.exitStand();
+          // Books before the stand: Books can be open over the stand, and it shows an
+          // "Esc Close" key, so Escape must close the top-most thing the player sees.
           else if (s.booksOpen) actions.closeBooks();
+          else if (s.workingAtStand) actions.exitStand();
         },
 
         // ===== scene events =====
@@ -503,12 +602,12 @@ export const useGameStore = create<GameState>()(
           const id = get().nextReviewId;
           patch({ combo: 0, nextReviewId: id + 1 }, 'walkoutCounters');
           commitEconomy(applyWalkout(get().economy, id), 'applyWalkout');
-          pushToast('★ 1.0 Customer left!', 'negative', 'own-stand');
+          pushToast('Walked out ★1', 'negative', 'own-stand');
         },
 
         taxiHit: () => {
           soundEngine.playHonkKo();
-          pushToast('Beep! Watch the NYC cabs!', 'negative', 'own-stand');
+          pushToast('Honk!', 'negative', 'own-stand');
         },
 
         interact: (target) => {
@@ -544,72 +643,67 @@ export const useGameStore = create<GameState>()(
           );
           soundEngine.playTravel();
           const next = getNeighborhood(id);
-          pushToast(
-            id === 'market'
-              ? `Arrived at ${next.name} · Wholesale Stalls Open!`
-              : `Subway to ${next.name} · Rent $${next.dailyRent}/day`,
-            'neutral',
-            'own-stand'
-          );
+          pushToast(next.shortName, 'neutral', 'own-stand');
         },
 
         // ===== shopping & staff =====
         buyLemons: () => {
+          const before = get().economy;
           if (!runPurchase(Purchases.buyLemons, 'buyLemons').ok) {
             soundEngine.playReject();
-            pushToast(`Not enough cash ($${Purchases.LEMON_CRATE_COST} needed)`, 'negative', 'own-stand');
+            pushToast(`Need $${Purchases.LEMON_CRATE_COST}`, 'negative', 'own-stand');
             return;
           }
           soundEngine.playBuy();
-          pushToast('Cash -$5 · Stock +$5 (+10 cups) · Profit $0', 'neutral', 'own-stand');
+          pushLedger(before, 'own-stand', `+${Purchases.LEMON_CRATE_CUPS} cups`);
         },
 
         buyStallKit: () => {
+          const before = get().economy;
           if (!runPurchase(Purchases.buyStallKit, 'buyStallKit').ok) {
             soundEngine.playReject();
-            pushToast(`Not enough cash ($${STALL_KIT_COST} needed)`, 'negative', 'seller-stand');
+            pushToast(`Need $${STALL_KIT_COST}`, 'negative', 'seller-stand');
             return;
           }
           soundEngine.playBuy();
-          pushToast(
-            `Cash -$${STALL_KIT_COST} · Equip +$${STALL_KIT_COST} (+1 Stall Kit) · Profit $0`,
-            'neutral',
-            'seller-stand'
-          );
+          pushLedger(before, 'seller-stand', '+1 stall kit');
         },
 
         buyPitcher: () => {
+          const before = get().economy;
           if (!runPurchase(Purchases.buyPitcher, 'buyPitcher').ok) {
             soundEngine.playReject();
-            pushToast(`Not enough cash ($${Purchases.PITCHER_COST} needed)`, 'negative', 'seller-stand');
+            pushToast(`Need $${Purchases.PITCHER_COST}`, 'negative', 'seller-stand');
             return;
           }
           soundEngine.playBuy();
-          pushToast('Cash -$10 · Equip +$10 (+1 Pitcher) · Profit $0', 'neutral', 'seller-stand');
+          pushLedger(before, 'seller-stand', '+1 pitcher');
         },
 
         sellUsedPitcher: () => {
+          const before = get().economy;
           if (!runPurchase(Purchases.sellUsedPitcher, 'sellUsedPitcher').ok) {
             soundEngine.playReject();
-            pushToast('No pitchers to sell!', 'negative', 'own-stand');
+            pushToast('No pitcher', 'negative', 'own-stand');
             return;
           }
           soundEngine.playCoin(1);
-          pushToast('Sold Pitcher: Cash +$7 | Equip -$10 | Hurdle -$0.50/d', 'neutral', 'own-stand');
+          pushLedger(before, 'own-stand', '−1 pitcher');
         },
 
         divestCurrentStand: () => {
           const district = get().neighborhoodId;
+          const before = get().economy;
           if (!runPurchase((s) => Purchases.divestStand(s, district), 'divestStand').ok) {
             soundEngine.playReject();
-            pushToast('No built stand in this district to divest!', 'negative', 'own-stand');
+            pushToast('No stand here', 'negative', 'own-stand');
             return;
           }
           leaveStandAndStopLoops();
           // The scene's plot visuals follow the economy through the store subscription.
           patch({ spaceHeld: false, workingAtStand: false, brewedCups: 0 }, 'divestStandCleanup');
           soundEngine.playCoin(1);
-          pushToast('Divested Stand: Cash +$8.40 | Equip -$12 | Hurdle -$0.60/d', 'neutral', 'own-stand');
+          pushLedger(before, 'own-stand', 'Stand sold');
         },
 
         signLease: () => {
@@ -617,11 +711,7 @@ export const useGameStore = create<GameState>()(
           if (!runPurchase((s) => Purchases.signLease(s, district), 'signLease').ok) return;
           const hood = getNeighborhood(district);
           soundEngine.playBuy();
-          pushToast(
-            `Leased ${hood.shortName} Plot ($${hood.dailyRent}/day) — Ready for a Stall Kit!`,
-            'positive',
-            'own-stand'
-          );
+          pushToast(`Leased · rent $${hood.dailyRent}/day`, 'positive', 'own-stand');
         },
 
         buildStandOnPlot: () => {
@@ -630,33 +720,25 @@ export const useGameStore = create<GameState>()(
           if (!result.ok) {
             if (result.reason === 'no-stall-kit') {
               soundEngine.playReject();
-              pushToast(`Need a Stall Kit ($${STALL_KIT_COST}) from Union Sq. Market!`, 'negative', 'own-stand');
+              pushToast('Need a stall kit', 'negative', 'own-stand');
             }
             return;
           }
           patch({ activeModal: null }, 'closeModalAfterBuild');
           soundEngine.playBuy();
-          pushToast(
-            `Stand Built in ${getNeighborhood(district).shortName}! Press [E] to step behind the counter.`,
-            'positive',
-            'own-stand'
-          );
+          pushToast('Stand built', 'positive', 'own-stand');
         },
 
         hireWorker: () => {
           commitEconomy(Purchases.hireWorker(get().economy), 'hireWorker');
           soundEngine.playBuy();
-          pushToast(`Hired Worker ($${WORKER_DAILY_WAGE}/day) · Brew sweet spot widened!`, 'positive', 'own-stand');
+          pushToast(`Worker · $${WORKER_DAILY_WAGE}/day`, 'positive', 'own-stand');
         },
 
         hireManager: () => {
           commitEconomy(Purchases.hireManager(get().economy), 'hireManager');
           soundEngine.playBuy();
-          pushToast(
-            `Hired Manager ($${MANAGER_DAILY_WAGE}/day) · Stand auto-brews & serves!`,
-            'positive',
-            'own-stand'
-          );
+          pushToast(`Manager · $${MANAGER_DAILY_WAGE}/day`, 'positive', 'own-stand');
         },
 
         setPrice: (price) => {
@@ -670,17 +752,17 @@ export const useGameStore = create<GameState>()(
           const { economy: cur, brewedCups } = get();
           if (cur.pitchers < 1) {
             soundEngine.playReject();
-            pushToast('Buy a Glass Pitcher ($10) at Union Sq. Market first!', 'negative', 'own-stand');
+            pushToast('Need a pitcher', 'negative', 'own-stand');
             return;
           }
           if (cur.cupsInStock <= 0) {
             soundEngine.playReject();
-            pushToast('No lemons left! Visit Union Sq. Supply Market', 'negative', 'own-stand');
+            pushToast('No lemons', 'negative', 'own-stand');
             return;
           }
           if (brewedCups >= cur.cupsInStock) {
             soundEngine.playClick();
-            pushToast('All lemons already brewed & ready to serve!', 'neutral', 'own-stand');
+            pushToast('All brewed', 'neutral', 'own-stand');
             return;
           }
 
@@ -754,7 +836,7 @@ export const useGameStore = create<GameState>()(
           if (s.economy.day > s.economy.maxDays) return;
           if (s.brewedCups < 1 || s.economy.cupsInStock < 1) {
             soundEngine.playReject();
-            pushToast('Brew a pitcher first!', 'negative', 'own-stand');
+            pushToast('Brew first', 'negative', 'own-stand');
             return;
           }
           if (anchorStore.getState().queue.length === 0) {
@@ -781,13 +863,9 @@ export const useGameStore = create<GameState>()(
             const latest = get().economy;
             if (latest.cupsInStock <= 0) return;
 
-            const reviewPreview = createReviewFromPatience(served.patienceRatio, get().nextReviewId);
+            // The sale pop ("+$2", combo) is the whole celebration; a second toast
+            // repeating the cash in a sentence was noise.
             completeSale(served.patienceRatio);
-            pushToast(
-              `+$${latest.pricePerCup} Cash · ★ ${reviewPreview.stars.toFixed(1)}`,
-              reviewPreview.stars >= 4 ? 'positive' : 'neutral',
-              'own-stand'
-            );
           };
           setServeFrame(requestAnimationFrame(tick));
         },
@@ -825,7 +903,9 @@ export const useGameStore = create<GameState>()(
 
           // Step out of stand and cancel any active brew/pour timers at the 8:00 PM bell.
           leaveStandAndStopLoops();
-          // Unserved brewed lemonade in the pitcher spoils overnight; raw lemons in crate stay.
+          // The pitcher is emptied at closing. Those cups' worth were never taken out of
+          // cupsInStock, so they simply count as lemons again tomorrow: nothing is lost
+          // (there is no spoilage rule yet).
           commitEconomy(closed.state, 'closeDay', {
             spaceHeld: false,
             workingAtStand: false,
@@ -842,34 +922,14 @@ export const useGameStore = create<GameState>()(
         },
 
         // ===== seller deal =====
-        askQuestion: (rawQuestion) => {
-          const trimmed = rawQuestion.trim();
-          const s = get();
-          if (!trimmed || s.qaLog.length >= 3 || s.economy.dealStatus !== 'open') return;
+        askSeller: (question) => {
+          if (!get().deal?.canAsk) return;
           soundEngine.playClick();
-          patch({ qaLog: [...s.qaLog, { q: trimmed, a: answerSellerQuestion(trimmed) }] }, 'askQuestion');
+          dealActor?.send({ type: 'ASK', question });
         },
 
-        submitSealedBid: (bidInput) => {
-          const bid = Number(bidInput);
-          // The hidden minimum is compared only inside core/deal.ts.
-          const result = resolveSealedBid(get().economy, CENTRAL_PARK_DEAL, bid);
-          if (result.kind === 'deal-closed' || result.kind === 'invalid') return;
-          if (result.kind === 'insufficient-cash') {
-            soundEngine.playReject();
-            patch({ bidMessage: `Insufficient cash: you have $${result.cash.toFixed(2)}.` }, 'bidInsufficient');
-            return;
-          }
-          commitEconomy(result.state, 'sealedBid');
-          if (result.kind === 'won') {
-            soundEngine.playBuy();
-            patch({ bidMessage: `Accepted! Stand joined your chain at $${bid}.` }, 'bidWon');
-            pushToast(`Acquired Stand · Cash -$${bid} · Equip +$${bid}`, 'positive', 'seller-stand');
-          } else {
-            soundEngine.playReject();
-            patch({ bidMessage: `Seller declined your $${bid} bid and walked away. Deal closed.` }, 'bidRejected');
-            pushToast(`Bid $${bid} Rejected — Cash Preserved`, 'neutral', 'seller-stand');
-          }
+        submitBid: (bid) => {
+          dealActor?.send({ type: 'SUBMIT_BID', bid });
         },
       };
 
@@ -886,6 +946,8 @@ export const useGameStore = create<GameState>()(
  */
 export function resetGameStore(): void {
   cancelAllTimers();
+  dealActor?.stop();
+  dealActor = null;
   useGameStore.setState(createInitialGameData(), false, 'resetGameStore');
 }
 

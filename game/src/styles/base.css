@@ -1,0 +1,50 @@
+/*
+ * Page-level base rules: the reset, the full-screen stage the 3D canvas fills, and
+ * crisp scaling for pixel art. Everything visual beyond this lives in kit.css and the
+ * per-screen sheets under src/ui/styles/. Colours come from tokens.css only.
+ */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--stage-bg);
+  color: var(--sign-text);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
+/* Sprites and portraits are drawn small and scaled up: keep the pixels square. */
+.pixel-portrait {
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* The stage: the canvas fills it, and every UI layer is absolutely positioned on top. */
+.game-stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.game-canvas-mount {
+  width: 100%;
+  height: 100%;
+}

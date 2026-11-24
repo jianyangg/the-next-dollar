@@ -2,12 +2,6 @@ import { NeighborhoodId } from './neighborhoods';
 
 export type PlotStatus = 'empty' | 'leased' | 'built';
 
-export interface LedgerToast {
-  id: number;
-  text: string;
-  tone: 'positive' | 'neutral' | 'negative';
-  anchor: 'own-stand' | 'seller-stand';
-}
 
 export interface CustomerReview {
   id: number;
@@ -62,7 +56,8 @@ export interface SliceState {
   reviews: CustomerReview[];
   ratingAvg: number;
   // Seller deal (down the block)
-  dealStatus: 'open' | 'won' | 'rejected';
+  /** GDD: a deal is final for the whole career once won, rejected or walked away from. */
+  dealStatus: 'open' | 'won' | 'rejected' | 'walked-away';
   dealBidPrice: number | null;
   ownedStands: number;
 }
@@ -72,8 +67,6 @@ export const CENTRAL_PARK_RENT = 2;
 export const WORKER_DAILY_WAGE = 3;
 export const MANAGER_DAILY_WAGE = 5;
 export const STALL_KIT_COST = 12;
-export const SELLER_ASK = 60;
-export const SELLER_HIDDEN_MIN = 42;
 
 export function createInitialState(): SliceState {
   return {

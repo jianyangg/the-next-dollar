@@ -1,0 +1,92 @@
+/*
+ * Founder select: a row of sprites on a SIGN window, ▶ cursor on the one you would play.
+ * Classes start with `fpick-` because the legacy sheet still owns `founder-*` for now.
+ */
+.fpick-scrim { z-index: var(--z-top); } /* above every other window: it is the opening screen */
+
+.fpick-window {
+  width: min(900px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.fpick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.fpick-title {
+  margin: 0;
+  font-size: var(--t-hero);
+  color: var(--sign-text);
+}
+.fpick-stats { display: flex; gap: var(--s-2); }
+
+/* The kit menu rows are wide horizontal buttons; here each one is a tall character card. */
+.pt-menu.fpick-menu { gap: var(--s-2); flex-wrap: nowrap; } /* 2 classes: beats the kit's .pt-menu.is-row */
+.fpick-menu > li { flex: 1; min-width: 0; }
+.fpick-menu .pt-menu-item {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  height: 100%;
+  padding: var(--s-3) var(--s-2);
+}
+/* The ▶ sits above the sprite; transparent until the cursor is on this card. */
+.fpick-menu .pt-menu-item::before { transform: rotate(90deg); }
+
+.fpick-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  text-align: center;
+}
+.fpick-figure {
+  display: grid;
+  place-items: end center;
+  width: 112px;
+  height: 140px;
+}
+.fpick-sprite {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated; /* crisp sprite pixels, never smoothed */
+}
+.fpick-name {
+  font-size: var(--t-title);
+  color: var(--sign-text);
+}
+.fpick-trait {
+  font-family: var(--f-body);
+  font-size: var(--t-body);
+  font-weight: 700;
+  color: var(--sign-dim);
+}
+.fpick-current {
+  font-family: var(--f-body);
+  font-size: var(--t-small);
+  font-weight: 800;
+  color: var(--key-text);
+  background: var(--key-act); /* not the yellow: that is reserved for the 5% line */
+  padding: 2px var(--s-2) 0;
+}
+
+.fpick-keys {
+  display: flex;
+  gap: var(--s-5);
+  font-family: var(--f-display);
+  font-size: var(--t-big);
+  color: var(--sign-dim);
+}
+.fpick-key { display: inline-flex; align-items: center; gap: var(--s-2); }
+
+/* Narrow screens: let the cards wrap instead of squeezing. */
+@media (max-width: 760px) {
+  .pt-menu.fpick-menu { flex-wrap: wrap; justify-content: center; }
+  .fpick-menu > li { flex: 0 0 calc(33% - var(--s-2)); }
+}
