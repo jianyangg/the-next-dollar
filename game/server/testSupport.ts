@@ -1,9 +1,10 @@
-import { CENTRAL_PARK_DEAL, toPublicView } from '../src/core/deal.ts';
-import { sellerPersonaSchema, type SellerPersona } from '../shared/dealSchema.ts';
+import { CENTRAL_PARK_DEAL } from '../src/core/deal.ts';
+import { getPublicDeal, type SellerPersona } from '../shared/deals/index.ts';
+import { MAX_MODEL_CALLS_PER_DEAL } from '../shared/limits.ts';
 import { sellerReplySchema } from '../shared/sellerReply.ts';
 import { Budget, InMemorySpendStore } from './budget.ts';
 import { SellerService } from './callSeller.ts';
-import type { SessionState, SessionStorage } from './dealSession.ts';
+import { EMPTY_META, type DealMeta, type SessionState, type SessionStorage } from './dealSession.ts';
 import type { SellerModel } from './gemini.ts';
 import type { SellerLogLine } from './log.ts';
 
@@ -11,19 +12,24 @@ import type { SellerLogLine } from './log.ts';
  * Shared helpers for the server tests. This file is NOT a test and is never
  * imported by the Worker, so none of it ships. Everything here is offline: the only
  * model is a stub, so no test can spend money.
+ *
+ * (It imports src/core only to read the hidden minimum for the "never in a prompt"
+ * test. Server CODE must never import src/core; this test helper is the one exception.)
  */
 
-/** The deal exactly as the server sees it: the hidden minimum already stripped. */
-export const PUBLIC_DEAL = toPublicView(CENTRAL_PARK_DEAL);
+export const DEAL_ID = 'central-park-seller-1';
+
+const entry = getPublicDeal(DEAL_ID);
+if (!entry) throw new Error(`${DEAL_ID} missing from the deal registry`);
+
+/** The deal exactly as the server sees it: from the registry, no hidden minimum. */
+export const PUBLIC_DEAL = entry.deal;
 export const HIDDEN_MINIMUM = CENTRAL_PARK_DEAL.reservationPrice; // 42; must never reach a prompt
 
-export const PERSONA: SellerPersona = sellerPersonaSchema.parse({
-  name: 'Miles',
-  location: 'Park Corner',
-  manner: 'warm and chatty',
-});
+/** The registry's (draft) persona for the deal. */
+export const PERSONA: SellerPersona = entry.persona;
 
-export const CTX = { dealId: PUBLIC_DEAL.id, deal: PUBLIC_DEAL, persona: PERSONA };
+export const CTX = { dealId: PUBLIC_DEAL.id, deal: PUBLIC_DEAL, persona: PERSONA, modelCallsRemaining: MAX_MODEL_CALLS_PER_DEAL };
 
 /** A reply the validator accepts as a PITCH for the Central Park deal. */
 export const GOOD_PITCH = 'Park Corner stand, asking $60. Sales climbed from $14 to $16 a day and profit reached $8 a day.';
@@ -33,17 +39,32 @@ export const GOOD_LEASE_ANSWER = 'The lease renews in 4 days, and rent goes from
 /** Wraps text the way the real model must answer: JSON `{ "text": ... }`. */
 export const json = (text: string): string => JSON.stringify(sellerReplySchema.parse({ text }));
 
-export function memoryStorage(): SessionStorage & { snapshot(): SessionState | undefined } {
+export interface MemoryStorage extends SessionStorage {
+  snapshot(): SessionState | undefined;
+  metaSnapshot(): DealMeta;
+}
+
+/**
+ * In-memory stand-in for Durable Object storage, with the same two-key layout:
+ * the conversation can be cleared, the meta ledger cannot.
+ */
+export function memoryStorage(): MemoryStorage {
   let state: SessionState | undefined;
+  let meta: DealMeta = { ...EMPTY_META };
   return {
     load: async () => (state ? structuredClone(state) : undefined),
     save: async (s) => {
       state = structuredClone(s);
     },
-    clear: async () => {
+    clearConversation: async () => {
       state = undefined;
     },
+    loadMeta: async () => structuredClone(meta),
+    saveMeta: async (m) => {
+      meta = structuredClone(m);
+    },
     snapshot: () => state,
+    metaSnapshot: () => structuredClone(meta),
   };
 }
 

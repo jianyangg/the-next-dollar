@@ -1,4 +1,4 @@
-import type { PublicDealData } from '../shared/dealSchema.ts';
+import type { PublicDealView } from '../shared/deals/index.ts';
 import { MAX_REPLY_WORDS } from '../shared/limits.ts';
 import { sellerReplySchema } from '../shared/sellerReply.ts';
 
@@ -26,10 +26,58 @@ export type RejectReason =
   | 'refusal'
   | 'number-not-in-books'
   | 'volunteered-off-book'
-  | 'banned-phrase';
+  | 'banned-phrase'
+  | 'non-ascii-letters';
 
 export type Verdict = { ok: true; text: string } | { ok: false; reason: RejectReason; detail?: string };
 export type ReplyKind = 'pitch' | 'answer';
+
+// ---------------------------------------------------------------------------
+// 0. Normalisation (runs once, before ANY check)
+// ---------------------------------------------------------------------------
+//
+// WHY: every check below is a text pattern, and attackers (or a confused model) can
+// dodge a pattern without changing what a human reads:
+//   "dis​count"      a zero-width space hides the banned word from /discount/
+//   "ｄｉｓｃｏｕｎｔ"        full-width letters look the same, but are different code points
+//   "dіscount"        a Cyrillic "і" looks like Latin "i"
+// So we first make the text canonical:
+//   1. NFKC (Unicode compatibility normalisation) folds full-width letters/digits,
+//      ligatures, "…" -> "..." and similar look-alikes into plain characters.
+//   2. Strip every \p{Cf} ("format") character: zero-width space/joiner/non-joiner,
+//      the byte-order mark, and the bidirectional-text controls. They have no
+//      visible glyph, so they can only be used to hide things.
+// All checks run on this normalised text, and the normalised text is what the
+// player sees, so what we checked is exactly what is shown.
+//
+// Look-alikes that survive NFKC (Cyrillic "і", Greek "ο") are caught by the
+// ASCII-only rule below, not by normalisation.
+
+export function normalizeReplyText(text: string): string {
+  return text.normalize('NFKC').replace(/\p{Cf}/gu, '');
+}
+
+// ASCII-ONLY RULE. After normalisation a reply may contain only:
+//   - printable ASCII, plus newline and tab, and
+//   - this small allow-list of common typographic characters the model likes to use:
+//     curly quotes ‘ ’ “ ”, en dash –, em dash —, and the star ★.
+//     (An ellipsis … is already turned into "..." by NFKC.)
+// Anything else (accented or Cyrillic/Greek letters, other scripts, non-ASCII digits,
+// emoji, symbols) rejects the reply with 'non-ascii-letters'. This is stricter than
+// "letters only" on purpose: the game is English-only, and every non-ASCII character
+// is a chance to hide a look-alike. Cost: an innocent "café" is rejected too; the
+// player then sees the fallback instead, which is the safe direction.
+const ALLOWED_NON_ASCII = new Set(['‘', '’', '“', '”', '–', '—', '★']);
+
+/** The first character that breaks the ASCII-only rule, or null. */
+export function findDisallowedCharacter(text: string): string | null {
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    const printableAscii = (code >= 0x20 && code <= 0x7e) || ch === '\n' || ch === '\t' || ch === '\r';
+    if (!printableAscii && !ALLOWED_NON_ASCII.has(ch)) return ch;
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // 1. Shape
@@ -100,7 +148,7 @@ export function extractNumbers(text: string): number[] {
 }
 
 /** The set of figures a reply may use: asking price, every book cell, and off-book figures. */
-export function allowedFigures(deal: PublicDealData): Set<number> {
+export function allowedFigures(deal: PublicDealView): Set<number> {
   const allowed = new Set<number>([deal.askingPrice]);
   for (const b of deal.books) {
     for (const n of [b.sales, b.lemons, b.managerWage, b.rent, b.profit]) allowed.add(n);
@@ -154,7 +202,7 @@ function distinctiveStems(statement: string): string[] {
 }
 
 /** Why a pitch counts as volunteering an off-book fact, or null if it does not. */
-export function findVolunteeredFact(text: string, deal: PublicDealData): string | null {
+export function findVolunteeredFact(text: string, deal: PublicDealView): string | null {
   const bookFigures = new Set<number>([deal.askingPrice]);
   for (const b of deal.books) for (const n of [b.sales, b.lemons, b.managerWage, b.rent, b.profit]) bookFigures.add(n);
 
@@ -192,7 +240,7 @@ const BANNED: Array<[label: string, pattern: RegExp]> = [
 
 // ---------------------------------------------------------------------------
 
-export function validateSellerReply(rawText: string, deal: PublicDealData, kind: ReplyKind): Verdict {
+export function validateSellerReply(rawText: string, deal: PublicDealView, kind: ReplyKind): Verdict {
   // 1. Shape.
   let json: unknown;
   try {
@@ -203,8 +251,14 @@ export function validateSellerReply(rawText: string, deal: PublicDealData, kind:
   const parsed = sellerReplySchema.safeParse(json);
   if (!parsed.success) return { ok: false, reason: 'bad-shape' };
 
-  const text = parsed.data.text.trim();
+  // Normalise ONCE, before every check (see section 0), then trim.
+  const text = normalizeReplyText(parsed.data.text).trim();
   if (text === '') return { ok: false, reason: 'empty' };
+  const odd = findDisallowedCharacter(text);
+  if (odd !== null) {
+    const hex = (odd.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0');
+    return { ok: false, reason: 'non-ascii-letters', detail: `U+${hex}` };
+  }
   if (REFUSAL.test(text)) return { ok: false, reason: 'refusal' };
   const words = countWords(text);
   if (words > MAX_REPLY_WORDS) return { ok: false, reason: 'too-long', detail: `${words} words` };

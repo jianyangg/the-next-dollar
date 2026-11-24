@@ -15,7 +15,7 @@ describe('pitch', () => {
     const model = StubSellerModel.replying(GOOD_PITCH);
     const { service, logs } = makeService(model);
     const out = await service.pitch(CTX);
-    expect(out).toEqual({ source: 'model', text: GOOD_PITCH, questionsEnabled: true });
+    expect(out).toMatchObject({ source: 'model', text: GOOD_PITCH, questionsEnabled: true });
     expect(model.calls).toHaveLength(1);
     expect(logs).toHaveLength(1);
   });
@@ -62,7 +62,7 @@ describe('pitch', () => {
 describe('answer', () => {
   it('returns the model answer, and the disclosure of an off-book fact is allowed', async () => {
     const { service } = makeService(StubSellerModel.replying(GOOD_LEASE_ANSWER));
-    expect(await service.answer(CTX, conversation('When does the lease renew?'))).toEqual({
+    expect(await service.answer(CTX, conversation('When does the lease renew?'))).toMatchObject({
       source: 'model',
       text: GOOD_LEASE_ANSWER,
     });
@@ -79,7 +79,7 @@ describe('answer', () => {
     const model = new StubSellerModel([{ type: 'reply', rawText: raw }]);
     const { service, logs } = makeService(model);
     const out = await service.answer(CTX, conversation('Tell me more'));
-    expect(out).toEqual({ source: 'neutral', text: NEUTRAL_ANSWER });
+    expect(out).toMatchObject({ source: 'neutral', text: NEUTRAL_ANSWER });
     expect(model.calls).toHaveLength(2);
     expect(logs[logs.length - 1]).toMatchObject({ fallbackUsed: 'neutral' });
   });
@@ -91,7 +91,7 @@ describe('answer', () => {
     const { service } = makeService(model);
     const out = await service.answer(CTX, conversation(attack));
     expect(model.calls[0]?.user).toContain(`<question>${attack}</question>`);
-    expect(out).toEqual({ source: 'neutral', text: NEUTRAL_ANSWER });
+    expect(out).toMatchObject({ source: 'neutral', text: NEUTRAL_ANSWER });
   });
 
   it('never sends the hidden minimum to the model (42 is absent from every prompt)', async () => {
@@ -128,7 +128,7 @@ describe('6-second deadline (fake timers)', () => {
     const { service } = makeService(new StubSellerModel([{ type: 'hang' }]));
     const pending = service.answer(CTX, conversation('Why are you selling?'));
     await vi.advanceTimersByTimeAsync(6000);
-    expect(await pending).toEqual({ source: 'neutral', text: NEUTRAL_ANSWER });
+    expect(await pending).toMatchObject({ source: 'neutral', text: NEUTRAL_ANSWER });
   });
 
   it('fast rejection, then the retry hangs: still falls back at exactly 6 s', async () => {
@@ -179,7 +179,7 @@ describe('kill switch (A12)', () => {
   it('an answer while disabled gives the neutral line and makes no model call', async () => {
     const model = StubSellerModel.replying(GOOD_LEASE_ANSWER);
     const { service } = makeService(model, { enabled: false });
-    expect(await service.answer(CTX, conversation('Hi'))).toEqual({ source: 'neutral', text: NEUTRAL_ANSWER });
+    expect(await service.answer(CTX, conversation('Hi'))).toMatchObject({ source: 'neutral', text: NEUTRAL_ANSWER });
     expect(model.calls).toHaveLength(0);
   });
 });
@@ -212,6 +212,31 @@ describe('spend cap (A9)', () => {
     expect(await store.getMicroUsd()).toBe(9_000_000);
     expect((await service.pitch(CTX)).source).toBe('template'); // now over the cap
     expect(model.calls).toHaveLength(2);
+  });
+});
+
+describe('per-deal model-call ceiling', () => {
+  it('makes no model call at all when the deal has no calls left, and logs why', async () => {
+    const model = StubSellerModel.replying(GOOD_LEASE_ANSWER);
+    const { service, logs, modelRequested } = makeService(model);
+    const out = await service.answer({ ...CTX, modelCallsRemaining: 0 }, conversation('Anything?'));
+    expect(out).toEqual({ source: 'neutral', text: NEUTRAL_ANSWER, modelCalls: 0 });
+    expect(model.calls).toHaveLength(0);
+    expect(modelRequested()).toBe(0);
+    expect(logs).toEqual([expect.objectContaining({ event: 'seller_skipped', reason: 'model-call-ceiling' })]);
+    expect((await service.pitch({ ...CTX, modelCallsRemaining: 0 })).source).toBe('template');
+  });
+
+  it('skips the silent retry when only one call is left, and reports how many calls it used', async () => {
+    const bad = { type: 'reply' as const, rawText: json('Sales hit $18 a day.') };
+    const model = new StubSellerModel([bad]);
+    const { service } = makeService(model);
+    const out = await service.answer({ ...CTX, modelCallsRemaining: 1 }, conversation('Hi'));
+    expect(out).toMatchObject({ source: 'neutral', modelCalls: 1 });
+    expect(model.calls).toHaveLength(1);
+
+    const two = await makeService(new StubSellerModel([bad])).service.answer(CTX, conversation('Hi'));
+    expect(two).toMatchObject({ source: 'neutral', modelCalls: 2 });
   });
 });
 

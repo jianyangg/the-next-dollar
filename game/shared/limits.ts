@@ -64,3 +64,34 @@ export const OUTPUT_TOKEN_CEILING = 400;
  * closes". 24 hours keeps abandoned conversations from living forever.
  */
 export const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Attempts per seller call: one try plus one silent retry (A7). The model-call
+ * ceiling below is derived from it, so change them together.
+ */
+export const MAX_ATTEMPTS_PER_CALL = 2;
+
+/**
+ * REFUND POLICY (product decision). When the seller's answer fails the validator or
+ * the 6-second budget and the player only sees the neutral line, that question does
+ * NOT count toward the 3-question limit: the seller "didn't answer", so the player
+ * may ask again.
+ *
+ * ABUSE CEILING: a player (or a script) could otherwise keep provoking failures to
+ * get unlimited free questions and unlimited model calls. So at most this many
+ * refunds are granted per deal, for the deal's whole lifetime (closing does not
+ * reset it). After that a failed answer counts as a normal question.
+ * TUNABLE: raise it if real play shows honest players hitting failures often; each
+ * extra refund adds up to MAX_ATTEMPTS_PER_CALL paid model calls.
+ */
+export const MAX_REFUNDS_PER_DEAL = 3;
+
+/**
+ * Hard ceiling on paid model attempts for one deal, for its whole lifetime:
+ *   pitch attempts + (questions + refunds) x attempts per answer
+ *   = 2 + (3 + 3) x 2 = 14.
+ * That is the most an honest-but-unlucky player can ever use, so the ceiling never
+ * bites in normal play. Once it is reached, answers return the neutral line
+ * WITHOUT calling the model (the spend cap still applies on top of this).
+ */
+export const MAX_MODEL_CALLS_PER_DEAL = MAX_ATTEMPTS_PER_CALL + (MAX_QUESTIONS + MAX_REFUNDS_PER_DEAL) * MAX_ATTEMPTS_PER_CALL;

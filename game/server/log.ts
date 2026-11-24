@@ -35,14 +35,14 @@ export interface SellerCallLog {
   fallbackUsed: 'none' | 'template' | 'neutral';
 }
 
-/** Logged when the model is not called at all (kill switch off, or cap reached). */
+/** Logged when the model is not called at all (kill switch off, spend cap reached, or the per-deal call ceiling). */
 export interface SellerSkippedLog {
   event: 'seller_skipped';
   dealId: string;
   configVersion: string;
   promptVersion: string;
   kind: 'pitch' | 'answer';
-  reason: 'agent-disabled' | 'spend-cap-reached';
+  reason: 'agent-disabled' | 'spend-cap-reached' | 'model-call-ceiling';
   fallbackUsed: 'template' | 'neutral';
 }
 
