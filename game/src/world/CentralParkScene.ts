@@ -316,9 +316,12 @@ export class CentralParkScene {
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    // With post-processing, tone mapping happens at the END of the effect chain
-    // (so bloom sees un-squashed HDR values); the renderer must not also do it.
-    this.renderer.toneMapping = this.fxQuality === 'off' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    // Start with the renderer doing ACES tone mapping, exactly like `?fx=off`. The effect
+    // chain downloads asynchronously (see loadPostFx); frames drawn before it arrives
+    // must still be tone-mapped, or the colours visibly "pop" when it switches on.
+    // loadPostFx turns renderer tone mapping off once the chain (which tone-maps at its
+    // END, so bloom sees un-squashed HDR values) takes over.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     // Still read by the chain's ToneMappingEffect shader, so brightness matches.
     this.renderer.toneMappingExposure = 1.06;
     container.appendChild(this.renderer.domElement);
@@ -3081,6 +3084,10 @@ export class CentralParkScene {
       // Bring the new chain up to date with state that was set while it was loading.
       fx.setSize(this.container.clientWidth, Math.max(this.container.clientHeight, 1));
       fx.setNightAmount(this.nightAmount);
+      // Hand tone mapping to the chain. three.js keys each material's shader on the
+      // renderer's tone-mapping mode, so this triggers a one-time recompile of the
+      // scene's materials on the next frame, then never again.
+      this.renderer.toneMapping = THREE.NoToneMapping;
       this.postfx = fx;
     } catch (err) {
       // No silent fallback to fake data: the plain render keeps the game playable, but the
