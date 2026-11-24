@@ -28,9 +28,19 @@ export function RunEndModal() {
   return <AnimatePresence>{open && <RunEndBody key="runend" />}</AnimatePresence>;
 }
 
-/** Same page, no `seed` (a new random run), keeping `dev` so testers stay in dev mode. */
-export function newRunUrl(pathname: string, search: string): string {
-  return new URLSearchParams(search).has('dev') ? `${pathname}?dev` : pathname;
+/**
+ * Same page, no `seed` (a new random run), keeping `dev` so testers stay in dev mode.
+ *
+ * Built with the URL API from the CURRENT full URL, changing only the query and hash,
+ * so the result is always on the same origin. (Gluing the pathname into a string was
+ * an open redirect: a path like "//evil.example" is read by the browser as a link to
+ * another site.)
+ */
+export function newRunUrl(currentHref: string): string {
+  const url = new URL(currentHref);
+  url.search = url.searchParams.has('dev') ? '?dev' : '';
+  url.hash = '';
+  return url.href;
 }
 
 function RunEndBody() {
@@ -40,7 +50,7 @@ function RunEndBody() {
   const daysBeaten = history.filter(beatTheLine).length;
   const won = total >= 0;
 
-  const newRun = (): void => window.location.assign(newRunUrl(window.location.pathname, window.location.search));
+  const newRun = (): void => window.location.assign(newRunUrl(window.location.href));
 
   useInputLayer(
     (e) => {

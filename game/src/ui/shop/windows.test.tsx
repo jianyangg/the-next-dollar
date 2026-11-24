@@ -128,9 +128,11 @@ describe('run ending', () => {
     expect(text).toContain('2/3');
   });
 
-  it('a new run drops the seed but keeps dev mode', () => {
-    expect(newRunUrl('/', '?seed=42&dev')).toBe('/?dev');
-    expect(newRunUrl('/play', '?seed=42')).toBe('/play');
+  it('a new run drops the seed but keeps dev mode, and never leaves the current site', () => {
+    expect(newRunUrl('http://localhost:5173/?seed=42&dev')).toBe('http://localhost:5173/?dev');
+    expect(newRunUrl('http://localhost:5173/play?seed=42#x')).toBe('http://localhost:5173/play');
+    // A protocol-relative-looking path stays a path on the same origin.
+    expect(new URL(newRunUrl('http://localhost:5173//evil.example/?seed=1')).origin).toBe('http://localhost:5173');
   });
 });
 
