@@ -1,7 +1,9 @@
+import { AnimatePresence, motion } from 'motion/react';
 import { STALL_KIT_COST } from '../core/sliceModel';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useGameStore } from '../state/gameStore';
 import { getIcons, getPortraits } from './assets';
+import { backdropMotion, modalShellMotion } from './motionPresets';
 
 /**
  * The three Union Square Supply Market vendor modals (lemons, stall kits, pitchers).
@@ -29,7 +31,7 @@ function BackToDistrictButton() {
 
 function LemonModal() {
   const open = useGameStore((s) => s.activeModal === 'market-lemons');
-  return open ? <LemonModalBody /> : null;
+  return <AnimatePresence>{open && <LemonModalBody key="LemonModal" />}</AnimatePresence>;
 }
 
 function LemonModalBody() {
@@ -40,8 +42,8 @@ function LemonModalBody() {
   const portraits = getPortraits();
 
   return (
-    <div className="modal-backdrop" onClick={actions.closeModal}>
-      <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
+    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.lemon} alt="" className="px-icon-lg" />
@@ -120,8 +122,8 @@ function LemonModalBody() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -129,7 +131,7 @@ function LemonModalBody() {
 
 function StallKitModal() {
   const open = useGameStore((s) => s.activeModal === 'market-stalls');
-  return open ? <StallKitModalBody /> : null;
+  return <AnimatePresence>{open && <StallKitModalBody key="StallKitModal" />}</AnimatePresence>;
 }
 
 function StallKitModalBody() {
@@ -140,8 +142,8 @@ function StallKitModalBody() {
   const portraits = getPortraits();
 
   return (
-    <div className="modal-backdrop" onClick={actions.closeModal}>
-      <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
+    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.market} alt="" className="px-icon-lg" />
@@ -222,8 +224,8 @@ function StallKitModalBody() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -231,7 +233,7 @@ function StallKitModalBody() {
 
 function PitcherModal() {
   const open = useGameStore((s) => s.activeModal === 'market-pitchers');
-  return open ? <PitcherModalBody /> : null;
+  return <AnimatePresence>{open && <PitcherModalBody key="PitcherModal" />}</AnimatePresence>;
 }
 
 function PitcherModalBody() {
@@ -242,8 +244,8 @@ function PitcherModalBody() {
   const portraits = getPortraits();
 
   return (
-    <div className="modal-backdrop" onClick={actions.closeModal}>
-      <div className="modal-shell" onClick={(e) => e.stopPropagation()}>
+    <motion.div className="modal-backdrop" onClick={actions.closeModal} {...backdropMotion}>
+      <motion.div className="modal-shell" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.pitcher} alt="" className="px-icon-lg" />
@@ -332,8 +334,8 @@ function PitcherModalBody() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 

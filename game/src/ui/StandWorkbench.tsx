@@ -1,11 +1,15 @@
+import { motion, useTransform } from 'motion/react';
 import { getDailyWages, MANAGER_DAILY_WAGE, WORKER_DAILY_WAGE } from '../core/sliceModel';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useQueueLength } from '../state/anchorStore';
-import { useGameStore } from '../state/gameStore';
+import { type GameState, useGameStore } from '../state/gameStore';
 import { BrewStep } from './BrewMinigame';
 import { getIcons } from './assets';
 import { CashHero } from './CashHero';
 import { getConversionProb } from './format';
+import { EASE_OUT } from './motionPresets';
+import { usePulse } from './usePulse';
+import { useStoreMotionValue } from './useStoreMotionValue';
 
 /**
  * The bottom bar shown while the player is standing BEHIND their counter:
@@ -14,45 +18,61 @@ import { getConversionProb } from './format';
  */
 
 /**
- * Step 2: pour a cup for the customer at the front of the line.
- * `serveProgress` runs 0 -> 1 on every frame of the 450 ms pour animation, so (like
- * BrewStep) this is one of the only components allowed to subscribe to it.
+ * "x3 STREAK" badge. Every time the combo count goes up, the badge plays a short
+ * Motion "pop" (scale 0.8 -> 1.12 -> 1 over 0.26 s) on the SAME element, instead of the old
+ * `key={`combo-${combo}`}` trick that destroyed and rebuilt the element to restart a CSS animation.
  */
-function ServeStep() {
+function ComboBadge({ combo }: { combo: number }) {
+  const scope = usePulse<HTMLSpanElement>(
+    combo,
+    { scale: [0.8, 1.12, 1] },
+    { duration: 0.26, times: [0, 0.6, 1], ease: EASE_OUT },
+    true
+  );
+  return (
+    <span ref={scope} className="wb-combo-badge game-num">
+      🔥 x{combo} STREAK
+    </span>
+  );
+}
+
+/** Selector: pour progress as a percent (0 when idle). Module level = stable identity. */
+const selectServePct = (s: GameState): number => (s.serveProgress === null ? 0 : s.serveProgress * 100);
+/** Selector: is a cup being poured right now? A boolean, so it flips only twice per pour. */
+const selectPouring = (s: GameState): boolean => s.serveProgress !== null;
+
+/**
+ * Step 2: pour a cup for the customer at the front of the line.
+ *
+ * `serveProgress` runs 0 -> 1 on every frame of the 450 ms pour. The bar is driven through a
+ * motion value (see `useStoreMotionValue`), so those frames never re-render this component;
+ * React only re-renders when a pour starts or ends (`pouring` flips) or the combo/queue changes.
+ */
+export function ServeStep() {
   const actions = useGameStore((s) => s.actions);
   const combo = useGameStore((s) => s.combo);
   const brewedCups = useGameStore((s) => s.brewedCups);
-  const serveProgress = useGameStore((s) => s.serveProgress); // per-frame while pouring
+  const pouring = useGameStore(selectPouring);
   const queueLength = useQueueLength();
+  const pourWidth = useTransform(useStoreMotionValue(selectServePct), (pct) => `${Math.round(pct)}%`);
 
   return (
     <div className="workbench-step" style={{ minWidth: 212 }}>
       <div className="wb-step-head">
         <span className="wb-step-badge">Step 2 · Serve</span>
-        {combo >= 2 ? (
-          <span key={`combo-${combo}`} className="wb-combo-badge game-num">
-            🔥 x{combo} STREAK
-          </span>
-        ) : (
-          <span className="wb-step-meta game-num">Queue: {queueLength}/4</span>
-        )}
+        {combo >= 2 ? <ComboBadge combo={combo} /> : <span className="wb-step-meta game-num">Queue: {queueLength}/4</span>}
       </div>
       <div className="wb-timer-track">
-        <div
-          className="wb-timer-fill"
-          style={{ width: `${serveProgress !== null ? Math.round(serveProgress * 100) : 0}%` }}
-        />
+        <motion.div className="wb-timer-fill" style={{ width: pourWidth }} />
       </div>
       <button
         type="button"
         className="gbtn gbtn-green"
         onClick={actions.startServeFrontCustomer}
-        disabled={brewedCups < 1 || queueLength === 0 || serveProgress !== null}
+        disabled={brewedCups < 1 || queueLength === 0 || pouring}
         style={{ padding: '6px 10px', fontSize: 12 }}
       >
-        <span>
-          {serveProgress !== null ? 'Pouring...' : queueLength === 0 ? 'Waiting for Line' : 'Serve Next Customer'}
-        </span>
+        <span>{pouring ? 'Pouring...' : queueLength === 0 ? 'Waiting for Line' : 'Serve Next Customer'}</span>
         <span className="keycap">Space</span>
       </button>
     </div>

@@ -1,3 +1,4 @@
+import { MotionConfig } from 'motion/react';
 import { useEffect, useRef } from 'react';
 import { soundEngine } from './audio/soundEngine';
 import { connectScene } from './state/connectScene';
@@ -61,6 +62,9 @@ export function App() {
   }, []);
 
   return (
+    // reducedMotion="user": if the OS asks for reduced motion, Motion skips transform/layout
+    // animations (opacity fades still play) for the whole UI.
+    <MotionConfig reducedMotion="user">
     <div className="game-stage">
       {/* 3D HD-2D Canvas */}
       <div ref={mountRef} className="game-canvas-mount" />
@@ -103,5 +107,6 @@ export function App() {
       {/* Choose Your Founder Character-Select Overlay */}
       <FounderModal />
     </div>
+    </MotionConfig>
   );
 }

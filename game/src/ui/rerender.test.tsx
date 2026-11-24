@@ -52,6 +52,7 @@ import { resetGameStore, useGameStore } from '../state/gameStore';
 import { BooksDrawer } from './BooksDrawer';
 import { BrewStep } from './BrewMinigame';
 import { Hud } from './Hud';
+import { ServeStep } from './StandWorkbench';
 import { TutorialBar } from './TutorialBar';
 
 beforeAll(() => initRunRandom(12345));
@@ -65,7 +66,7 @@ afterEach(() => {
 });
 
 describe('per-frame brew mini-game state', () => {
-  it('re-renders the brew component but not Hud, BooksDrawer or TutorialBar', () => {
+  it('keeps BrewStep, Hud, BooksDrawer and TutorialBar from re-rendering per frame', async () => {
     // Put the store in "behind the counter, mini-game running, books open".
     act(() => {
       const s = useGameStore.getState();
@@ -114,29 +115,35 @@ describe('per-frame brew mini-game state', () => {
       for (let i = 1; i <= 30; i++) {
         const game = useGameStore.getState().brewGame;
         if (!game || game.kind !== 'moving-bullseye') throw new Error('expected a running bullseye game');
-        useGameStore.setState({ brewGame: { ...game, needle: i / 30 } });
+        useGameStore.setState({ brewGame: { ...game, needle: i / 30, bullseye: 0.5 + i / 100 } });
       }
     });
 
-    // The needle really moved...
+    // The needle really moved. Motion writes motion values to the DOM on its own frame
+    // loop (outside React), so wait for that flush instead of expecting it synchronously.
     const needle = container.querySelector<HTMLElement>('.wb-skill-needle');
-    expect(needle?.style.left).toBe('100%');
-    // ...the brew component re-rendered, and nothing else did.
-    expect(renders.brew).toBeGreaterThan(before.brew);
+    await vi.waitFor(() => expect(needle?.style.left).toBe('100%'));
+    await vi.waitFor(() =>
+      expect(container.querySelector<HTMLElement>('.wb-skill-perfect')?.style.left).toBe('80%')
+    );
+    // 30 continuous frames cost the brew component NO React renders at all (only discrete
+    // changes like a new challenge or a landed step may re-render it)...
+    expect(renders.brew - before.brew).toBeLessThanOrEqual(2);
+    // ...and nothing else re-rendered either.
     expect(renders.hud).toBe(before.hud);
     expect(renders.books).toBe(before.books);
     expect(renders.tutorial).toBe(before.tutorial);
   });
 
-  it('does not re-render Hud, BooksDrawer or TutorialBar while the pour bar (serveProgress) animates', () => {
+  it('keeps ServeStep, Hud, BooksDrawer and TutorialBar from re-rendering while the pour bar animates', async () => {
     act(() => {
-      useGameStore.setState({ founderModalOpen: false, booksOpen: true });
+      useGameStore.setState({ founderModalOpen: false, booksOpen: true, workingAtStand: true });
     });
-    const renders: Record<string, number> = { hud: 0, books: 0, tutorial: 0 };
+    const renders: Record<string, number> = { hud: 0, books: 0, tutorial: 0, serve: 0 };
     const count = (id: string) => () => {
       renders[id] += 1;
     };
-    render(
+    const { container } = render(
       <>
         <Profiler id="hud" onRender={count('hud')}>
           <Hud />
@@ -147,12 +154,27 @@ describe('per-frame brew mini-game state', () => {
         <Profiler id="books" onRender={count('books')}>
           <BooksDrawer />
         </Profiler>
+        <Profiler id="serve" onRender={count('serve')}>
+          <ServeStep />
+        </Profiler>
       </>
     );
+    const fill = container.querySelector<HTMLElement>('.wb-timer-fill');
+    expect(fill).not.toBeNull();
     const before = { ...renders };
+
+    // The pour starts (serveProgress null -> a number is ONE discrete change, so ServeStep may
+    // re-render once to say "Pouring..."), then the remaining frames are pure progress.
     act(() => {
       for (let i = 1; i <= 30; i++) useGameStore.setState({ serveProgress: i / 31 });
     });
-    expect(renders).toEqual(before);
+
+    // The bar visibly filled (30/31 = 96.8% -> "97%"), written by Motion, not by React.
+    await vi.waitFor(() => expect(fill?.style.width).toBe('97%'));
+    // 30 frames cost at most the single "pour started" re-render, not 30.
+    expect(renders.serve - before.serve).toBeLessThanOrEqual(1);
+    expect(renders.hud).toBe(before.hud);
+    expect(renders.books).toBe(before.books);
+    expect(renders.tutorial).toBe(before.tutorial);
   });
 });

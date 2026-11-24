@@ -1,9 +1,12 @@
+import { AnimatePresence, motion } from 'motion/react';
+import type { DayRecord } from '../core/sliceModel';
 import { getRunSeed } from '../core/runRandom';
 import { getNeighborhood } from '../core/neighborhoods';
 import { getInvestedCapital } from '../core/sliceModel';
 import { useGameStore } from '../state/gameStore';
 import { getIcons } from './assets';
 import { fmtSignedMoney } from './format';
+import { backdropMotion, modalShellMotion } from './motionPresets';
 import { ValueTrajectoryStrip } from './ValueTrajectoryStrip';
 
 /**
@@ -11,13 +14,16 @@ import { ValueTrajectoryStrip } from './ValueTrajectoryStrip';
  * scorecard record (non-null while the modal shows); the body mounts when it exists.
  */
 export function EndOfDayModal() {
-  const hasRecord = useGameStore((s) => s.eodRecord !== null);
-  return hasRecord ? <EndOfDayBody /> : null;
+  // The gate hands the record to the body as a PROP (instead of the body reading the store).
+  // When the store clears the record, AnimatePresence keeps rendering the last element it
+  // saw, which still carries the old record, so the card keeps its content while it fades
+  // out. (A body that read the store would see `null` and vanish instantly.)
+  const eodRecord = useGameStore((s) => s.eodRecord);
+  return <AnimatePresence>{eodRecord && <EndOfDayBody key="eod" eodRecord={eodRecord} />}</AnimatePresence>;
 }
 
-function EndOfDayBody() {
+function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
   const actions = useGameStore((s) => s.actions);
-  const eodRecord = useGameStore((s) => s.eodRecord);
   const maxDays = useGameStore((s) => s.economy.maxDays);
   const investedCap = useGameStore((s) => getInvestedCapital(s.economy));
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
@@ -25,12 +31,9 @@ function EndOfDayBody() {
   const icons = getIcons();
   const neighborhood = getNeighborhood(neighborhoodId);
 
-  // The gate only mounts us when a record exists, but the type system cannot see that.
-  if (!eodRecord) return null;
-
   return (
-    <div className="modal-backdrop">
-      <div className="modal-shell is-wide" onClick={(e) => e.stopPropagation()}>
+    <motion.div className="modal-backdrop" {...backdropMotion}>
+      <motion.div className="modal-shell is-wide" onClick={(e) => e.stopPropagation()} {...modalShellMotion}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <img src={icons.sun} alt="" className="px-icon-lg" />
@@ -120,7 +123,7 @@ function EndOfDayBody() {
             </span>
           </button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
