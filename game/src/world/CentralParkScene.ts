@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { playStep } from '../audio/soundEngine';
+import { PostFx } from './postfx';
+import { type FxQuality, resolveFxQuality } from './postfxQuality';
 import type { Random } from '../core/rng';
 import { NeighborhoodId, getNeighborhood } from '../core/neighborhoods';
 import {
@@ -161,6 +163,21 @@ const DISTRICT_PEDESTRIANS: Record<NeighborhoodId, DistrictPedestrianKind[]> = {
   market: ['village-artist', 'park-dog-walker', 'columbia-student'],
 };
 
+/**
+ * A light-source material whose colour is multiplied above 1.0 (HDR) so the
+ * bloom pass picks it up. `base` is the authored 0..1 colour; the displayed
+ * colour is base * lerp(dayGain, nightGain, nightAmount).
+ */
+interface GlowEntry {
+  mat: THREE.MeshBasicMaterial | THREE.MeshStandardMaterial;
+  base: THREE.Color;
+  dayGain: number;
+  nightGain: number;
+}
+
+/** Streetlamp intensity at dusk (the largest `lampIntensity` keyframe); used to normalise to 0..1. */
+const MAX_LAMP_INTENSITY = 1.55;
+
 const ROAD_NEIGHBORHOODS = new Set<NeighborhoodId>(['central-park', 'broadway', 'fidi', 'fifth-ave']);
 
 export class CentralParkScene {
@@ -174,6 +191,14 @@ export class CentralParkScene {
   private sunLight!: THREE.DirectionalLight;
   private timeOfDayProgress = 0;
   private streetlampBulbMat = new THREE.MeshBasicMaterial({ color: '#fff3c4' });
+  private fxQuality: FxQuality;
+  private postfx: PostFx;
+  /** Light-source materials that get an HDR colour boost so only they bloom. */
+  private glowEntries: GlowEntry[] = [];
+  /** 0 (day) .. 1 (dusk): current lamp intensity / 1.55. Drives glow gain and bloom. */
+  private nightAmount = 0;
+  private resizeObserver: ResizeObserver | null = null;
+  private lastResize = { w: 0, h: 0, dpr: 0 };
   private streetlampLights: THREE.PointLight[] = [];
 
   private playerPos = new THREE.Vector3(3.6, 0, 0.8);
@@ -235,17 +260,41 @@ export class CentralParkScene {
   // the order of gameplay draws.
   private readonly rng: SceneRandom;
 
-  constructor(container: HTMLElement, callbacks: SceneCallbacks, rng: SceneRandom) {
+  constructor(
+    container: HTMLElement,
+    callbacks: SceneCallbacks,
+    rng: SceneRandom,
+    options: { fx?: FxQuality } = {}
+  ) {
     this.container = container;
     this.callbacks = callbacks;
     this.rng = rng;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // Post-processing tier. Tests/callers may force one; otherwise `?fx=` and
+    // device heuristics decide. resolveFxQuality throws on an invalid `?fx=`.
+    this.fxQuality =
+      options.fx ??
+      resolveFxQuality(window.location.search, {
+        devicePixelRatio: window.devicePixelRatio,
+        isCoarsePointer:
+          typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches,
+      });
+
+    // `antialias` is fixed at context creation. The composer path renders into
+    // offscreen buffers (the canvas MSAA would never apply) and uses SMAA, so
+    // only the untouched 'off' path asks the browser for hardware MSAA.
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: this.fxQuality === 'off',
+      powerPreference: 'high-performance',
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    // With post-processing, tone mapping happens at the END of the effect chain
+    // (so bloom sees un-squashed HDR values); the renderer must not also do it.
+    this.renderer.toneMapping = this.fxQuality === 'off' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    // Still read by the chain's ToneMappingEffect shader, so brightness matches.
     this.renderer.toneMappingExposure = 1.06;
     container.appendChild(this.renderer.domElement);
 
@@ -262,6 +311,13 @@ export class CentralParkScene {
     );
     this.camera.position.set(this.playerPos.x * 0.78, 10.9, this.playerPos.z + 14.3);
     this.camera.lookAt(this.playerPos.x * 0.78, 0.55, this.playerPos.z - 0.8);
+
+    this.postfx = new PostFx(this.renderer, this.scene, this.camera, this.fxQuality);
+    this.postfx.setSize(container.clientWidth, Math.max(container.clientHeight, 1));
+    // Streetlamp bulbs: no extra glow by day (stay under the bloom threshold),
+    // ~3x HDR at dusk so the lamps visibly bloom. Colour is refreshed per
+    // keyframe in applyAtmosphere.
+    this.registerGlow(this.streetlampBulbMat, 1.0, 3.2);
 
     this.contactShadowMat = new THREE.MeshBasicMaterial({
       map: this.createContactShadowTexture(),
@@ -294,7 +350,14 @@ export class CentralParkScene {
     this.setPlotState('empty');
     this.setNeighborhood('central-park');
 
+    // ResizeObserver catches container-only changes (HUD layout, split panes)
+    // that never fire a window 'resize'; the window listener still catches
+    // devicePixelRatio changes (browser zoom, dragging between monitors).
     window.addEventListener('resize', this.handleResize);
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(this.handleResize);
+      this.resizeObserver.observe(container);
+    }
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
@@ -580,6 +643,71 @@ export class CentralParkScene {
     const lampInt = THREE.MathUtils.lerp(k0.lampIntensity, k1.lampIntensity, alpha);
     for (const light of this.streetlampLights) {
       light.intensity = lampInt;
+    }
+
+    // Night amount (0 noon .. 1 dusk) drives bloom strength, vignette and the
+    // HDR gain of every glow material. Normalised by the dusk lamp intensity.
+    this.nightAmount = THREE.MathUtils.clamp(lampInt / MAX_LAMP_INTENSITY, 0, 1);
+    if (this.fxQuality !== 'off') {
+      // The streetlamp bulb colour is rewritten per keyframe above, so its
+      // authored base colour must be refreshed before the gain is applied.
+      const lamp = this.glowEntries.find((g) => g.mat === this.streetlampBulbMat);
+      if (lamp) lamp.base.copy(this.streetlampBulbMat.color);
+      for (const entry of this.glowEntries) this.applyGlowGain(entry);
+    }
+    this.postfx.setNightAmount(this.nightAmount);
+  }
+
+  /**
+   * Make a material a bloom light source.
+   *
+   * Bloom keys off linear luminance BEFORE tone mapping, with a threshold just
+   * under 1.0 (see postfx.ts). Ordinary unlit colours are authored in 0..1 so
+   * they can never pass it; multiplying a light's colour by a gain > 1 pushes
+   * only that material over. `toneMapped = false` is belt-and-braces: with the
+   * composer the renderer applies no tone mapping anyway, but it keeps the glow
+   * intact if someone re-enables renderer tone mapping.
+   *
+   * Gains: for MeshBasicMaterial the colour is multiplied by the gain; for
+   * MeshStandardMaterial the gain IS the final emissiveIntensity (the emissive
+   * colour stays as authored). Day/night gains are blended by nightAmount.
+   *
+   * Deliberately NOT applied to crosswalk stripes (#ece7dc), yellow road lines
+   * (#f2c144) or plot dash markings. Those are also MeshBasicMaterial but are
+   * never boosted, so their colour channels stay <= 1.0 and their luminance
+   * (a weighted average of the channels, so never above the largest channel)
+   * is ~0.80 for the stripes and ~0.60 for the yellow lines: below the 0.95
+   * bloom threshold, so they cannot glow. This holds because bloom measures the
+   * pre-tone-mapping linear value, which for an unlit basic material is just
+   * its authored colour.
+   *
+   * With ?fx=off nothing is registered, so those materials render exactly as before.
+   */
+  private registerGlow<T extends THREE.MeshBasicMaterial | THREE.MeshStandardMaterial>(
+    mat: T,
+    dayGain: number,
+    nightGain: number
+  ): T {
+    if (this.fxQuality === 'off') return mat;
+    mat.toneMapped = false;
+    const entry: GlowEntry = {
+      mat,
+      base: mat.color.clone(),
+      dayGain,
+      nightGain,
+    };
+    this.glowEntries.push(entry);
+    this.applyGlowGain(entry);
+    return mat;
+  }
+
+  /** Standard materials glow via emissiveIntensity (base intensity * gain); basic ones via colour. */
+  private applyGlowGain(e: GlowEntry): void {
+    const gain = THREE.MathUtils.lerp(e.dayGain, e.nightGain, this.nightAmount);
+    if (e.mat instanceof THREE.MeshStandardMaterial) {
+      e.mat.emissiveIntensity = gain;
+    } else {
+      e.mat.color.copy(e.base).multiplyScalar(gain);
     }
   }
 
@@ -1134,7 +1262,7 @@ export class CentralParkScene {
 
     const waterCrown = new THREE.Mesh(
       new THREE.SphereGeometry(0.28, 8, 6),
-      new THREE.MeshBasicMaterial({ color: '#a8ecff' })
+      this.registerGlow(new THREE.MeshBasicMaterial({ color: '#a8ecff' }), 1.6, 2.0)
     );
     waterCrown.position.set(0, 1.72, -5.8);
     g.add(waterCrown);
@@ -1178,7 +1306,7 @@ export class CentralParkScene {
     }
 
     const flagColors = ['#e84a3c', '#f5c531', '#38a354', '#2f78c4', '#f28b30'];
-    const bulbMat = new THREE.MeshBasicMaterial({ color: '#fff2b5' });
+    const bulbMat = this.registerGlow(new THREE.MeshBasicMaterial({ color: '#fff2b5' }), 1.0, 3.0);
     const wireMat = new THREE.MeshBasicMaterial({ color: '#2a2420' });
 
     for (let s = 0; s < poleXs.length - 1; s++) {
@@ -1461,13 +1589,18 @@ export class CentralParkScene {
     // Centerpiece: Glowing crimson stepped TKTS bleachers at center-back
     const tktsGroup = new THREE.Group();
     tktsGroup.position.set(0, 0, -5.6);
-    const tktsRedMat = new THREE.MeshStandardMaterial({
-      color: '#e62236',
-      emissive: new THREE.Color('#ff223a'),
-      emissiveIntensity: 0.72,
-      roughness: 0.3,
-    });
-    const tktsTrimMat = new THREE.MeshBasicMaterial({ color: '#ff8a96' });
+    // Standard-material glow gains are absolute emissiveIntensity (was 0.72).
+    const tktsRedMat = this.registerGlow(
+      new THREE.MeshStandardMaterial({
+        color: '#e62236',
+        emissive: new THREE.Color('#ff223a'),
+        emissiveIntensity: 0.72,
+        roughness: 0.3,
+      }),
+      1.2,
+      1.8
+    );
+    const tktsTrimMat = this.registerGlow(new THREE.MeshBasicMaterial({ color: '#ff8a96' }), 2.2, 3.2);
     for (let i = 0; i < 7; i++) {
       const step = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.34, 0.56), tktsRedMat);
       step.position.set(0, 0.17 + i * 0.34, 1.6 - i * 0.52);
@@ -1491,13 +1624,17 @@ export class CentralParkScene {
     });
     const sideMat = new THREE.MeshStandardMaterial({ color: '#2b2433', roughness: 0.9 });
     const roofMat = new THREE.MeshStandardMaterial({ color: '#1e1b24', roughness: 0.95 });
-    const marqueeBoxMat = new THREE.MeshStandardMaterial({
-      color: '#d43535',
-      emissive: new THREE.Color('#ff5533'),
-      emissiveIntensity: 0.45,
-      roughness: 0.4,
-    });
-    const marqueeTrimMat = new THREE.MeshBasicMaterial({ color: '#ffe57f' });
+    const marqueeBoxMat = this.registerGlow(
+      new THREE.MeshStandardMaterial({
+        color: '#d43535',
+        emissive: new THREE.Color('#ff5533'),
+        emissiveIntensity: 0.45,
+        roughness: 0.4,
+      }),
+      1.1,
+      1.6
+    );
+    const marqueeTrimMat = this.registerGlow(new THREE.MeshBasicMaterial({ color: '#ffe57f' }), 1.8, 3.0);
     const neonColors = ['#38e8ff', '#ff45b5', '#ffd633', '#3dff8b'];
 
     const theaterXs = [-13.6, -9.0, -4.8, 4.8, 9.2, 13.6];
@@ -1531,12 +1668,16 @@ export class CentralParkScene {
         const col = neonColors[(i * 2 + stack) % neonColors.length];
         const board = new THREE.Mesh(
           new THREE.BoxGeometry(3.5, 1.65, 0.22),
-          new THREE.MeshStandardMaterial({
-            color: col,
-            emissive: new THREE.Color(col),
-            emissiveIntensity: 0.8,
-            roughness: 0.25,
-          })
+          this.registerGlow(
+            new THREE.MeshStandardMaterial({
+              color: col,
+              emissive: new THREE.Color(col),
+              emissiveIntensity: 0.8,
+              roughness: 0.25,
+            }),
+            2.2,
+            2.8
+          )
         );
         board.position.set(bx, 5.15 + stack * 1.95, -4.12);
         g.add(board);
@@ -1836,7 +1977,7 @@ export class CentralParkScene {
     subway.add(globePole);
     const greenGlobe = new THREE.Mesh(
       new THREE.SphereGeometry(0.18, 10, 8),
-      new THREE.MeshBasicMaterial({ color: '#4ce68a' })
+      this.registerGlow(new THREE.MeshBasicMaterial({ color: '#4ce68a' }), 2.2, 3.0)
     );
     greenGlobe.position.set(-1.12, 2.26, 0.68);
     subway.add(greenGlobe);
@@ -1908,7 +2049,7 @@ export class CentralParkScene {
     // Glowing floating glass-cube centerpiece emblem + warm internal glow
     const emblem = new THREE.Mesh(
       new THREE.OctahedronGeometry(0.42, 0),
-      new THREE.MeshBasicMaterial({ color: '#ffffff' })
+      this.registerGlow(new THREE.MeshBasicMaterial({ color: '#ffffff' }), 2.0, 2.6)
     );
     emblem.position.set(0, 2.25, 0);
     cubeGroup.add(emblem);
@@ -2238,7 +2379,7 @@ export class CentralParkScene {
     // Cozy glowing lantern atop the side sign post
     const lanternBulb = new THREE.Mesh(
       new THREE.SphereGeometry(0.095, 8, 6),
-      new THREE.MeshBasicMaterial({ color: '#fff3be' })
+      this.registerGlow(new THREE.MeshBasicMaterial({ color: '#fff3be' }), 1.0, 3.0)
     );
     lanternBulb.position.y = 1.8;
     signPost.add(lanternBulb);
@@ -2608,7 +2749,7 @@ export class CentralParkScene {
       if (kind === 'taxi') {
         const sign = new THREE.Mesh(
           new THREE.BoxGeometry(0.5, 0.18, 0.24),
-          new THREE.MeshBasicMaterial({ color: '#fff4c2' })
+          this.registerGlow(new THREE.MeshBasicMaterial({ color: '#fff4c2' }), 1.0, 2.6)
         );
         sign.position.set(0, 1.2, -0.1);
         car.add(sign);
@@ -2864,11 +3005,20 @@ export class CentralParkScene {
   }
 
   private handleResize = (): void => {
+    if (this.disposed) return;
     const w = this.container.clientWidth;
     const h = Math.max(this.container.clientHeight, 1);
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    // Both the window event and the ResizeObserver can fire for one change;
+    // skip redundant work (resizing reallocates every render target).
+    const last = this.lastResize;
+    if (last.w === w && last.h === h && last.dpr === dpr) return;
+    this.lastResize = { w, h, dpr };
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(w, h);
+    this.postfx.setSize(w, h);
   };
 
   private handleKeyDown = (e: KeyboardEvent): void => {
@@ -3318,7 +3468,13 @@ export class CentralParkScene {
       this.shuffleQueueForward();
     }
 
-    this.renderer.render(this.scene, this.camera);
+    this.postfx.render(dt);
+    // Centre the tilt-shift sharp band on the player's body (0.9 units up from
+    // the feet), as a 0..1 fraction of the canvas height. Uses last-frame-
+    // equivalent state; PostFx smooths it, so the one-frame lag is invisible.
+    this.postfx.setFocusScreenY(
+      this.projectToScreen(this.playerPos, 0.9).y / Math.max(this.container.clientHeight, 1)
+    );
 
     // 6. Update projected screen anchors for floating UI prompts, toasts & customer patience bars
     const queueAnchors: QueuedCustomerAnchor[] = this.queue.map((ped, idx) => {
@@ -3425,10 +3581,13 @@ export class CentralParkScene {
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
     window.removeEventListener('resize', this.handleResize);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.disposeGpuResources();
+    this.postfx.dispose();
     this.renderer.dispose();
     // Ask the browser to drop the WebGL context now instead of waiting for GC;
     // browsers cap live contexts (~16) and warn when a page leaks them.
