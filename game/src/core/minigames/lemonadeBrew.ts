@@ -28,6 +28,42 @@ import { type BrewCue, type BrewQuality, clamp01, type StepResult } from './type
 
 export type BrewPhase = 'squeeze' | 'sweeten' | 'stir' | 'done';
 
+/**
+ * This brew's twists: one small change per step, drawn at random so no two brews feel
+ * the same. They vary the SKILL each step asks for, never the speed of anything:
+ *   squeeze  'juicer'      park the needle in the green
+ *            'tough-rind'  the green climbs as the lemon empties: follow it up
+ *   sweeten  'sugar'       stop when the meter reaches the smile
+ *            'honey'       it keeps dripping after you let go: stop early
+ *   stir     'clockwise'   W D S A
+ *            'counter'     W A S D
+ */
+export interface BrewTwists {
+  squeeze: 'juicer' | 'tough-rind';
+  sweeten: sweeten.Sweetener;
+  stir: 'clockwise' | 'counter';
+}
+
+/** The plain brew: what day 1 teaches, before any twist appears. */
+export const PLAIN_TWISTS: BrewTwists = { squeeze: 'juicer', sweeten: 'sugar', stir: 'clockwise' };
+
+/** Chance that each step gets its twist (independently) once twists are allowed. */
+export const TWIST_CHANCE = 0.5;
+
+/**
+ * Draw the twists. Always exactly three draws, even when twists are off, so turning
+ * them on or off never shifts the random sequence that follows.
+ */
+export function drawTwists(rand: () => number, allowed: boolean): BrewTwists {
+  const [a, b, c] = [rand(), rand(), rand()];
+  if (!allowed) return PLAIN_TWISTS;
+  return {
+    squeeze: a < TWIST_CHANCE ? 'tough-rind' : 'juicer',
+    sweeten: b < TWIST_CHANCE ? 'honey' : 'sugar',
+    stir: c < TWIST_CHANCE ? 'counter' : 'clockwise',
+  };
+}
+
 export interface LemonadeBrewConfig {
   /** 0 = gentle (plump lemons, 2 per batch, forgiving taste), 1 = hard. */
   difficulty: number;
@@ -35,6 +71,13 @@ export interface LemonadeBrewConfig {
   targetSweetness: number;
   /** A hired worker squeezes for you: the squeeze step is skipped at an average result. */
   workerSqueezes: boolean;
+  /**
+   * Twists may appear (the store turns them on after day 1, so the first brews teach
+   * the plain recipe). Ignored when `twists` is given.
+   */
+  allowTwists: boolean;
+  /** Force these twists instead of drawing them (tests, replays of a reported bug). */
+  twists?: BrewTwists;
 }
 
 export interface LemonadeBrewState {
@@ -43,6 +86,8 @@ export interface LemonadeBrewState {
   /** Last seen hold level; a change between frames is a press or a release. */
   held: boolean;
   workerSqueezes: boolean;
+  /** This brew's twists (fixed at init; the UI names the current step's one). */
+  twists: BrewTwists;
   squeeze: squeeze.SqueezeState;
   /** Set once squeezing is over (by the player or the worker). */
   squeezed: squeeze.SqueezeResult | null;
@@ -72,17 +117,21 @@ export function init(rand: () => number, config: LemonadeBrewConfig): LemonadeBr
   // Lemons are drawn even when a worker squeezes: the kinds decide how much juice the
   // batch holds, and the same seed must give the same lemons either way.
   const lemons = squeeze.drawLemons(rand, config.difficulty);
+  // Drawn AFTER the lemons, so the same seed still gives the same lemons as before twists.
+  const drawn = drawTwists(rand, config.allowTwists);
+  const twists = config.twists ?? drawn;
   const band = sweeten.bandForDifficulty(config.difficulty);
-  const sq = squeeze.init(lemons);
+  const sq = squeeze.init(lemons, { toughRind: twists.squeeze === 'tough-rind' });
   return {
     kind: 'lemonade-brew',
     phase: config.workerSqueezes ? 'sweeten' : 'squeeze',
     held: false,
     workerSqueezes: config.workerSqueezes,
+    twists,
     squeeze: config.workerSqueezes ? { ...sq, index: lemons.length, done: true } : sq,
     squeezed: config.workerSqueezes ? squeeze.workerResult(lemons) : null,
-    sweeten: sweeten.init(config.targetSweetness, band),
-    stir: stir.init(),
+    sweeten: sweeten.init(config.targetSweetness, band, twists.sweeten),
+    stir: stir.init(twists.stir === 'counter' ? -1 : 1),
     quality: null,
   };
 }
@@ -196,6 +245,8 @@ export function step(state: LemonadeBrewState, dt: number, inputs: BrewInputs): 
     }
     case 'sweeten': {
       const next = sweeten.step(s.sweeten, dt);
+      // Honey: the drip just ended over the band, so the fix is now on offer.
+      if (sweeten.dripEnded(s.sweeten, next) && next.phase === 'offer') cues.push('overshoot');
       if (next.phase !== 'done') return { state: { ...s, sweeten: next }, cues };
       cues.push('step-done');
       return { state: { ...s, sweeten: next, phase: 'stir' }, cues };

@@ -254,7 +254,7 @@ function playBrew(start: LemonadeBrewState, opts: { sweetAt: number; stirEvery: 
 }
 
 describe('lemonade brew (composed)', () => {
-  const config = { difficulty: 0, targetSweetness: 0.5, workerSqueezes: false };
+  const config = { difficulty: 0, targetSweetness: 0.5, workerSqueezes: false, allowTwists: false };
 
   it('same seed gives the same lemons; different seeds can differ', () => {
     expect(brew.init(seeded(7), config).squeeze.lemons).toEqual(brew.init(seeded(7), config).squeeze.lemons);
@@ -387,7 +387,7 @@ describe('dispatcher wiring', () => {
   const inputs = { pitchers: 1, workers: 0, spaceHeld: true };
 
   it('steps the brew with spaceHeld as the hold level, ignores the lock press, and forwards stir keys', () => {
-    const s = brew.init(seeded(2), { difficulty: 0, targetSweetness: 0.5, workerSqueezes: false });
+    const s = brew.init(seeded(2), { difficulty: 0, targetSweetness: 0.5, workerSqueezes: false, allowTwists: false });
     const stepped = stepGame(s, DT, inputs).state;
     expect(stepped.kind === 'lemonade-brew' && stepped.squeeze.pressure).toBeGreaterThan(0);
     expect(pressGame(s, inputs).state).toBe(s);
@@ -395,5 +395,81 @@ describe('dispatcher wiring', () => {
     const turned = pressStirKey(stirring, 'S').state;
     expect(turned.kind === 'lemonade-brew' && turned.stir.at).toBe('S');
     expect(pressStirKey(stirring, 'SPACE').state).toBe(stirring);
+  });
+});
+
+describe('brew twists (one random change per step, never a faster clock)', () => {
+  const base = { difficulty: 0, targetSweetness: 0.5, workerSqueezes: false };
+
+  it('the twists do not change which lemons a seed gives', () => {
+    for (const seed of [1, 2, 3]) {
+      const plain = brew.init(seeded(seed), { ...base, allowTwists: false });
+      const twisty = brew.init(seeded(seed), { ...base, allowTwists: true });
+      expect(twisty.squeeze.lemons).toEqual(plain.squeeze.lemons);
+    }
+  });
+
+  it('day 1 (twists off) is always the plain recipe; later every twist shows up', () => {
+    for (let seed = 1; seed <= 20; seed++) {
+      expect(brew.init(seeded(seed), { ...base, allowTwists: false }).twists).toEqual(brew.PLAIN_TWISTS);
+    }
+    const seen = new Set<string>();
+    for (let seed = 1; seed <= 40; seed++) {
+      const t = brew.init(seeded(seed), { ...base, allowTwists: true }).twists;
+      seen.add(t.squeeze).add(t.sweeten).add(t.stir);
+    }
+    for (const v of ['juicer', 'tough-rind', 'sugar', 'honey', 'clockwise', 'counter']) expect(seen).toContain(v);
+  });
+
+  it('tough rind: the juicy zone climbs as the lemon empties, by TOUGH_RIND_SHIFT at most', () => {
+    const spec = squeeze.LEMON_SPECS.plump;
+    const s = squeeze.init(['plump'], { toughRind: true });
+    expect(squeeze.juicyZone(s).low).toBeCloseTo(spec.zoneLow);
+    const half = { ...s, lemonJuice: spec.juice / 2 };
+    expect(squeeze.juicyZone(half).low).toBeCloseTo(spec.zoneLow + squeeze.TOUGH_RIND_SHIFT / 2);
+    // Parked at the start of the old zone, the juice stops once the zone has moved past it.
+    const parked = squeeze.step({ ...half, pressure: spec.zoneLow + 0.01 }, DT, true).state;
+    expect(parked.lemonJuice).toBe(half.lemonJuice);
+    // The plain juicer never moves its zone.
+    expect(squeeze.juicyZone({ ...squeeze.init(['plump']), lemonJuice: 0.9 }).low).toBe(spec.zoneLow);
+  });
+
+  it('honey keeps pouring for HONEY_DRIP_SEC after release, at the same pour rate', () => {
+    let s = sweeten.press(sweeten.init(0.5, 0.1, 'honey')).state;
+    for (let i = 0; i < 30; i++) s = sweeten.step(s, DT); // 0.5 s of pouring
+    const atRelease = s.sweetness;
+    s = sweeten.release(s).state;
+    expect(s.phase).toBe('drip');
+    for (let i = 0; i < 30 && s.phase === 'drip'; i++) s = sweeten.step(s, DT);
+    expect(s.sweetness).toBeCloseTo(atRelease + sweeten.HONEY_DRIP_SEC * sweeten.SUGAR_POUR_PER_SEC, 5);
+    // 0.25 poured + 0.125 dripped = 0.375: under the 0.4..0.6 band, so no fix is offered.
+    expect(s.phase).toBe('reveal');
+  });
+
+  it('honey that drips over the band offers the fix, with the overshoot cue', () => {
+    let s: LemonadeBrewState = {
+      ...brew.init(seeded(1), { ...base, allowTwists: false, twists: { ...brew.PLAIN_TWISTS, sweeten: 'honey' } }),
+      phase: 'sweeten',
+    };
+    s = { ...s, sweeten: { ...s.sweeten, phase: 'pour', sweetness: 0.55 } };
+    let cues: string[] = [];
+    s = brew.step(s, DT, { held: true }).state;
+    s = brew.release(s).state; // 0.55 + drip 0.125 = ~0.68 > 0.5 + band
+    for (let i = 0; i < 30 && s.sweeten.phase === 'drip'; i++) {
+      const r = brew.step(s, DT, { held: false });
+      s = r.state;
+      cues = cues.concat(r.cues ?? []);
+    }
+    expect(s.sweeten.phase).toBe('offer');
+    expect(cues).toContain('overshoot');
+  });
+
+  it('counter stir: W A S D counts as turns, W D S A does not', () => {
+    let s = stir.turn(stir.init(-1), 'W').state;
+    expect(stir.nextQuadrant(s)).toBe('A');
+    expect(stir.turn(s, 'D').outcome).toBe('ignored');
+    s = stir.turn(s, 'A').state;
+    expect(s.quarters).toBe(1);
+    expect(stir.nextQuadrant(s)).toBe('S');
   });
 });

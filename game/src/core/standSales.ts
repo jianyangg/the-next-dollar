@@ -1,8 +1,9 @@
-import { DAY_SECONDS } from './clock';
+import { type ClockSpeed, DAY_SECONDS } from './clock';
 import { getConversionProb } from './demand';
+import { awarenessWalkerFactor } from './marketing';
 import { getNeighborhood } from './neighborhoods';
 import { getPlot, isLeasable, type PlotId, plotsIn } from './plots';
-import type { PlotStatus } from './sliceModel';
+import type { SliceState } from './sliceModel';
 import { type Tuning, TUNING } from './tuning';
 
 /**
@@ -41,7 +42,7 @@ import { type Tuning, TUNING } from './tuning';
  * buying it adds a stand without splitting anyone's crowd. That is what a purchase
  * offers that a new build cannot.
  */
-export function ownStandsInDistrict(plots: Readonly<Record<PlotId, PlotStatus>>, plotId: PlotId): number {
+export function ownStandsInDistrict(plots: SliceState['plots'], plotId: PlotId): number {
   if (!isLeasable(getPlot(plotId))) return 1;
   const built = plotsIn(getPlot(plotId).district).filter((p) => isLeasable(p) && plots[p.id] === 'built').length;
   return Math.max(1, built);
@@ -60,21 +61,52 @@ export function crowdShare(standsInDistrict: number, t: Tuning = TUNING): number
 }
 
 /**
- * Passers-by who reach this stand in a full day. `standsInDistrict` is how many stands
- * the player runs in this plot's district (see `ownStandsInDistrict`); leave it out for
- * a plot on its own.
+ * Everything about the player's situation that changes a plot's crowd. It is a required
+ * argument of every formula below (not an optional one), so no caller can silently
+ * leave out the player's other stands or their marketing.
+ *   standsInDistrict  stands the player runs in this plot's district (ownStandsInDistrict)
+ *   awareness         this district's marketing awareness, 0..1 (core/marketing.ts)
  */
-export function walkersPerDay(plotId: PlotId, t: Tuning = TUNING, standsInDistrict = 1): number {
-  return getPlot(plotId).walkersPerDay * t.walkerScale * crowdShare(standsInDistrict, t);
+export interface PlotCrowd {
+  standsInDistrict: number;
+  awareness: number;
+}
+
+/**
+ * A plot on its own, with no marketing. For a plot the player is only looking at (the
+ * lease window's preview) and for tests; a stand the player owns uses `crowdAt`.
+ */
+export const LONE_PLOT: PlotCrowd = { standsInDistrict: 1, awareness: 0 };
+
+/** The crowd at `plotId` given the player's current stands and marketing. */
+export function crowdAt(s: Pick<SliceState, 'plots' | 'awareness'>, plotId: PlotId): PlotCrowd {
+  return {
+    standsInDistrict: ownStandsInDistrict(s.plots, plotId),
+    awareness: s.awareness[getPlot(plotId).district],
+  };
+}
+
+/**
+ * Passers-by who reach this stand in a full day: the plot's own walkers, cut by the
+ * share the player's other stands in the district take (crowdShare), raised by the
+ * district's marketing awareness (core/marketing.ts awarenessWalkerFactor).
+ */
+export function walkersPerDay(plotId: PlotId, crowd: PlotCrowd, t: Tuning = TUNING): number {
+  return (
+    getPlot(plotId).walkersPerDay *
+    t.walkerScale *
+    crowdShare(crowd.standsInDistrict, t) *
+    awarenessWalkerFactor(crowd.awareness, t)
+  );
 }
 
 /**
  * DEMAND: how many of those walkers want a cup at `price` (expected value, so it can be
  * fractional: 18.7 buyers a day means 18 on most days and 19 on some).
  */
-export function buyersPerDay(plotId: PlotId, price: number, t: Tuning = TUNING, standsInDistrict = 1): number {
+export function buyersPerDay(plotId: PlotId, price: number, crowd: PlotCrowd, t: Tuning = TUNING): number {
   const sensitivity = getNeighborhood(getPlot(plotId).district).priceSensitivity;
-  return walkersPerDay(plotId, t, standsInDistrict) * getConversionProb(price, sensitivity);
+  return walkersPerDay(plotId, crowd, t) * getConversionProb(price, sensitivity);
 }
 
 /**
@@ -82,8 +114,8 @@ export function buyersPerDay(plotId: PlotId, price: number, t: Tuning = TUNING, 
  * its demand, but never more than one worker can pour (`workerCupsPerDay`). A busy
  * plot therefore leaves sales on the table with a single worker.
  */
-export function staffedCupsPerDay(plotId: PlotId, price: number, t: Tuning = TUNING, standsInDistrict = 1): number {
-  return Math.min(buyersPerDay(plotId, price, t, standsInDistrict), t.workerCupsPerDay);
+export function staffedCupsPerDay(plotId: PlotId, price: number, crowd: PlotCrowd, t: Tuning = TUNING): number {
+  return Math.min(buyersPerDay(plotId, price, crowd, t), t.workerCupsPerDay);
 }
 
 // ---------------------------------------------------------------------------
@@ -130,8 +162,8 @@ export function handCupsPerDay(workersHere: number, t: Tuning = TUNING): number 
 }
 
 /** Buyers who come to the stand the player is running in person, per full day. */
-export function liveBuyersPerDay(plotId: PlotId, price: number, t: Tuning = TUNING, standsInDistrict = 1): number {
-  return buyersPerDay(plotId, price, t, standsInDistrict) * t.liveDemandScale;
+export function liveBuyersPerDay(plotId: PlotId, price: number, crowd: PlotCrowd, t: Tuning = TUNING): number {
+  return buyersPerDay(plotId, price, crowd, t) * t.liveDemandScale;
 }
 
 /**
@@ -143,29 +175,32 @@ export function liveBuyersPerDay(plotId: PlotId, price: number, t: Tuning = TUNI
 export function liveCupsPerDay(
   plotId: PlotId,
   price: number,
-  opts: { workersHere: number; focus: number; standsInDistrict?: number },
+  opts: { workersHere: number; focus: number; crowd: PlotCrowd },
   t: Tuning = TUNING
 ): number {
   const focus = Math.max(0, Math.min(1, opts.focus));
-  const buyers = liveBuyersPerDay(plotId, price, t, opts.standsInDistrict ?? 1);
+  const buyers = liveBuyersPerDay(plotId, price, opts.crowd, t);
   return Math.min(buyers * focus, handCupsPerDay(opts.workersHere, t) * focus);
 }
 
+/** Passers-by per full day who reach the stand the player runs in person. */
+export function liveWalkersPerDay(plotId: PlotId, crowd: PlotCrowd, t: Tuning = TUNING): number {
+  return walkersPerDay(plotId, crowd, t) * t.liveDemandScale;
+}
+
 /**
- * FOR THE 3D SCENE'S CUSTOMER SPAWNER: seconds of DAY-CLOCK time (at 1x speed) until the
- * next passer-by reaches the live stand and decides whether to buy.
- *
- * The scene should, each time this gap runs out and a walker is in reach, make ONE
- * buy-or-pass roll against `getConversionProb(price, sensitivity)` and then start a new
- * gap whether the walker bought or passed. Over a day that is `walkersPerDay` decisions,
- * so the live stand sees exactly `buyersPerDay` buyers on average: the same number a
- * staffed stand uses.
+ * FOR THE 3D SCENE'S CUSTOMER SPAWNER: REAL seconds until the next buy-or-pass decision
+ * at the live stand becomes owed (core/liveCrowd.ts explains how walkers settle them).
+ * A day lasts DAY_SECONDS[speed] real seconds, so over a day that is `walkersPerDay`
+ * decisions at either clock speed, and the live stand sees the same `buyersPerDay` on
+ * average as a staffed stand would.
  *
  * `roll` is one gameplay random draw in [0, 1); it spreads the gap from 0.6x to 1.4x of
- * the average so arrivals do not tick like a metronome (the mean stays exactly the
- * average). At 2x clock speed divide the result by 2, so a faster day is not a poorer one.
+ * the average so arrivals do not tick like a metronome (the mean is exactly the average).
  */
-export function liveWalkerGapSeconds(plotId: PlotId, roll: number, standsInDistrict = 1, t: Tuning = TUNING): number {
-  const walkers = Math.max(1, walkersPerDay(plotId, t, standsInDistrict) * t.liveDemandScale);
-  return (DAY_SECONDS[1] / walkers) * (0.6 + 0.8 * roll);
+export function walkerGapSeconds(walkersPerDayHere: number, speed: ClockSpeed, roll: number): number {
+  // A stand with no walkers has no gap to wait for; callers must not ask (liveCrowd.ts
+  // tickGate checks first). Throwing beats quietly pretending there is one walker.
+  if (!(walkersPerDayHere > 0)) throw new Error(`walkerGapSeconds: no walkers (${walkersPerDayHere})`);
+  return (DAY_SECONDS[speed] / walkersPerDayHere) * (0.6 + 0.8 * roll);
 }

@@ -11,7 +11,7 @@ import { fmtSignedMoney } from '../format';
  * record's sum (state changed since closing), we show ONE combined row instead of guessing.
  */
 
-export type RowKind = 'sales' | 'lemons' | 'rent' | 'wages' | 'rentWages' | 'profit' | 'line' | 'final';
+export type RowKind = 'sales' | 'lemons' | 'rent' | 'wages' | 'rentWages' | 'marketing' | 'profit' | 'line' | 'final';
 export type Tone = 'gain' | 'cost' | 'flat';
 
 export interface ReceiptRow {
@@ -48,6 +48,22 @@ function costRow(kind: RowKind, label: string, spent: number, how?: string): Rec
   };
 }
 
+/** The receipt's label for campaign spending. Books' live Income tab uses the same word. */
+export const MARKETING_LABEL = 'Marketing';
+
+/**
+ * The Marketing row, or null on a day with no campaigns.
+ *
+ * Why only when > 0: most days have no campaign, and a "$0.00 Marketing" line on every
+ * receipt would be noise. Why it sits after rent and wages: it is a cost of the day like
+ * them (core/dayEnd.ts projectDay takes it out of profit), so it belongs above Profit.
+ * `spent` must be the engine's own figure (DayRecord.marketing for a closed day,
+ * projectDay(...).marketing for the live one), so both screens print the same row.
+ */
+export function marketingRow(spent: number): ReceiptRow | null {
+  return spent > 0 ? costRow('marketing', MARKETING_LABEL, spent) : null;
+}
+
 export function cupsNote(cups: number, revenue: number): string {
   if (cups <= 0) return '0 cups';
   const label = `${cups} ${cups === 1 ? 'cup' : 'cups'}`;
@@ -76,6 +92,8 @@ export function buildReceipt({ record, dailyRent, dailyWages }: ReceiptInput): R
   } else {
     rows.push(costRow('rentWages', 'Rent + wages', record.rentAndWages));
   }
+  const marketing = marketingRow(record.marketing);
+  if (marketing) rows.push(marketing);
   rows.push(
     {
       kind: 'profit',

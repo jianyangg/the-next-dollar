@@ -12,11 +12,12 @@ import type { PlotStatus } from './sliceModel';
  * (a Fifth Ave corner sees about twice the walkers of a Central Park corner and costs
  * ten times the rent; its shoppers pay $5 a cup where park walkers pay $3).
  *
- * `walkersPerDay` is used for STAFFED stands the player is not running in person
- * (core/awaySales.ts): how many passers-by reach that stand in a full day and decide
- * whether to buy at the current price. The stand the player runs live gets real
- * walkers from the 3D scene instead, and the scene scales how often they come by the
- * same number (see `trafficMultiplier`), so a busy plot is busy either way.
+ * `walkersPerDay` is the plot's base crowd: how many passers-by reach a stand here in a
+ * full day and decide whether to buy. Every stand uses it through the one sales
+ * formula (core/standSales.ts `walkersPerDay`, which adds the split between the
+ * player's stands in the district and marketing awareness): staffed stands through
+ * core/awaySales.ts, and the stand the player runs in person through the 3D scene,
+ * which turns that number into owed decisions and crowd size (core/liveCrowd.ts).
  *
  * Positions are world coordinates on the walkable street (x left/right, z toward the
  * camera), shared by the 3D scene and its collision boxes: one source of truth.
@@ -136,15 +137,6 @@ export function plotsIn(district: NeighborhoodId): PlotSpot[] {
 
 /** Plots the player can lease (the seller's stand is only ever bought through the deal). */
 export const isLeasable = (p: PlotSpot): boolean => p.kind !== 'seller';
-
-/**
- * How busy a plot is compared with the Central Park corner (the stand the game was
- * tuned on). The live scene divides its customer arrival gap by this.
- */
-export function trafficMultiplier(id: PlotId): number {
-  const reference = getPlot('central-park/corner').walkersPerDay;
-  return getPlot(id).walkersPerDay / reference;
-}
 
 /**
  * A plot as the 3D scene and the UI need to draw it: where it is plus what the player

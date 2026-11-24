@@ -51,6 +51,29 @@ describe('BooksDrawer', () => {
     expect(document.body.textContent).toContain('No reviews yet');
   });
 
+  it('hides the marketing block and row on a run that never advertised', () => {
+    render(<BooksDrawer />);
+    expect(document.body.textContent).not.toContain('Marketing');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Balance' }));
+    expect(screen.queryByLabelText('Built, not counted in your worth')).toBeNull();
+  });
+
+  it("after a real campaign: Income shows today's Marketing cost, Balance lists the awareness and the run's spend", () => {
+    act(() =>
+      useGameStore.setState((s) => ({ neighborhoodId: 'central-park', economy: { ...s.economy, cash: 500 } }))
+    );
+    act(() => useGameStore.getState().actions.advertise());
+    const e = useGameStore.getState().economy;
+    expect(e.totalMarketing).toBeGreaterThan(0); // the purchase really happened
+    render(<BooksDrawer />);
+    // Income is the live projection: same figure projectDay (and so the receipt) uses.
+    expect(document.body.textContent).toContain(`Marketing(expense)-$${e.dayMarketing.toFixed(2)}`);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Balance' }));
+    const block = screen.getByLabelText('Built, not counted in your worth');
+    expect(block.textContent).toContain(`Central Park(awareness)${Math.round(e.awareness['central-park'] * 100)}/100`);
+    expect(block.textContent).toContain(`$${e.totalMarketing.toFixed(2)}`);
+  });
+
   it('moves with D and opens with E; W/S never reach the world behind', () => {
     const world = vi.fn(() => true);
     pushInputLayer({ priority: INPUT_PRIORITY.world, onKeyDown: world });

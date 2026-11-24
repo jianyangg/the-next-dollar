@@ -99,7 +99,7 @@ function IntroBody() {
       </div>
       <h2 className="pt-disp intro-line">That's the line.</h2>
       <p className="pt-disp intro-sub">
-        Rent + wages + what her money would have earned that day. Earn less, and it was better off with Grandma.
+        Rent + wages + any ads + what her money would have earned that day. Earn less, and it was better off with Grandma.
       </p>
     </>,
     <>

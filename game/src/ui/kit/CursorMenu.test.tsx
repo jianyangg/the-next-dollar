@@ -7,7 +7,7 @@ import * as m from 'motion/react-m';
 vi.mock('../../audio/soundEngine', () => ({ soundEngine: new Proxy({}, { get: () => () => {} }) }));
 
 import { dispatchKeyDown, INPUT_PRIORITY, pushInputLayer, resetInputRouterForTests } from '../../state/input';
-import { CursorMenu, nextEnabledIndex } from './CursorMenu';
+import { CursorMenu, lineHopIndex, nextEnabledIndex } from './CursorMenu';
 
 const press = (key: string) =>
   act(() => dispatchKeyDown({ key, target: document.body, preventDefault: () => {} } as unknown as KeyboardEvent));
@@ -23,6 +23,32 @@ describe('nextEnabledIndex', () => {
     expect(nextEnabledIndex(items, 0, 1)).toBe(2);
     expect(nextEnabledIndex(items, 2, 1)).toBe(0);
     expect(nextEnabledIndex(items, 0, -1)).toBe(2);
+  });
+});
+
+describe('lineHopIndex', () => {
+  // The price row as drawn: $2 $3 $4 $5 on line one, Done wrapped under $2.
+  const box = (left: number, top: number) => ({ left, right: left + 100, top, bottom: top + 40 });
+  const boxes = [box(0, 0), box(120, 0), box(240, 0), box(360, 0), box(0, 60)];
+  const items = boxes.map(() => ({}));
+
+  it('Down from any price reaches Done on the line below', () => {
+    expect(lineHopIndex(boxes, items, 0, 1)).toBe(4);
+    expect(lineHopIndex(boxes, items, 3, 1)).toBe(4);
+  });
+
+  it('Up from Done lands on the item drawn above it', () => {
+    expect(lineHopIndex(boxes, items, 4, -1)).toBe(0);
+  });
+
+  it('stays put when there is no line in that direction', () => {
+    expect(lineHopIndex(boxes, items, 1, -1)).toBe(1);
+    expect(lineHopIndex(boxes, items, 4, 1)).toBe(4);
+  });
+
+  it('skips disabled items and unmeasured buttons', () => {
+    expect(lineHopIndex(boxes, [{}, {}, {}, {}, { disabled: true }], 0, 1)).toBe(0);
+    expect(lineHopIndex([box(0, 0), null], [{}, {}], 0, 1)).toBe(0);
   });
 });
 

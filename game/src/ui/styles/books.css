@@ -85,3 +85,8 @@
 .books-traj-bar.is-cost { background: var(--cost-paper); }
 .books-traj-bar.is-empty { height: 6px; background: var(--rule); }
 .books-traj-foot { display: flex; justify-content: space-between; margin-top: var(--s-1); font-size: var(--t-small); color: var(--ink-dim); }
+
+/* ---------- Balance: brand awareness the balance sheet does not count ---------- */
+.books-built { margin-top: var(--s-4); }
+.books-built-title { font-size: var(--t-body); font-weight: 800; color: var(--ink-dim); }
+.books-built-empty { font-size: var(--t-body); color: var(--ink-dim); }

@@ -16,6 +16,26 @@ export type ClockSpeed = 1 | 2;
 export const DAY_SECONDS: Record<ClockSpeed, number> = { 1: 120, 2: 60 };
 export const MAX_CLOCK_TICK_SECONDS = 0.25;
 
+/**
+ * THE SPEED THE GAME IS ACTUALLY RUNNING AT, which the day clock, the street (walkers,
+ * the line, customer patience) and the hired manager all follow.
+ *
+ * Owner decision (2026-11-24): 2x is for waiting, not for working. While the player is
+ * at the counter (serving or in the brew mini-game) the game runs at 1x, whatever the
+ * button says:
+ *   - The player's reaction time cannot double. A real second between one cup and the
+ *     next press would cost two game seconds at 2x, so a player alone sold about 22%
+ *     fewer cups a game day than the one sales rule (core/standSales.ts
+ *     handCupsPerDay, counted in 1x seconds) and the balance simulation assume.
+ *   - The brew mini-game is a skill test with real-time windows; doubling it would make
+ *     it twice as hard.
+ * Away from the counter (walking, staffed stands selling, a manager serving) 2x is a true
+ * fast-forward: everything goes twice as fast, so a game day sells the same cups.
+ */
+export function effectiveClockSpeed(chosen: ClockSpeed, atCounter: boolean): ClockSpeed {
+  return atCounter ? 1 : chosen;
+}
+
 export function advanceClock(progress: number, realDtSeconds: number, speed: ClockSpeed): number {
   const dt = Math.min(MAX_CLOCK_TICK_SECONDS, realDtSeconds);
   return Math.min(1, progress + dt / DAY_SECONDS[speed]);

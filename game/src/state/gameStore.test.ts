@@ -33,6 +33,7 @@ vi.mock('../audio/soundEngine', () => {
 });
 
 import { soundEngine } from '../audio/soundEngine';
+import { DAY_SECONDS } from '../core/clock';
 import { closeDay as closeBooks } from '../core/dayEnd';
 import { CENTRAL_PARK_DEAL } from '../core/deal';
 import * as P from '../core/purchases';
@@ -44,7 +45,10 @@ import type { SellerClient } from '../deal/sellerClient';
 import {
   ARRIVAL_TITLE_MS,
   resetGameStore,
+  selectCampaign,
   selectClockPaused,
+  selectEffectiveClockSpeed,
+  selectManagerIntervalMs,
   selectMusicHushed,
   setSellerClientForTests,
   TRAVEL_COVER_MS,
@@ -522,7 +526,7 @@ describe('hold to serve', () => {
     expect(store().economy.dayCupsSold).toBe(2);
   });
 
-  it('alone the pour is a 2 s hold; a worker at the stand cuts it to 0.6 s', () => {
+  it('alone the pour is a 1.5 s hold; a worker at the stand cuts it to 0.6 s', () => {
     // This test needs frames at a known time, so it replaces the stub above with one
     // whose frames always report "0.7 s after the pour began".
     const start = performance.now();
@@ -530,12 +534,12 @@ describe('hold to serve', () => {
     const plot = 'central-park/corner';
     setEconomy({ plots: { ...store().economy.plots, [plot]: 'built' } });
 
-    // Alone: 0.7 s into a 2 s pour the cup is 35% full and nothing is sold yet.
+    // Alone: 0.7 s into a 1.5 s pour the cup is 47% full and nothing is sold yet.
     actions().setSpaceHeld(true);
     actions().startServeFrontCustomer();
     vi.advanceTimersByTime(20);
     expect(store().economy.dayCupsSold).toBe(0);
-    expect(store().serveProgress).toBeCloseTo(0.35);
+    expect(store().serveProgress).toBeCloseTo(0.7 / 1.5);
     actions().setSpaceHeld(false); // let go: the half-poured cup is spilled
     vi.advanceTimersByTime(20);
 
@@ -545,6 +549,54 @@ describe('hold to serve', () => {
     actions().startServeFrontCustomer();
     vi.advanceTimersByTime(20);
     expect(store().economy.dayCupsSold).toBe(1);
+  });
+
+  it('with 2x chosen, the counter still runs at 1x: the pour is the same 1.5 s hold', () => {
+    // Frames report "0.8 s after the pour began": 53% full at either setting, because
+    // the game runs at 1x while the player works the counter (core/clock.ts).
+    const start = performance.now();
+    vi.stubGlobal('requestAnimationFrame', (cb: (t: number) => void) => setTimeout(() => cb(start + 800), 16));
+    actions().setSpaceHeld(true);
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(20);
+    expect(store().serveProgress).toBeCloseTo(0.8 / 1.5);
+    actions().setSpaceHeld(false);
+    vi.advanceTimersByTime(20);
+
+    useGameStore.setState({ clockSpeed: 2 });
+    actions().setSpaceHeld(true);
+    actions().startServeFrontCustomer();
+    vi.advanceTimersByTime(20);
+    // Still part-poured (at 2x the 0.8 s frame would have finished it), nothing sold.
+    expect(store().serveProgress).toBeLessThan(1);
+    expect(store().economy.dayCupsSold).toBe(0);
+    actions().setSpaceHeld(false); // let go so the pour loop stops before the next test
+    vi.advanceTimersByTime(20);
+  });
+});
+
+describe('2x is for waiting: a fast-forward away from the counter, 1x at it', () => {
+  it('runs at 1x while the player works the counter or brews, 2x once they step away', () => {
+    useGameStore.setState({ clockSpeed: 2, workingAtStand: false, brewGame: null });
+    expect(selectEffectiveClockSpeed(store())).toBe(2);
+    useGameStore.setState({ workingAtStand: true });
+    expect(selectEffectiveClockSpeed(store())).toBe(1);
+    useGameStore.setState({ workingAtStand: false, brewGame: {} as never });
+    expect(selectEffectiveClockSpeed(store())).toBe(1);
+    const before = store().timeProgress;
+    actions().tickClock(0.2);
+    // 0.2 real seconds of a 120-second (1x) day, not of a 60-second (2x) day.
+    expect(store().timeProgress - before).toBeCloseTo(0.2 / DAY_SECONDS[1]);
+    useGameStore.setState({ brewGame: null });
+  });
+
+  it('the hired manager works twice as often at 2x while the player is away', () => {
+    const plot = 'central-park/corner';
+    useGameStore.setState({ neighborhoodId: 'central-park', workingAtStand: false });
+    setEconomy({ managers: 1, plots: { ...store().economy.plots, [plot]: 'built' } });
+    const at1x = selectManagerIntervalMs(store());
+    useGameStore.setState({ clockSpeed: 2 });
+    expect(selectManagerIntervalMs(store())).toBe((at1x as number) / 2);
   });
 });
 
@@ -585,5 +637,62 @@ describe('the lemonade brew (squeeze -> sweeten -> stir)', () => {
     expect(store().brewGame).toBe(game);
     resetGameStore(); // stops the brew loop while the stubs still exist
     vi.unstubAllGlobals();
+  });
+});
+
+describe('advertise (marketing campaign in the current district)', () => {
+  it('buys one campaign here: cash down by its price, awareness up, panel figures from the rules', () => {
+    setEconomy({ cash: 100 });
+    const before = selectCampaign(store());
+    expect(before.district).toBe(store().neighborhoodId);
+    expect(before.now).toBe(0);
+    expect(before.afterBuy).toBe(0.5);
+    actions().advertise();
+    expect(store().economy.cash).toBeCloseTo(100 - (before.cost ?? NaN), 2);
+    const after = selectCampaign(store());
+    expect(after.now).toBe(0.5);
+    expect(after.tomorrow).toBe(0.375);
+    expect(after.walkerLift).toBeCloseTo(0.2);
+  });
+
+  it('refuses without enough cash and changes nothing', () => {
+    setEconomy({ cash: 1 });
+    actions().advertise();
+    expect(store().economy.cash).toBe(1);
+    expect(selectCampaign(store()).now).toBe(0);
+    expect(selectCampaign(store()).canAfford).toBe(false);
+  });
+});
+
+describe('advertise: guards found by the review', () => {
+  it('is refused while the day receipt is up (the day is already booked)', () => {
+    setEconomy({ cash: 100 });
+    actions().closeDay();
+    const cash = store().economy.cash;
+    actions().advertise();
+    expect(store().economy.cash).toBe(cash);
+    expect(store().economy.dayMarketing).toBe(0);
+  });
+
+  it('counts staffed stands here that already sell all one worker can pour', () => {
+    // Fifth Avenue corner at $3: far more buyers than a worker's 20 cups.
+    const plot = 'fifth-ave/corner';
+    const s = store().economy;
+    useGameStore.setState({ neighborhoodId: 'fifth-ave' });
+    setEconomy({ pricePerCup: 3, plots: { ...s.plots, [plot]: 'built' }, staffedPlots: [plot] });
+    expect(selectCampaign(store()).cappedStands).toBe(1);
+  });
+
+  it('counts the stand the player runs in person when its buyers exceed what their hands pour', () => {
+    // Central Park corner, player alone: about 34 buyers a day at $2 against 33.1 cups
+    // their hands can pour (core/standSales.ts handCupsPerDay), so more walkers add no
+    // sales. At $4 far fewer buy, the hands have room, and a campaign would sell more.
+    const plot = 'central-park/corner';
+    const s = store().economy;
+    useGameStore.setState({ neighborhoodId: 'central-park', activePlotId: plot });
+    setEconomy({ pricePerCup: 2, plots: { ...s.plots, [plot]: 'built' }, staffedPlots: [] });
+    expect(selectCampaign(store()).cappedStands).toBe(1);
+    setEconomy({ pricePerCup: 4 });
+    expect(selectCampaign(store()).cappedStands).toBe(0);
   });
 });

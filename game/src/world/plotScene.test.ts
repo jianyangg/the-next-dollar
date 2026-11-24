@@ -17,13 +17,10 @@ import {
 } from './collision';
 import {
   customerLookDirection,
-  FOOT_TRAFFIC_MAX,
-  FOOT_TRAFFIC_MIN,
   PLOT_INTERACT_RADIUS,
   QUEUE_CAPACITY,
   isWithinQueueReach,
   pickNearbyCandidate,
-  queueJoinCooldownSeconds,
   queueSlotsAt,
   streetCandidates,
   vendorLookDirection,
@@ -105,18 +102,6 @@ describe('live queue follows the live plot', () => {
   });
 });
 
-describe('foot traffic scales how often customers arrive', () => {
-  it('divides the tuned 2.6..4.8 s gap by the multiplier', () => {
-    expect(queueJoinCooldownSeconds(0, 1)).toBeCloseTo(2.6);
-    expect(queueJoinCooldownSeconds(1, 1)).toBeCloseTo(4.8);
-    expect(queueJoinCooldownSeconds(0.5, 2)).toBeCloseTo(3.7 / 2);
-  });
-
-  it('clamps an out-of-range multiplier instead of stalling or flooding the line', () => {
-    expect(queueJoinCooldownSeconds(0, 0)).toBeCloseTo(2.6 / FOOT_TRAFFIC_MIN);
-    expect(queueJoinCooldownSeconds(0, 100)).toBeCloseTo(2.6 / FOOT_TRAFFIC_MAX);
-  });
-});
 
 describe('nearest-plot targeting', () => {
   it('names the plot the player stands at, with the target its status calls for', () => {

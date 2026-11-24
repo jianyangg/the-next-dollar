@@ -30,7 +30,7 @@ import { resetGameStore, useGameStore } from '../state/gameStore';
 import { BrewStep } from './BrewMinigame';
 
 const fresh = (): LemonadeBrewState =>
-  lemonadeBrew.init(createRunStreams(9).gameplay, { difficulty: 0.5, targetSweetness: 0.5, workerSqueezes: false });
+  lemonadeBrew.init(createRunStreams(9).gameplay, { difficulty: 0.5, targetSweetness: 0.5, workerSqueezes: false, allowTwists: false });
 
 function mount() {
   let renders = 0;
@@ -118,9 +118,36 @@ describe('lemonade brew sign', () => {
   });
 
   it('labels step 1 as the worker when a worker squeezes', () => {
-    setBrew(lemonadeBrew.init(createRunStreams(9).gameplay, { difficulty: 0, targetSweetness: 0.5, workerSqueezes: true }));
+    setBrew(lemonadeBrew.init(createRunStreams(9).gameplay, { difficulty: 0, targetSweetness: 0.5, workerSqueezes: true, allowTwists: false }));
     const { container } = mount();
     expect(container.querySelector('.brew-step.is-done')?.textContent).toContain('Worker');
     expect(container.querySelector('.brew-taste')).not.toBeNull();
+  });
+
+  it('announces the twist of the current step, and the reversed stir order', () => {
+    const twisted = lemonadeBrew.init(createRunStreams(9).gameplay, {
+      difficulty: 0.5,
+      targetSweetness: 0.5,
+      workerSqueezes: false,
+      allowTwists: false,
+      twists: { squeeze: 'tough-rind', sweeten: 'honey', stir: 'counter' },
+    });
+    setBrew(twisted);
+    const { container } = mount();
+    expect(container.querySelector('.brew-twist')?.textContent).toContain('Tough rind');
+
+    setBrew({ ...twisted, phase: 'sweeten' });
+    expect(container.querySelector('.brew-twist')?.textContent).toContain('Honey');
+    expect(container.querySelector('.brew-bag.is-honey')).not.toBeNull();
+
+    setBrew({ ...twisted, phase: 'stir' });
+    expect(container.querySelector('.brew-twist')?.textContent).toContain('other way');
+    expect(container.querySelector('.brew-action')?.textContent).toContain('W A S D');
+  });
+
+  it('a plain brew shows no twist line', () => {
+    setBrew(fresh());
+    const { container } = mount();
+    expect(container.querySelector('.brew-twist')).toBeNull();
   });
 });

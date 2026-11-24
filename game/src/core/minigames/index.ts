@@ -25,7 +25,7 @@ import type { StepResult, UpgradeInputs } from './types';
 
 export { tripleSqueeze, keepInTube, rapidStir, movingBullseye, lemonadeBrew, squeeze, sweeten, stir };
 export type { BrewCue, BrewQuality, StepResult, UpgradeInputs } from './types';
-export type { BrewPhase, LemonadeBrewConfig, LemonadeBrewState } from './lemonadeBrew';
+export type { BrewPhase, BrewTwists, LemonadeBrewConfig, LemonadeBrewState } from './lemonadeBrew';
 export type { LemonKind } from './squeeze';
 export type { StirQuadrant } from './stir';
 export type { TripleSqueezeState } from './tripleSqueeze';

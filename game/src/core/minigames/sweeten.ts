@@ -36,10 +36,20 @@ export const FIX_YIELD_COST = 0.1;
 export const FIX_OFFER_SEC = 1.6;
 /** Pause that shows the final taste before moving on to stirring. */
 export const REVEAL_SEC = 0.5;
+/**
+ * TWIST "honey": honey is thick, so it keeps running for this long after you let go,
+ * at the same pour rate (0.25 s x 0.5/s = +0.125 sweetness). The skill becomes
+ * stopping EARLY, judging the drip. The pour rate itself never changes.
+ */
+export const HONEY_DRIP_SEC = 0.25;
 
-export type SweetenPhase = 'ready' | 'pour' | 'offer' | 'reveal' | 'done';
+export type Sweetener = 'sugar' | 'honey';
+
+/** 'drip' only happens with honey: released, but still running into the pitcher. */
+export type SweetenPhase = 'ready' | 'pour' | 'drip' | 'offer' | 'reveal' | 'done';
 
 export interface SweetenState {
+  sweetener: Sweetener;
   target: number;
   /** Half-width of the "tastes right" band around `target`. */
   band: number;
@@ -50,8 +60,16 @@ export interface SweetenState {
   timer: number;
 }
 
-export function init(target: number, band: number): SweetenState {
-  return { target: clamp01(target), band, sweetness: 0, phase: 'ready', fixUsed: false, timer: 0 };
+export function init(target: number, band: number, sweetener: Sweetener = 'sugar'): SweetenState {
+  return { sweetener, target: clamp01(target), band, sweetness: 0, phase: 'ready', fixUsed: false, timer: 0 };
+}
+
+/** The pour is over and settled: offer the fix if it is too sweet, otherwise taste it. */
+function settle(state: SweetenState): { state: SweetenState; overshoot: boolean } {
+  if (isOverSweet(state) && !state.fixUsed) {
+    return { state: { ...state, phase: 'offer', timer: 0 }, overshoot: true };
+  }
+  return { state: { ...state, phase: 'reveal', timer: 0 }, overshoot: false };
 }
 
 /** Over the band, i.e. too sweet for this crowd. */
@@ -73,11 +91,15 @@ export function press(state: SweetenState): { state: SweetenState; fixed: boolea
 
 export function release(state: SweetenState): { state: SweetenState; overshoot: boolean } {
   if (state.phase !== 'pour') return { state, overshoot: false };
+  // Honey keeps running; it settles (and may overshoot) when the drip ends in `step`.
+  if (state.sweetener === 'honey') return { state: { ...state, phase: 'drip', timer: 0 }, overshoot: false };
   // Too sweet and the fix is still available -> offer it. Otherwise lock the taste in.
-  if (isOverSweet(state) && !state.fixUsed) {
-    return { state: { ...state, phase: 'offer', timer: 0 }, overshoot: true };
-  }
-  return { state: { ...state, phase: 'reveal', timer: 0 }, overshoot: false };
+  return settle(state);
+}
+
+/** Honey only: the drip has just ended this frame, with this result. */
+export function dripEnded(prev: SweetenState, next: SweetenState): boolean {
+  return prev.phase === 'drip' && next.phase !== 'drip';
 }
 
 export function step(state: SweetenState, dt: number): SweetenState {
@@ -85,6 +107,13 @@ export function step(state: SweetenState, dt: number): SweetenState {
   switch (state.phase) {
     case 'pour':
       return { ...state, sweetness: clamp01(state.sweetness + SUGAR_POUR_PER_SEC * physDt) };
+    case 'drip': {
+      // Only the part of this frame that is still inside the drip window pours.
+      const left = Math.max(0, HONEY_DRIP_SEC - state.timer);
+      const run = Math.min(physDt, left);
+      const dripped = { ...state, sweetness: clamp01(state.sweetness + SUGAR_POUR_PER_SEC * run), timer: state.timer + run };
+      return dripped.timer >= HONEY_DRIP_SEC - 1e-9 ? settle(dripped).state : dripped;
+    }
     case 'offer': {
       const timer = state.timer + physDt;
       // Offer expired: the player chose to keep it too sweet.

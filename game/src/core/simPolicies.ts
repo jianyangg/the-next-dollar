@@ -1,7 +1,7 @@
 import { getPlot, isLeasable, type PlotId, PLOTS, SELLER_PLOT_ID } from './plots';
 import { countOwnedStands } from './sliceModel';
 import type { SimMorning, SimPolicy } from './simulateRun';
-import { liveCupsPerDay, staffedCupsPerDay } from './standSales';
+import { crowdAt, liveCupsPerDay, staffedCupsPerDay } from './standSales';
 import { cupCost } from './tuning';
 
 /**
@@ -107,10 +107,11 @@ export const sharp: SimPolicy = {
     // possible (a faster pour, plus sales while the player is away) cover the wage.
     for (const p of PLOTS) {
       if (m.state.plots[p.id] !== 'built' || m.state.staffedPlots.includes(p.id)) continue;
-      const alone = liveCupsPerDay(p.id, price, { workersHere: 0, focus: sharp.focus }, t);
+      const crowd = crowdAt(m.state, p.id);
+      const alone = liveCupsPerDay(p.id, price, { workersHere: 0, focus: sharp.focus, crowd }, t);
       const helped =
-        liveCupsPerDay(p.id, price, { workersHere: 1, focus: sharp.focus }, t) +
-        staffedCupsPerDay(p.id, price, t) * (1 - sharp.focus);
+        liveCupsPerDay(p.id, price, { workersHere: 1, focus: sharp.focus, crowd }, t) +
+        staffedCupsPerDay(p.id, price, crowd, t) * (1 - sharp.focus);
       if ((helped - alone) * (price - cupCost(t)) > t.workerDailyWage) m.hireWorker(p.id);
     }
 
@@ -153,4 +154,22 @@ export const openEverything: SimPolicy = {
   },
 };
 
-export const SIM_POLICIES = { lazy, average, sharp, openEverything } as const;
+/**
+ * A control for marketing: plays like `average`, and every morning also buys a campaign
+ * in every district where it owns a stand, whatever it costs. Advertising without asking
+ * whether the extra walkers can be served or are worth it must not beat Grandma
+ * (simulateRun.test.ts). If it did, marketing would be a button, not a decision.
+ */
+export const adEveryDay: SimPolicy = {
+  name: 'ad-every-day',
+  focus: average.focus,
+  restock: average.restock,
+  counter: average.counter,
+  morning(m) {
+    average.morning(m);
+    const districts = new Set(PLOTS.filter((p) => m.state.plots[p.id] === 'built').map((p) => p.district));
+    for (const d of districts) m.advertise(d, AVERAGE_KEEP_CASH);
+  },
+};
+
+export const SIM_POLICIES = { lazy, average, sharp, openEverything, adEveryDay } as const;

@@ -8,6 +8,7 @@ const record = (over: Partial<DayRecord> = {}): DayRecord => ({
   revenue: 24,
   cogs: 4,
   rentAndWages: 2,
+  marketing: 0,
   nopat: 18,
   hurdleCharge: 1.15,
   chargedOn: 23,
@@ -46,6 +47,32 @@ describe('buildReceipt', () => {
     expect(rows.map((r) => r.kind)).toContain('rentWages');
     expect(rows.map((r) => r.kind)).not.toContain('rent');
     expect(rows.find((r) => r.kind === 'rentWages')?.text).toBe('-$5.00');
+  });
+
+  it('has no Marketing row on a day without campaigns', () => {
+    const rows = buildReceipt({ record: record(), dailyRent: 2, dailyWages: 0 });
+    expect(rows.map((r) => r.kind)).not.toContain('marketing');
+  });
+
+  it("prints the record's marketing as a cost between wages and profit", () => {
+    const rows = buildReceipt({
+      record: record({ marketing: 24, nopat: -6, valueCreated: -7.15 }),
+      dailyRent: 2,
+      dailyWages: 0,
+    });
+    const kinds = rows.map((r) => r.kind);
+    expect(kinds.indexOf('marketing')).toBe(kinds.indexOf('wages') + 1);
+    expect(kinds.indexOf('profit')).toBe(kinds.indexOf('marketing') + 1);
+    const row = rows.find((r) => r.kind === 'marketing')!;
+    expect(row.label).toBe('Marketing');
+    expect(row.text).toBe('-$24.00');
+    expect(row.tone).toBe('cost');
+  });
+
+  it('keeps the Marketing row after a combined rent + wages row too', () => {
+    const rows = buildReceipt({ record: record({ rentAndWages: 5, marketing: 13 }), dailyRent: 2, dailyWages: 0 });
+    const kinds = rows.map((r) => r.kind);
+    expect(kinds.indexOf('marketing')).toBe(kinds.indexOf('rentWages') + 1);
   });
 
   it('colours a losing day as cost', () => {

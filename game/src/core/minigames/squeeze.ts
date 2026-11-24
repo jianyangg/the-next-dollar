@@ -58,10 +58,19 @@ export const JUICE_FLOW_PER_SEC = 1.25;
 export const LEMON_MAX_SEC = 2.4;
 /** Bitterness added per second spent above the zone, before dividing by lemon count. */
 export const BITTER_PER_SEC_ABOVE = 1;
+/**
+ * TWIST "tough rind": how far the juicy zone climbs as a lemon empties (0 at the first
+ * drop, this much once it is spent). Like a real hand squeeze, the last juice needs a
+ * harder grip, so the player has to follow the zone upward instead of parking the needle.
+ * The rise/fall speeds are untouched: only WHERE the juice is changes.
+ */
+export const TOUGH_RIND_SHIFT = 0.15;
 
 export interface SqueezeState {
   /** The batch, in the order they go on the juicer. */
   lemons: readonly LemonKind[];
+  /** Twist: the juicy zone climbs as each lemon empties (see TOUGH_RIND_SHIFT). */
+  toughRind: boolean;
   /** Which lemon is on the juicer now (== lemons.length once finished). */
   index: number;
   /** Current pressure, 0..1. */
@@ -115,9 +124,10 @@ export function drawLemons(rand: () => number, difficulty: number): LemonKind[] 
   return lemons;
 }
 
-export function init(lemons: readonly LemonKind[]): SqueezeState {
+export function init(lemons: readonly LemonKind[], options: { toughRind: boolean } = { toughRind: false }): SqueezeState {
   return {
     lemons,
+    toughRind: options.toughRind,
     index: 0,
     pressure: 0,
     lemonJuice: 0,
@@ -134,6 +144,18 @@ export function init(lemons: readonly LemonKind[]): SqueezeState {
 export function currentLemon(state: SqueezeState): LemonSpec {
   const kind = state.lemons[Math.min(state.index, state.lemons.length - 1)] ?? 'plump';
   return LEMON_SPECS[kind];
+}
+
+/**
+ * Where juice runs RIGHT NOW on the lemon being pressed. Without the tough-rind twist
+ * it is the lemon's own zone; with it, the zone is lifted by how much of this lemon is
+ * already squeezed. The UI draws the green band from this same function, so what the
+ * player sees is exactly what the rule checks.
+ */
+export function juicyZone(state: SqueezeState): { low: number; high: number } {
+  const spec = currentLemon(state);
+  const shift = state.toughRind ? TOUGH_RIND_SHIFT * clamp01(state.lemonJuice / spec.juice) : 0;
+  return { low: spec.zoneLow + shift, high: Math.min(1, spec.zoneHigh + shift) };
 }
 
 export function step(
@@ -153,8 +175,9 @@ export function step(
 
   // 2. Where is the needle relative to this lemon's zone? (Checked AFTER moving it,
   //    so the frame that enters the zone already gets juice.)
-  const inZone = pressure >= spec.zoneLow && pressure <= spec.zoneHigh;
-  const aboveZone = pressure > spec.zoneHigh;
+  const zone = juicyZone(state);
+  const inZone = pressure >= zone.low && pressure <= zone.high;
+  const aboveZone = pressure > zone.high;
   if (aboveZone && !state.aboveZone) cues.push('seeds');
 
   // 3. Juice runs only in the zone, and a lemon cannot give more than it holds.

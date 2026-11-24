@@ -11,8 +11,8 @@ import { fmtSignedMoney } from './format';
  *   [=====earned=====|////line////|          ]   +$4.20
  *
  * - The fill is what today has earned so far (cups sold: revenue minus lemons).
- * - The hazard-striped marker is THE LINE: rent + wages + the 5% charge on money tied
- *   up. It is the same picture as the 5% everywhere else in the UI.
+ * - The hazard-striped marker is THE LINE: rent + wages + today's marketing + Grandma's
+ *   15% on the money the day started with (core/dayEnd.ts projectDay).
  * - The number is today's value created so far = earned - line. Red while below the
  *   line, green once past it. It is exactly what the receipt will say if the bell rang
  *   now (core/dayEnd.ts `projectDay` is the single formula for both).

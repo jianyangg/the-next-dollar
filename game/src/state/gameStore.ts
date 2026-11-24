@@ -2,11 +2,12 @@ import { type Actor, createActor, fromPromise } from 'xstate';
 import { create } from 'zustand';
 import { devtools, subscribeWithSelector } from 'zustand/middleware';
 import { applyBrewOutcome, type BrewKind, brewDifficulty, type BrewTier, type StirKey } from '../core/brewing';
-import { advanceClock, type ClockSpeed, isClockPaused } from '../core/clock';
+import { advanceClock, type ClockSpeed, effectiveClockSpeed, isClockPaused } from '../core/clock';
 import { beatTheLine, closeDay as closeBooks, projectDay, startNextDay as advanceToNextDay } from '../core/dayEnd';
 import { CENTRAL_PARK_DEAL, CENTRAL_PARK_DEAL_ID, resolveSealedBid, toPublicView } from '../core/deal';
 import { type BrewCue, type BrewGameState, lemonadeBrew, pressGame, pressStirKey, stepGame } from '../core/minigames';
 import { getNeighborhood, type NeighborhoodId } from '../core/neighborhoods';
+import { awarenessAfterCampaign, awarenessWalkerFactor, buyCampaign, campaignCost, fadedAwareness } from '../core/marketing';
 import * as Purchases from '../core/purchases';
 import { stepAwaySales } from '../core/awaySales';
 import { getPlot, type PlotId, plotsIn, type PlotView, SELLER_PLOT_ID } from '../core/plots';
@@ -15,7 +16,7 @@ import { ledgerChips, type MoneyChip } from '../core/ledgerChips';
 import { STARTER_NAME, type StarterItem, starterShortfall } from '../core/tutorial';
 import { gameplayRandom } from '../core/runRandom';
 import { applySale, applyWalkout, salePopLabel } from '../core/sales';
-import { pourDurationMs } from '../core/standSales';
+import { crowdAt, handCupsPerDay, liveBuyersPerDay, pourDurationMs, staffedCupsPerDay } from '../core/standSales';
 import { TUNING } from '../core/tuning';
 import { dealMachine } from '../deal/dealMachine';
 import { type DealView, toDealView } from '../deal/dealView';
@@ -251,6 +252,8 @@ export interface GameActions {
   letWorkerGo: () => void;
   hireManager: () => void;
   setPrice: (price: number) => void;
+  /** Buy one marketing campaign in the district the player is in (core/marketing.ts). */
+  advertise: () => void;
 
   // brewing & serving
   startBrewGame: () => void;
@@ -384,6 +387,58 @@ export const selectSellerPresent = (s: GameData): boolean =>
   s.neighborhoodId === 'central-park' && s.economy.plots[SELLER_PLOT_ID] !== 'built';
 
 /**
+ * Everything the Advertise panel shows for the district the player is in, computed by
+ * the marketing rules (core/marketing.ts), so every number on screen is the rule's own:
+ *   cost         one campaign's price here, or null where there is nothing to reach
+ *   now          awareness right now, 0..1
+ *   afterBuy     awareness if one more campaign is bought now
+ *   tomorrow     what `now` fades to at tonight's bell (if nothing more is bought)
+ *   walkerLift   extra walkers awareness gives right now (0.2 = +20%)
+ *   canAfford    cash covers `cost`
+ *   cappedStands the player's stands here that already sell every cup they can pour at
+ *                today's price, so more walkers there add no sales and the panel says so
+ *                before the player pays. A staffed stand is capped at what one worker
+ *                pours (core/standSales.ts staffedCupsPerDay hits workerCupsPerDay); the
+ *                stand the player runs in person is capped by their own hands (its
+ *                buyers reach handCupsPerDay, the same cap liveCupsPerDay applies)
+ */
+export interface CampaignView {
+  district: NeighborhoodId;
+  cost: number | null;
+  now: number;
+  afterBuy: number;
+  tomorrow: number;
+  walkerLift: number;
+  canAfford: boolean;
+  cappedStands: number;
+}
+
+export const selectCampaign = (s: GameData): CampaignView => {
+  const district = s.neighborhoodId;
+  const livePlot = selectLivePlotId(s);
+  const now = s.economy.awareness[district];
+  const cost = campaignCost(district);
+  return {
+    district,
+    cost,
+    now,
+    afterBuy: awarenessAfterCampaign(now),
+    tomorrow: fadedAwareness(now),
+    walkerLift: awarenessWalkerFactor(now) - 1,
+    canAfford: cost !== null && s.economy.cash + 1e-9 >= cost,
+    cappedStands: plotsIn(district).filter((p) => {
+      if (s.economy.plots[p.id] !== 'built') return false;
+      const crowd = crowdAt(s.economy, p.id);
+      const price = s.economy.pricePerCup;
+      if (s.economy.staffedPlots.includes(p.id)) {
+        return staffedCupsPerDay(p.id, price, crowd) >= TUNING.workerCupsPerDay;
+      }
+      return p.id === livePlot && liveBuyersPerDay(p.id, price, crowd) >= handCupsPerDay(0);
+    }).length,
+  };
+};
+
+/**
  * The scene lets customers queue at the live plot only when it is built, stocked and
  * open, and only when someone will serve them: the player (or the manager) at the
  * counter, or no worker there. A staffed stand the player is not running sells through
@@ -431,13 +486,18 @@ export const selectClockPaused = (s: GameData): boolean =>
     maxDays: s.economy.maxDays,
   });
 
+/** The speed the game is really running at (core/clock.ts effectiveClockSpeed). */
+export const selectEffectiveClockSpeed = (s: GameData): ClockSpeed =>
+  effectiveClockSpeed(s.clockSpeed, s.workingAtStand || s.brewGame !== null);
+
 /** Interval (ms) of the hired manager's auto-serve beat, or null when it must not run. */
 export const selectManagerIntervalMs = (s: GameData): number | null => {
   const { managers, day, maxDays } = s.economy;
   if (managers <= 0 || selectLivePlotId(s) === null || day > maxDays || s.eodRecord !== null) {
     return null;
   }
-  return Math.max(900, 1850 - (managers - 1) * 350);
+  // The manager works on the game clock too: at 2x a beat comes twice as often.
+  return Math.max(900, 1850 - (managers - 1) * 350) / selectEffectiveClockSpeed(s);
 };
 
 // ---------------------------------------------------------------------------
@@ -452,8 +512,10 @@ const STIR_SHAKE_MS = 180;
 /**
  * How long the player must HOLD to fill one cup when they are ALONE at the counter.
  *
- * Balance pass (2026-11-24): raised from 700 ms to 2 s. One pair of hands is meant to be
- * the bottleneck of the first days: the line grows faster than the player can pour,
+ * Balance pass (2026-11-24): raised from 700 ms to 2 s, then (owner, same day) cut to
+ * 1.5 s because a 2 s hold per cup felt like a chore. Not lower: at 1 s one person pours
+ * 38 cups a day, more than Central Park's 34 buyers at $2, and the bottleneck is gone. One pair of hands is still meant to
+ * be the bottleneck of the first days: the line grows faster than the player can pour,
  * some customers walk off, and that (not a tutorial) is the push to hire. The slow hold
  * is not meant to last: with a worker at the stand the hold drops to
  * `pourDurationMs(1)` (0.6 s), see core/standSales.ts. The serve loop below reads
@@ -1033,6 +1095,28 @@ export const useGameStore = create<GameState>()(
           pushToast(`Worker · $${WORKER_DAILY_WAGE}/day`, 'positive', 'own-stand');
         },
 
+        advertise: () => {
+          // After the closing bell the day is booked: a campaign then would be charged to
+          // the next day and skip tonight's fade. The receipt covers the stand menu, but
+          // the rule refuses it too, so no other path can do it.
+          if (get().eodRecord !== null) {
+            soundEngine.playReject();
+            return;
+          }
+          const district = get().neighborhoodId;
+          const next = buyCampaign(get().economy, district);
+          if (!next) {
+            soundEngine.playReject();
+            return;
+          }
+          const before = get().economy;
+          commitEconomy(next, 'advertise');
+          soundEngine.playBuy();
+          // Same chip strip as every other purchase (CASH and PROFIT both fall: unlike
+          // stock or gear, a campaign is spent, not kept).
+          pushLedger(before, 'own-stand', 'Campaign');
+        },
+
         letWorkerGo: () => {
           const plotId = get().activePlotId ?? selectLivePlotId(get());
           if (!plotId || !runPurchase((s) => Purchases.letWorkerGo(s, plotId), 'letWorkerGo').ok) return;
@@ -1076,10 +1160,13 @@ export const useGameStore = create<GameState>()(
           //   difficulty       later in the summer = tougher lemons, pickier taste
           //   targetSweetness  this district's taste (core/neighborhoods.ts sweetTooth)
           //   workerSqueezes   a hired helper at this stand does the squeezing for you
+          //   allowTwists      random per-step twists (lemonadeBrew.ts BrewTwists)
           const brew = lemonadeBrew.init(gameplayRandom, {
             difficulty: brewDifficulty(cur.day, cur.maxDays),
             targetSweetness: getNeighborhood(get().neighborhoodId).sweetTooth,
             workerSqueezes: selectWorkersHere(get()) > 0,
+            // Day 1 teaches the plain recipe; from day 2 each step may get a twist.
+            allowTwists: cur.day > 1,
           });
           patch({ brewGame: brew, spaceHeld: false }, 'startBrew');
           soundEngine.playClick();
@@ -1168,6 +1255,8 @@ export const useGameStore = create<GameState>()(
           const startTime = performance.now();
           // Fixed when the pour starts: alone it is a long hold, with a worker at this
           // stand a short one (the worker has the cup ready).
+          // Serving happens only at the counter, where the game always runs at 1x
+          // (core/clock.ts effectiveClockSpeed), so the pour is its plain duration.
           const pourMs = pourDurationMs(selectWorkersHere(s));
           patch({ serveProgress: 0.01 }, 'serveStart');
 
@@ -1217,8 +1306,8 @@ export const useGameStore = create<GameState>()(
 
         // ===== day cycle =====
         tickClock: (realDtSeconds) => {
-          const { timeProgress, clockSpeed } = get();
-          const next = advanceClock(timeProgress, realDtSeconds, clockSpeed);
+          const { timeProgress } = get();
+          const next = advanceClock(timeProgress, realDtSeconds, selectEffectiveClockSpeed(get()));
           patch({ timeProgress: next }, 'tickClock');
           runAwaySales(Math.min(1, next) - timeProgress);
           if (next >= 1) actions.closeDay();

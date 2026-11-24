@@ -1,3 +1,5 @@
+import { noAwareness } from './marketing';
+import type { NeighborhoodId } from './neighborhoods';
 import { type PlotId, PLOTS } from './plots';
 import { type Tuning, TUNING } from './tuning';
 
@@ -18,6 +20,8 @@ export interface DayRecord {
   revenue: number;
   cogs: number;
   rentAndWages: number;
+  /** Marketing campaigns bought that day (core/marketing.ts): an expense of the day. */
+  marketing: number;
   nopat: number;
   hurdleCharge: number;
   /** YOU at that day's opening bell (cash + lemons + gear at resale): what the line's rate was charged on. */
@@ -64,7 +68,13 @@ export interface SliceState {
   dayCupsSold: number;
   dayRevenue: number;
   dayCogs: number;
-  dayRentPaid: number;
+  /** Campaigns bought today: already paid from cash, charged on today's receipt. */
+  dayMarketing: number;
+  // Marketing (core/marketing.ts)
+  /** Awareness per district, 0..1. Fades at every closing bell; not part of worth. */
+  awareness: Record<NeighborhoodId, number>;
+  /** Every dollar spent on campaigns this run. */
+  totalMarketing: number;
   // Cumulative career metrics & day-by-day history
   totalRevenue: number;
   totalCogs: number;
@@ -107,7 +117,9 @@ export function createInitialState(): SliceState {
     dayCupsSold: 0,
     dayRevenue: 0,
     dayCogs: 0,
-    dayRentPaid: 0,
+    dayMarketing: 0,
+    awareness: noAwareness(),
+    totalMarketing: 0,
     totalRevenue: 0,
     totalCogs: 0,
     totalRent: 0,
@@ -215,10 +227,6 @@ export function getWorth(
  */
 export function grandmaWorth(daysClosed: number, t: Tuning = TUNING): number {
   return +(t.startingCash * (1 + t.hurdleRate) ** Math.max(0, daysClosed)).toFixed(2);
-}
-
-export function getDayNopat(s: SliceState): number {
-  return s.dayRevenue - s.dayCogs - s.dayRentPaid;
 }
 
 /**

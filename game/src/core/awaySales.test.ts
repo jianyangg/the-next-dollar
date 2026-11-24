@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { awayCupsPerDay, stepAwaySales } from './awaySales';
 import { SELLER_PLOT_ID } from './plots';
+import { LONE_PLOT } from './standSales';
 import { createInitialState, type SliceState } from './sliceModel';
 import { cupCost, TUNING } from './tuning';
 
@@ -28,7 +29,7 @@ const step = (state: SliceState, opts: Partial<Parameters<typeof stepAwaySales>[
 describe('away sales (staffed stands sell while the player is elsewhere)', () => {
   it('a staffed stand sells walkers x buy chance cups over a full day, as real sales', () => {
     // Central Park side street: 36 x 0.6 = 22 walkers; 78% buy at $3 -> 17.16 cups/day.
-    expect(awayCupsPerDay(CP_SIDE, 3)).toBeCloseTo(17.16);
+    expect(awayCupsPerDay(CP_SIDE, 3, LONE_PLOT)).toBeCloseTo(17.16);
     const r = step(staffed([CP_SIDE], 30));
     expect(r.sold).toBe(17);
     expect(r.carry[CP_SIDE]).toBeCloseTo(0.16); // the 0.16 of a cup waits for the next tick
@@ -41,14 +42,14 @@ describe('away sales (staffed stands sell while the player is elsewhere)', () =>
   it('one worker can pour only so many cups: a busy corner is capped at 20 a day', () => {
     // Central Park corner: 36 walkers x 78% = 28 buyers, but one worker serves 20.
     expect(TUNING.workerCupsPerDay).toBe(20);
-    expect(awayCupsPerDay(CP, 3)).toBe(20);
+    expect(awayCupsPerDay(CP, 3, LONE_PLOT)).toBe(20);
     expect(step(staffed([CP], 40)).sold).toBe(20);
   });
 
   it('price drives away demand the same way it drives the live queue', () => {
-    expect(awayCupsPerDay(CP, 5)).toBeLessThan(awayCupsPerDay(CP, 3));
+    expect(awayCupsPerDay(CP, 5, LONE_PLOT)).toBeLessThan(awayCupsPerDay(CP, 3, LONE_PLOT));
     // Fifth Ave shoppers pay up: $5 there out-sells $5 in the park by a wide margin.
-    expect(awayCupsPerDay(FIFTH, 5)).toBeGreaterThan(awayCupsPerDay(CP, 5) * 2);
+    expect(awayCupsPerDay(FIFTH, 5, LONE_PLOT)).toBeGreaterThan(awayCupsPerDay(CP, 5, LONE_PLOT) * 2);
   });
 
   it('stands in one district share its crowd: two stands each keep 80% of their walkers', () => {

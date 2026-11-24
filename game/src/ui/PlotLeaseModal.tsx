@@ -1,3 +1,4 @@
+import { crowdAt, walkersPerDay } from '../core/standSales';
 import { useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { useShallow } from 'zustand/react/shallow';
@@ -34,9 +35,14 @@ function PlotLeaseModalBody() {
   const economy = useGameStore((s) => s.economy);
   if (!plot) return null;
   const neighborhood = getNeighborhood(plot.district);
-  // Rent and foot traffic are engine numbers (core/plots), shown on paper.
+  // Rent and foot traffic are engine numbers, shown on paper. Walkers are what this plot
+  // would really get with a stand on it: the one sales formula (core/standSales.ts
+  // walkersPerDay), so the player's other stands in the district (shared crowd) and the
+  // district's marketing awareness are counted, exactly as sales will count them.
   const rent = <PaperChip label="RENT/DAY" value={`$${plot.dailyRent}`} />;
-  const walkers = <PaperChip label="WALKERS/DAY" value={String(plot.walkersPerDay)} />;
+  const withStand = { plots: { ...economy.plots, [plot.id]: 'built' as const }, awareness: economy.awareness };
+  const walkersHere = walkersPerDay(plot.id, crowdAt(withStand, plot.id));
+  const walkers = <PaperChip label="WALKERS/DAY" value={String(Math.round(walkersHere))} />;
   const buildPreview = previewPurchase(economy, (s) => buildStand(s, plot.id), STALL_KIT_COST);
   const permit = leaseFee(plot.id);
   const leasePreview = previewPurchase(economy, (s) => signLease(s, plot.id), permit);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ledgerChips } from './ledgerChips';
+import { buyCampaign } from './marketing';
 import { buyLemons, buyPitcher, sellUsedPitcher } from './purchases';
 import { applySale } from './sales';
 import { createInitialState, type SliceState } from './sliceModel';
@@ -52,5 +53,19 @@ describe('ledgerChips', () => {
   it('an action that moves no money produces no chips', () => {
     const s = createInitialState();
     expect(ledgerChips(s, { ...s, pricePerCup: s.pricePerCup + 1 })).toEqual([]);
+  });
+});
+
+describe('ledgerChips for a marketing campaign', () => {
+  it('a campaign is spent, not kept: CASH and PROFIT both fall by its price', () => {
+    // Profit comes from core/dayEnd.ts projectDay, the same figure the closing receipt
+    // books, so the chip cannot disagree with the receipt.
+    const before = { ...createInitialState(), cash: 100 };
+    const after = buyCampaign(before, 'central-park');
+    if (!after) throw new Error('campaign refused');
+    expect(ledgerChips(before, after)).toEqual([
+      { kind: 'cash', delta: -13 },
+      { kind: 'profit', delta: -13 },
+    ]);
   });
 });

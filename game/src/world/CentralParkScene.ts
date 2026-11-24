@@ -31,7 +31,8 @@ import { followRoute, replaceWaypoints, routeGoal, startRoute, type RouteState }
 import { type FxQuality, resolveFxQuality } from './postfxQuality';
 import type { Random } from '../core/rng';
 import { NeighborhoodId, getNeighborhood } from '../core/neighborhoods';
-import { SUNRISE_PROGRESS } from '../core/clock';
+import { type ClockSpeed, SUNRISE_PROGRESS } from '../core/clock';
+import { type DecisionGate, MAX_WALKERS_PER_LANE, MIN_WALKERS_PER_LANE, newGate, STREET_EDGE, STROLL_SPEED_MAX, STROLL_SPEED_MIN, strollSpeedFactor, takeDecision, tickGate, walkersPerLane } from '../core/liveCrowd';
 import { DISTRICT_PEDESTRIANS } from './districtCrowds';
 import {
   DistrictPedestrianKind,
@@ -71,7 +72,7 @@ import {
   createTheaterMarqueeFacadeTexture,
   createTreeSpriteTexture,
 } from './pixelArt';
-import { MAX_TABLE_CUPS, tableStockView, type PitcherFill, type TableStockInput } from './tableStock';
+import { isSoldOut, MAX_TABLE_CUPS, tableStockView, type PitcherFill, type TableStockInput } from './tableStock';
 
 export type NearbyTarget =
   | 'own-stand'
@@ -130,6 +131,12 @@ export interface ProjectedAnchors {
 
 interface Pedestrian {
   id: number;
+  /**
+   * In use on the street. The scene builds MAX_WALKERS_PER_LANE per sidewalk once and
+   * switches walkers on and off to follow demand (core/liveCrowd.ts walkersPerLane),
+   * so the crowd can grow without creating sprites mid-game.
+   */
+  active: boolean;
   sprite: THREE.Sprite;
   shadow: THREE.Mesh;
   soulSprite: THREE.Sprite;
@@ -271,6 +278,8 @@ interface PlotSlot {
   workerGroup: THREE.Group;
   /** This stand's stock display (see setTableStock / applyPlotVisuals). */
   stock: StandStockParts;
+  /** Red SOLD OUT board over the stand, shown while stock is 0 (world/tableStock.ts isSoldOut). */
+  soldOutSign: THREE.Sprite;
 }
 
 /**
@@ -466,23 +475,6 @@ export function customerLookDirection(facing: StandFacing): 'down' | 'up' {
   return facing === 1 ? 'up' : 'down';
 }
 
-/**
- * Foot traffic: how much busier the live plot is than the Central Park corner the game
- * was tuned on (core/plots.ts trafficMultiplier). Clamped so a data mistake can neither
- * stop customers completely nor flood the line every frame.
- */
-export const FOOT_TRAFFIC_MIN = 0.4;
-export const FOOT_TRAFFIC_MAX = 3;
-
-/**
- * Seconds until the next walker may join the line. The tuned gap is 2.6..4.8 s (`roll` is
- * one 0..1 gameplay random draw); a plot with twice the foot traffic halves it, so twice
- * as many customers arrive. Pure; unit-tested.
- */
-export function queueJoinCooldownSeconds(roll: number, footTraffic: number): number {
-  const traffic = THREE.MathUtils.clamp(footTraffic, FOOT_TRAFFIC_MIN, FOOT_TRAFFIC_MAX);
-  return (2.6 + roll * 2.2) / traffic;
-}
 
 // 32x40 Growtopia-style human chibi characters (0.80 aspect ratio)
 const PLAYER_SPRITE_H = 1.44;
@@ -582,8 +574,18 @@ export class CentralParkScene {
   private queueSlots: Vec2[] = [];
   /** The seller is still in business (store: selectSellerPresent). Drawn only in its own district. */
   private sellerPresent = false;
-  /** Live plot's crowd vs the tuned Central Park corner; divides the customer arrival gap. */
-  private footTraffic = 1;
+  /**
+   * Passers-by per day at the live stand (0 = no live stand yet), and the clock speed,
+   * from the store (core/standSales.ts liveWalkersPerDay: plot walkers, shared crowd,
+   * marketing). core/liveCrowd.ts turns them into owed decisions, the crowd size per
+   * sidewalk and the stroll speed, so the stand gets the formula's customers a day.
+   */
+  private liveWalkers = 0;
+  private clockSpeed: ClockSpeed = 1;
+  /** The day clock is running (false while a window pauses it): no decisions are owed then. */
+  private clockRunning = true;
+  /** Buy-or-pass decisions owed to the live stand (core/liveCrowd.ts). */
+  private decisionGate: DecisionGate = newGate();
   /**
    * The counter the player is standing behind while working (null when not working).
    * Remembered separately from `livePos` so that when the live plot disappears mid-shift
@@ -633,7 +635,6 @@ export class CentralParkScene {
   private pedKoBank!: Record<DistrictPedestrianKind, THREE.CanvasTexture>;
   private pedestrians: Pedestrian[] = [];
   private queue: Pedestrian[] = [];
-  private queueJoinCooldown = 1.2;
   private sparkles: SaleSparkle[] = [];
   private sparkleGeo = new THREE.BoxGeometry(0.09, 0.09, 0.09);
   private taxiGroup!: THREE.Group;
@@ -643,6 +644,8 @@ export class CentralParkScene {
    * (pushed in by connectScene from the store, which sends it immediately on connect).
    */
   private tableStock: TableStockInput = { readyCups: 0, lemons: 0 };
+  /** Shared by every stand's SOLD OUT board (buildSoldOutSign). */
+  private soldOutMat: THREE.SpriteMaterial | null = null;
   /** Textures for the stock display, made once and shared by every player stand. */
   private stockTextures: StockTextures | null = null;
   private standOpen = true;
@@ -817,11 +820,22 @@ export class CentralParkScene {
   }
 
   /**
-   * How busy the live plot is compared with the tuned Central Park corner
-   * (core/plots.ts trafficMultiplier). Takes effect from the next customer who joins.
+   * Walkers a day at the live stand, and the clock speed (a 2x day is half as many real
+   * seconds, so decisions come twice as often). Takes effect from the next decision.
    */
-  public setFootTraffic(multiplier: number): void {
-    this.footTraffic = THREE.MathUtils.clamp(multiplier, FOOT_TRAFFIC_MIN, FOOT_TRAFFIC_MAX);
+  public setLiveDemand(walkersPerDay: number, speed: ClockSpeed): void {
+    this.liveWalkers = Math.max(0, walkersPerDay);
+    this.clockSpeed = speed;
+  }
+
+  /** Whether the day clock is running (store: selectClockPaused). */
+  public setClockRunning(running: boolean): void {
+    this.clockRunning = running;
+  }
+
+  /** Walkers each sidewalk should have now (core/liveCrowd.ts walkersPerLane). */
+  private targetPerLane(): number {
+    return this.liveWalkers > 0 ? walkersPerLane(this.liveWalkers) : MIN_WALKERS_PER_LANE;
   }
 
   /** Whether the seller is still in business (its stand is drawn only in its own district). */
@@ -876,6 +890,8 @@ export class CentralParkScene {
       slot.workerGroup.visible = plot?.status === 'built' && plot.staffed && !playerIsHere;
       const isLive = plot !== undefined && plot.status === 'built' && plot.id === this.livePlotId;
       this.showStock(slot.stock, isLive);
+      // Stock is shared by all the player's stands, so every built stand shows it.
+      slot.soldOutSign.visible = status === 'built' && isSoldOut(this.tableStock);
     }
     this.sellerStandGroup.visible = sellerStandShown(this.currentNeighborhood, this.sellerPresent);
   }
@@ -3185,6 +3201,52 @@ export class CentralParkScene {
   }
 
   /**
+   * A SOLD OUT board hanging over a stand at `pos`. It is a sprite (always faces the
+   * camera) so it reads from anywhere on the street, and sits above the worker's head
+   * so it never covers the face behind the counter. All slots share one texture and
+   * material: the sign is identical everywhere, only its visibility differs.
+   */
+  private buildSoldOutSign(pos: THREE.Vector3): THREE.Sprite {
+    this.soldOutMat ??= new THREE.SpriteMaterial({
+      map: this.createSoldOutTexture(),
+      transparent: true,
+      depthWrite: false,
+    });
+    const sign = new THREE.Sprite(this.soldOutMat);
+    // Canvas is 128x40, so keep that 3.2:1 shape in world units.
+    sign.scale.set(1.28, 0.4, 1);
+    sign.position.set(pos.x, 2.45, pos.z);
+    sign.renderOrder = 5;
+    sign.visible = false;
+    return sign;
+  }
+
+  /** Red board, cream border, "SOLD OUT" in bold: the street-sign style of the stand plaques. */
+  private createSoldOutTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 40;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#4a2e1b'; // dark wood frame, like the stand plaque
+    ctx.fillRect(0, 0, 128, 40);
+    ctx.fillStyle = '#c8322b';
+    ctx.fillRect(3, 3, 122, 34);
+    ctx.strokeStyle = '#fff3d6';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(6, 6, 116, 28);
+    ctx.fillStyle = '#fff3d6';
+    ctx.font = 'bold 17px "Helvetica Neue", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('SOLD OUT', 64, 21);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    // Pixel-art look: no smoothing when the board is drawn larger than its canvas.
+    tex.magFilter = THREE.NearestFilter;
+    return tex;
+  }
+
+  /**
    * Build one PlotSlot per distinct plot position in PLOTS (core/plots.ts): the two
    * painted pads, the player's stand and a hired worker, all hidden until
    * applyPlotVisuals() shows the ones the current district needs.
@@ -3210,6 +3272,8 @@ export class CentralParkScene {
       });
       // includeStockDisplay: true always returns the parts; a null here is a coding error.
       if (stock === null) throw new Error('buildStandStructure: player stand built without its stock display');
+      const soldOutSign = this.buildSoldOutSign(pos);
+      standGroup.add(soldOutSign);
       const slot: PlotSlot = {
         key,
         pos,
@@ -3219,6 +3283,7 @@ export class CentralParkScene {
         standGroup,
         workerGroup: new THREE.Group(),
         stock,
+        soldOutSign,
       };
       // Each worker gets its own blink/breath timing (seed) from its slot's index, so two
       // staffed stands side by side do not blink in unison.
@@ -3674,7 +3739,7 @@ export class CentralParkScene {
       { x: -15.8, z: 1.15, dir: 1, speed: 1.5 },
     ];
     // The near sidewalk gets a crowd of the SAME size, so a near-side stand sees as many
-    // passers-by as a far-side one (plots then differ only by their trafficMultiplier, as
+    // passers-by as a far-side one (plots then differ only by their walkers per day, as
     // core/plots.ts intends). Each near walker mirrors a far one: opposite x and direction
     // (so the two crowds do not march in lockstep), and the same relative place inside its
     // lane's z band.
@@ -3686,9 +3751,22 @@ export class CentralParkScene {
       dir: (a.dir === 1 ? -1 : 1) as 1 | -1,
       speed: a.speed,
     }));
+    // Pooled walkers beyond the first MIN_WALKERS_PER_LANE per sidewalk: built hidden,
+    // switched on when demand needs a bigger crowd (see updateCrowdSize).
+    const pooled = (lane: 'far' | 'near') =>
+      Array.from({ length: MAX_WALKERS_PER_LANE - MIN_WALKERS_PER_LANE }, () => ({
+        x: STREET_EDGE + 1,
+        z: WALKER_LANES[lane].minZ,
+        dir: 1 as 1 | -1,
+        speed: STROLL_SPEED_MIN,
+        lane,
+        active: false,
+      }));
     const initialSpawns = [
-      ...farSpawns.map((a) => ({ ...a, lane: 'far' as const })),
-      ...nearSpawns.map((a) => ({ ...a, lane: 'near' as const })),
+      ...farSpawns.map((a) => ({ ...a, lane: 'far' as const, active: true })),
+      ...nearSpawns.map((a) => ({ ...a, lane: 'near' as const, active: true })),
+      ...pooled('far'),
+      ...pooled('near'),
     ];
 
     initialSpawns.forEach((a, idx) => {
@@ -3699,10 +3777,12 @@ export class CentralParkScene {
       );
       sp.scale.set(PED_SPRITE_W, PED_SPRITE_H, 1);
       sp.position.set(a.x, PED_SPRITE_H * 0.48, a.z);
+      sp.visible = a.active;
       this.scene.add(sp);
 
       const shadow = this.createContactShadowMesh(0.4, 0.25);
       shadow.position.set(a.x, 0.022, a.z + 0.04);
+      shadow.visible = a.active;
       this.scene.add(shadow);
 
       const pedSoul = new THREE.Sprite(
@@ -3728,6 +3808,7 @@ export class CentralParkScene {
 
       this.pedestrians.push({
         id: idx + 1,
+        active: a.active,
         sprite: sp,
         shadow,
         soulSprite: pedSoul,
@@ -3770,19 +3851,59 @@ export class CentralParkScene {
     });
   }
 
-  private respawnPedestrianOffscreen(ped: Pedestrian): void {
+  /** Walkers in use on one sidewalk. */
+  private activeOnLane(lane: Pedestrian['lane']): number {
+    let n = 0;
+    for (const p of this.pedestrians) if (p.active && p.lane === lane) n += 1;
+    return n;
+  }
+
+  /** Switch a pooled walker on (it enters from off-screen) or off (hidden, skipped). */
+  private setPedestrianActive(ped: Pedestrian, on: boolean): void {
+    ped.active = on;
+    ped.sprite.visible = on;
+    ped.shadow.visible = on;
+    ped.moodSprite.visible = false;
+    ped.soulSprite.visible = false;
+  }
+
+  /**
+   * When demand rises (a busier plot, a campaign), switch on pooled walkers until each
+   * sidewalk has `targetPerLane()`. Each new one starts a random distance off-screen so
+   * they trickle in over one crossing instead of arriving as a clump. Shrinking happens
+   * as walkers leave the screen (see the stroll step).
+   */
+  private growCrowdToDemand(): void {
+    const target = this.targetPerLane();
+    for (const lane of ['far', 'near'] as const) {
+      let missing = target - this.activeOnLane(lane);
+      for (const ped of this.pedestrians) {
+        if (missing <= 0) break;
+        if (ped.active || ped.lane !== lane) continue;
+        this.respawnPedestrianOffscreen(ped, this.rng.cosmetic() * 2 * STREET_EDGE);
+        this.setPedestrianActive(ped, true);
+        missing -= 1;
+      }
+    }
+  }
+
+  /**
+   * Put a walker just off one edge of the street, heading in. `extra` starts it further
+   * out, so several walkers switched on at once arrive spread out instead of in a clump.
+   */
+  private respawnPedestrianOffscreen(ped: Pedestrian, extra = 0): void {
     const kinds = DISTRICT_PEDESTRIANS[this.currentNeighborhood];
     const nextKind = kinds[Math.floor(this.rng.cosmetic() * kinds.length)];
     const fromLeft = this.rng.gameplay() > 0.5;
     ped.frames = this.pedSpriteBank[nextKind];
     ped.koTex = this.pedKoBank[nextKind];
-    ped.x = fromLeft ? -17.5 : 17.5;
+    ped.x = fromLeft ? -STREET_EDGE - extra : STREET_EDGE + extra;
     // A new stroll line inside the walker's own lane (for the far lane this is the same
     // 0.4 + r * 1.45 as before).
     const band = WALKER_LANES[ped.lane];
     ped.homeZ = band.minZ + this.rng.cosmetic() * (band.maxZ - band.minZ);
     ped.z = ped.homeZ;
-    ped.speed = 1.4 + this.rng.gameplay() * 0.55;
+    ped.speed = STROLL_SPEED_MIN + this.rng.gameplay() * (STROLL_SPEED_MAX - STROLL_SPEED_MIN);
     ped.vx = fromLeft ? ped.speed : -ped.speed;
     ped.state = 'strolling';
     ped.queueSlot = -1;
@@ -4169,11 +4290,19 @@ export class CentralParkScene {
     }
 
     // 5. Pedestrians strolling, queuing in front of the LIVE stand (livePos), and waiting with patience timers
-    if (this.queueJoinCooldown > 0) this.queueJoinCooldown -= dt;
+    // The street runs on the game clock: at 2x walkers stroll twice as fast (core/liveCrowd.ts).
+    const strollFactor = strollSpeedFactor(this.clockSpeed);
+    // Decisions are owed only while the day runs and the stand can sell.
+    const gateRunning = this.clockRunning && this.standOpen && this.livePos !== null && this.liveWalkers > 0;
+    this.decisionGate = tickGate(this.decisionGate, dt, gateRunning, this.liveWalkers, this.clockSpeed, () =>
+      this.rng.gameplay()
+    );
+    this.growCrowdToDemand();
 
     let walkedOut = false;
     for (const ped of this.pedestrians) {
-      if (ped.boughtCooldown > 0) ped.boughtCooldown -= dt;
+      if (!ped.active) continue;
+      if (ped.boughtCooldown > 0) ped.boughtCooldown -= dt * strollFactor;
 
       // Rare comedy taxi bonk recovery (1.2s X_X KO + floating soul -> pop onto nearest curb)
       if (ped.koTimer > 0) {
@@ -4220,10 +4349,10 @@ export class CentralParkScene {
           ped.shadow.scale.set(1, 1, 1);
           ped.shadow.position.set(ped.x, 0.022, ped.z + 0.04);
         } else {
-          const step = ped.speed * 1.15 * dt;
+          const step = ped.speed * 1.15 * strollFactor * dt;
           ped.x += (dx / dist) * Math.min(step, dist);
           ped.z += (dz / dist) * Math.min(step, dist);
-          ped.animTimer += dt * 6.8;
+          ped.animTimer += dt * strollFactor * 6.8;
           const f = Math.floor(ped.animTimer) % 2 === 0 ? 1 : 2;
           const dir = Math.abs(dx) > Math.abs(dz) ? (dx < 0 ? 'left' : 'right') : dz < 0 ? 'up' : 'down';
           const hop = Math.abs(Math.sin(ped.animTimer * Math.PI)) * 0.055;
@@ -4236,7 +4365,9 @@ export class CentralParkScene {
       }
 
       if (ped.state === 'queued') {
-        ped.patience -= dt;
+        // Patience is counted in game time: at 2x a customer gives up twice as fast in
+        // real seconds, but after the same share of the day (core/clock.ts).
+        ped.patience -= dt * strollFactor;
         // Subtle impatient fidget when patience gets low
         const lowPatience = ped.patience < ped.maxPatience * 0.35;
         const fidget = lowPatience ? Math.abs(Math.sin(this.elapsedTime * 11 + ped.id)) * 0.04 : 0;
@@ -4261,7 +4392,7 @@ export class CentralParkScene {
       if (ped.state === 'leaving') {
         const dz = ped.homeZ - ped.z;
         if (Math.abs(dz) > 0.08) {
-          ped.z += Math.sign(dz) * ped.speed * dt;
+          ped.z += Math.sign(dz) * ped.speed * strollFactor * dt;
         } else {
           ped.z = ped.homeZ;
           ped.state = 'strolling';
@@ -4302,10 +4433,14 @@ export class CentralParkScene {
         }
       }
 
-      ped.x += ped.vx * dt;
-      // One-way despawn & fresh off-screen respawn (no back-and-forth bouncing!)
-      if (ped.x < -18.2 || ped.x > 18.2) {
-        this.respawnPedestrianOffscreen(ped);
+      ped.x += ped.vx * strollFactor * dt;
+      // One-way despawn once past the far edge (no back-and-forth bouncing!). Checked in
+      // the walking direction only, so a walker queued further off-screen (see
+      // growCrowdToDemand) is not sent back before it has entered.
+      if ((ped.vx < 0 && ped.x < -STREET_EDGE - 0.7) || (ped.vx > 0 && ped.x > STREET_EDGE + 0.7)) {
+        // A shrinking crowd (demand fell) loses walkers here, off-screen, never in view.
+        if (this.activeOnLane(ped.lane) > this.targetPerLane()) this.setPedestrianActive(ped, false);
+        else this.respawnPedestrianOffscreen(ped);
         continue;
       }
 
@@ -4321,7 +4456,7 @@ export class CentralParkScene {
         !ped.decidedAtStand &&
         ped.boughtCooldown <= 0 &&
         this.queue.length < QUEUE_CAPACITY &&
-        this.queueJoinCooldown <= 0 &&
+        this.decisionGate.owed > 0 &&
         isWithinQueueReach({ x: ped.x, laneZ: ped.homeZ }, live)
       ) {
         // PRICE DECIDES: one roll per pass against the buy chance for today's price.
@@ -4329,6 +4464,10 @@ export class CentralParkScene {
         // "no" to the price. A walker who passes shows a short annoyed face, so the
         // player can SEE that the price, not luck, cost them the sale.
         ped.decidedAtStand = true;
+        // This walker settles ONE owed decision, bought or not (core/liveCrowd.ts). It used
+        // to be a cooldown reset only after a buyer, so passers-by cost nothing and the
+        // price barely changed how many people came.
+        this.decisionGate = takeDecision(this.decisionGate) ?? this.decisionGate;
         if (this.rng.gameplay() >= this.buyChance) {
           ped.passTimer = 1.4;
           continue;
@@ -4338,12 +4477,10 @@ export class CentralParkScene {
         ped.patience = QUEUE_MAX_PATIENCE;
         ped.maxPatience = QUEUE_MAX_PATIENCE;
         this.queue.push(ped);
-        // A busier plot (more walkers per day) sends the next customer sooner.
-        this.queueJoinCooldown = queueJoinCooldownSeconds(this.rng.gameplay(), this.footTraffic);
         continue;
       }
 
-      ped.animTimer += dt * 6.5;
+      ped.animTimer += dt * strollFactor * 6.5;
       const f = Math.floor(ped.animTimer) % 2 === 0 ? 1 : 2;
       const dir = ped.vx < 0 ? 'left' : 'right';
       const hop = Math.abs(Math.sin(ped.animTimer * Math.PI)) * 0.06;
@@ -4362,6 +4499,7 @@ export class CentralParkScene {
     // chosen from how much patience is left. Runs after the loop so every `continue`
     // path above is covered, and only swaps the texture when the mood actually changes.
     for (const ped of this.pedestrians) {
+      if (!ped.active) continue;
       if (ped.passTimer > 0) ped.passTimer = Math.max(0, ped.passTimer - dt);
       const passing = ped.passTimer > 0 && ped.state === 'strolling';
       const show = (ped.state === 'queued' || passing) && ped.koTimer <= 0;

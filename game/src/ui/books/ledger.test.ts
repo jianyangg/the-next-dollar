@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { BOOKS_TABS, meterShape } from './ledger';
+import { noAwareness } from '../../core/marketing';
+import { awarenessLines, BOOKS_TABS, meterShape } from './ledger';
+
+describe('awarenessLines', () => {
+  it('lists districts that still print as 1 or more, as 0..100, in map order', () => {
+    const a = { ...noAwareness(), broadway: 0.75, 'central-park': 0.5, 'west-village': 0.004 };
+    const lines = awarenessLines(a);
+    expect(lines.map((l) => [l.id, l.pct])).toEqual(
+      expect.arrayContaining([
+        ['central-park', 50],
+        ['broadway', 75],
+      ])
+    );
+    expect(lines).toHaveLength(2); // 0.004 prints as 0, so it is not listed
+  });
+
+  it('is empty when nothing was ever advertised', () => {
+    expect(awarenessLines(noAwareness())).toEqual([]);
+  });
+});
 
 describe('meterShape', () => {
   it('has the four tabs in order', () => {

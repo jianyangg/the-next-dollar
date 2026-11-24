@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { average, lazy, openEverything, sharp } from './simPolicies';
+import { adEveryDay, average, lazy, openEverything, sharp } from './simPolicies';
 import { formatSimResult, type SimPolicy, type SimResult, simulateRun } from './simulateRun';
 import { type Tuning, TUNING } from './tuning';
 
@@ -14,6 +14,7 @@ import { type Tuning, TUNING } from './tuning';
  *   average          0.9x  to 1.2x   five stands, pays asking price: roughly ties
  *   sharp            2x    to 3x     buys only what pays back: clearly wins
  *   open-everything  at least 15% below sharp: buying blindly must cost something
+ *   ad-every-day     below Grandma: advertising everywhere, every day, is not a strategy
  *
  * If a change to core/tuning.ts (or to a rule) moves a player out of its band, this
  * test fails and prints the table, so the tuning is measured instead of guessed.
@@ -33,6 +34,7 @@ describe('balance: who beats Grandma (simulateRun)', () => {
     average: meanRatio(average, TUNING),
     sharp: meanRatio(sharp, TUNING),
     openEverything: meanRatio(openEverything, TUNING),
+    adEveryDay: meanRatio(adEveryDay, TUNING),
   };
   // Printed on every run: the table IS the tuning report.
   console.info(
@@ -67,6 +69,12 @@ describe('balance: who beats Grandma (simulateRun)', () => {
 
   it('opening everything blindly ends at least 15% below sharp', () => {
     expect(results.openEverything.ratio).toBeLessThanOrEqual(results.sharp.ratio * 0.85);
+  });
+
+  it('advertising in every district every day still ends below Grandma', () => {
+    expect(results.adEveryDay.ratio).toBeLessThan(1);
+    // It really did advertise (the control is not silently doing nothing).
+    expect(results.adEveryDay.runs[0].log.some((line) => line.includes('advertise'))).toBe(true);
   });
 
   it('the order lazy < average < sharp survives a 10% change to any one number', () => {

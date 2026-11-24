@@ -15,8 +15,8 @@ import { getDailyPlotRent } from '../core/rent';
 import { getNeighborhood } from '../core/neighborhoods';
 import { selectLivePlotId, useGameStore } from '../state/gameStore';
 import { INPUT_PRIORITY } from '../state/input';
-import { BOOKS_TABS, type BooksTab, meterShape } from './books/ledger';
-import { ratePct } from './books/receipt';
+import { awarenessLines, BOOKS_TABS, type BooksTab, meterShape } from './books/ledger';
+import { MARKETING_LABEL, ratePct } from './books/receipt';
 import { fmtSignedMoney } from './format';
 import { Key } from './kit/Money';
 import { CursorMenu, type CursorMenuItem } from './kit/CursorMenu';
@@ -77,6 +77,43 @@ function Ledger({ children }: { children: ReactNode }) {
     <table className="pt-ledger books-table">
       <tbody>{children}</tbody>
     </table>
+  );
+}
+
+/**
+ * "Built, not counted in your worth": the brand awareness campaigns bought.
+ *
+ * The lesson: campaigns were expensed the day they were bought, and awareness cannot be
+ * sold, so the balance sheet above shows none of it, yet it still brings walkers. This
+ * block sits right under "Your worth" so the gap between the books and the business is
+ * visible. Hidden entirely on a run that never advertised (nothing to explain).
+ */
+function BuiltNotCounted({
+  awareness,
+  totalMarketing,
+}: {
+  awareness: Parameters<typeof awarenessLines>[0];
+  totalMarketing: number;
+}) {
+  if (totalMarketing <= 0) return null;
+  const lines = awarenessLines(awareness);
+  return (
+    <section className="books-built" aria-label="Built, not counted in your worth">
+      <div className="books-built-title">Built, not counted in your worth</div>
+      <Ledger>
+        {lines.length === 0 ? (
+          // Spent, but every district has faded back below 1: say so rather than show an empty list.
+          <tr>
+            <td colSpan={2} className="books-built-empty">
+              Awareness has faded everywhere
+            </td>
+          </tr>
+        ) : (
+          lines.map((line) => <Row key={line.id} label={line.name} formal="awareness" value={`${line.pct}/100`} />)
+        )}
+        <Row label="Spent on marketing" formal="this run" value={`$${totalMarketing.toFixed(2)}`} total />
+      </Ledger>
+    </section>
   );
 }
 
@@ -164,6 +201,11 @@ function BooksDrawerBody() {
                   tone="cost"
                 />
               )}
+              {/* Same figure the closing receipt will print (projectDay is the one formula),
+                  shown only on a day with a campaign, like the receipt's Marketing row. */}
+              {today.marketing > 0 && (
+                <Row label={MARKETING_LABEL} formal="expense" value={`-$${today.marketing.toFixed(2)}`} tone="cost" />
+              )}
               <Row
                 label="Profit today"
                 formal="projected NOPAT"
@@ -192,6 +234,7 @@ function BooksDrawerBody() {
                   : 'Out of Balance'}
               </span>
             </div>
+            <BuiltNotCounted awareness={state.awareness} totalMarketing={state.totalMarketing} />
           </section>
         )}
 

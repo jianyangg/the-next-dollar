@@ -20,12 +20,15 @@
 .eodr-head {
   grid-column: 1 / -1;
   display: flex;
+  flex-wrap: wrap; /* lets the marketing note drop onto its own line under the verdict */
   justify-content: space-between;
   align-items: baseline;
   gap: var(--s-4);
 }
 .eodr-title { margin: 0; font-size: var(--t-hero); } /* colour: the verdict's gain/cost class */
 .eodr-where { font-size: var(--t-body); color: var(--sign-dim); }
+/* "Today includes $24.00 of marketing": full width, under the verdict it explains. */
+.eodr-note { flex-basis: 100%; margin: 0; font-size: var(--t-read); font-weight: 800; color: var(--sign-text); }
 
 /* ---- Receipt rows ---- */
 .pt-paper.eodr-receipt { padding: var(--s-3) var(--s-5) var(--s-5); }

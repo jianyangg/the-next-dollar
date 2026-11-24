@@ -139,7 +139,7 @@ export function jumpToDay(day: number): DevResult {
   if (!Number.isInteger(day) || day < 1 || day > s.maxDays) {
     throw new RangeError(`[dev] jumpToDay: day must be a whole number 1..${s.maxDays}, got ${day}`);
   }
-  const next: SliceState = ringOpeningBell({ ...s, day, dayCupsSold: 0, dayRevenue: 0, dayCogs: 0, dayRentPaid: 0 });
+  const next: SliceState = ringOpeningBell({ ...s, day, dayCupsSold: 0, dayRevenue: 0, dayCogs: 0, dayMarketing: 0 });
   useGameStore.setState({ timeProgress: 0, eodRecord: null }, false, 'dev:jumpToDay');
   commitEconomy('jumpToDay', next);
   console.info('[dev]', 'jumpToDay', { from: s.day, to: day });

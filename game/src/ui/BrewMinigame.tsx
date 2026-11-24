@@ -3,7 +3,7 @@ import { type MotionValue, useReducedMotion, useSpring, useTransform } from 'mot
 import * as m from 'motion/react-m';
 import { useShallow } from 'zustand/react/shallow';
 import { sweeten as sweetenRules, stir as stirRules, squeeze as squeezeRules } from '../core/minigames';
-import type { BrewPhase, LemonadeBrewState, LemonKind, StirQuadrant } from '../core/minigames';
+import type { BrewPhase, BrewTwists, LemonadeBrewState, LemonKind, StirQuadrant } from '../core/minigames';
 import type { SweetenPhase } from '../core/minigames/sweeten';
 import { type GameState, useGameStore } from '../state/gameStore';
 import { Key } from './kit/Money';
@@ -46,6 +46,19 @@ const brewOf = (s: GameState): LemonadeBrewState | null =>
   s.brewGame?.kind === 'lemonade-brew' ? s.brewGame : null;
 
 const selPressure = (s: GameState): number => brewOf(s)?.squeeze.pressure ?? 0;
+/**
+ * The juicy zone the RULE checks this frame (squeeze.ts `juicyZone`). Read continuously
+ * because under the tough-rind twist it climbs as the lemon empties; the gauge must
+ * show exactly where juice runs now, not where it started.
+ */
+const selZoneLow = (s: GameState): number => {
+  const b = brewOf(s);
+  return b ? squeezeRules.juicyZone(b.squeeze).low : 0;
+};
+const selZoneHigh = (s: GameState): number => {
+  const b = brewOf(s);
+  return b ? squeezeRules.juicyZone(b.squeeze).high : 0;
+};
 /** Juice in the glass vs. a full batch of plump lemons (so dry batches visibly fill less). */
 const selJuiceLevel = (s: GameState): number => {
   const b = brewOf(s);
@@ -63,15 +76,16 @@ const selDissolve = (s: GameState): number => brewOf(s)?.stir.dissolve ?? 0;
 const selRhythm = (s: GameState): number => brewOf(s)?.stir.rhythm ?? 0;
 
 /**
- * Spoon angle in degrees, clockwise from 12 o'clock. It only ever grows (quarter turns
- * add 90), so a spring between values always animates the short, forward way round.
+ * Spoon angle in degrees, clockwise from 12 o'clock. It only ever moves one way (each
+ * quarter turn adds 90 x direction: +90 clockwise, -90 under the "counter" twist), so a
+ * spring between values always animates the short way round, in the stirring direction.
  */
 const selSpoonAngle = (s: GameState): number => {
   const st = brewOf(s)?.stir;
   if (!st || st.at === null) return 0;
   const now = stirRules.STIR_ORDER.indexOf(st.at);
-  const start = (((now - st.quarters) % 4) + 4) % 4;
-  return (start + st.quarters) * 90;
+  const start = (((now - st.quarters * st.direction) % 4) + 4) % 4;
+  return (start + st.quarters * st.direction) * 90;
 };
 
 /**
@@ -100,6 +114,7 @@ interface BrewView {
   target: number;
   band: number;
   nextQuadrant: StirQuadrant | null;
+  twists: BrewTwists;
 }
 
 const selView = (s: GameState): BrewView | null => {
@@ -115,6 +130,7 @@ const selView = (s: GameState): BrewView | null => {
     target: b.sweeten.target,
     band: b.sweeten.band,
     nextQuadrant: stirRules.nextQuadrant(b.stir),
+    twists: b.twists,
   };
 };
 
@@ -200,8 +216,12 @@ const LEMON_WORD: Record<LemonKind, string> = { plump: 'Plump', dry: 'Dry', seed
 
 function SqueezeScene({ view }: { view: BrewView }) {
   const kind = view.lemons[Math.min(view.lemonIndex, view.lemons.length - 1)] ?? 'plump';
-  const spec = squeezeRules.LEMON_SPECS[kind];
   const pressure = useStoreMotionValue(selPressure);
+  const zoneLow = useStoreMotionValue(selZoneLow);
+  const zoneHigh = useStoreMotionValue(selZoneHigh);
+  const zoneBottom = useTransform(zoneLow, pct);
+  const zoneHeight = useTransform(() => pct(zoneHigh.get() - zoneLow.get()));
+  const seedsBottom = useTransform(zoneHigh, pct);
   // The lemon half flattens as you press (never below 65% of its height).
   const squash = useTransform(pressure, (p) => 1 - 0.35 * p);
   const needle = useTransform(pressure, pct);
@@ -226,11 +246,8 @@ function SqueezeScene({ view }: { view: BrewView }) {
 
       {/* Pressure: vertical gauge, juicy zone in green, seeds zone above it in red. */}
       <div className="brew-vgauge" aria-label="Pressure">
-        <div className="brew-vgauge-seeds" style={{ bottom: pct(spec.zoneHigh) }} />
-        <div
-          className="brew-vgauge-zone"
-          style={{ bottom: pct(spec.zoneLow), height: pct(spec.zoneHigh - spec.zoneLow) }}
-        />
+        <m.div className="brew-vgauge-seeds" style={{ bottom: seedsBottom }} />
+        <m.div className="brew-vgauge-zone" style={{ bottom: zoneBottom, height: zoneHeight }} />
         <m.div className="brew-vgauge-needle" style={{ bottom: needle }} />
       </div>
 
@@ -258,15 +275,17 @@ function SqueezeScene({ view }: { view: BrewView }) {
 function SweetenScene({ view }: { view: BrewView }) {
   const sweetness = useStorePercent(selSweetness);
   const offerLeft = useStorePercent(selOfferLeft, 'whole');
-  const pouring = view.sugarPhase === 'pour';
+  // Honey is still running during its drip, so it is drawn pouring until it stops.
+  const pouring = view.sugarPhase === 'pour' || view.sugarPhase === 'drip';
+  const honey = view.twists.sweeten === 'honey';
   const lo = Math.max(0, view.target - view.band);
   const hi = Math.min(1, view.target + view.band);
 
   return (
     <div className="brew-scene is-sweeten" aria-label="Sweeten to taste">
       <div className="brew-pour">
-        <div className={`brew-bag ${pouring ? 'is-pouring' : ''}`} />
-        <div className={`brew-sugar ${pouring ? 'is-pouring' : ''}`} aria-hidden="true">
+        <div className={`brew-bag ${pouring ? 'is-pouring' : ''} ${honey ? 'is-honey' : ''}`} />
+        <div className={`brew-sugar ${pouring ? 'is-pouring' : ''} ${honey ? 'is-honey' : ''}`} aria-hidden="true">
           <i />
           <i />
           <i />
@@ -409,15 +428,33 @@ function ActionLine({ view }: { view: BrewView }) {
         </>
       );
     }
+    if (view.sugarPhase === 'drip') return <>Still dripping...</>;
     if (view.sugarPhase === 'reveal' || view.sugarPhase === 'done') return <>Tasting...</>;
     return (
       <>
         <Key k="Space" />
-        Pour, stop at the smile
+        {view.twists.sweeten === 'honey' ? 'Pour, stop before the smile' : 'Pour, stop at the smile'}
       </>
     );
   }
-  return <>Circle W D S A</>;
+  return <>{view.twists.stir === 'counter' ? 'Circle W A S D' : 'Circle W D S A'}</>;
+}
+
+/**
+ * One line naming the current step's twist (lemonadeBrew.ts BrewTwists), so a change in
+ * the rules is always announced before the player meets it. Plain steps show nothing.
+ */
+const TWIST_WORDS = {
+  'tough-rind': 'Tough rind: the green climbs as it empties',
+  honey: 'Honey: it keeps dripping after you let go',
+  counter: 'This batch stirs the other way',
+} as const;
+
+export function twistLine(view: Pick<BrewView, 'phase' | 'worker' | 'twists'>): string | null {
+  if (view.phase === 'squeeze' && !view.worker && view.twists.squeeze === 'tough-rind') return TWIST_WORDS['tough-rind'];
+  if (view.phase === 'sweeten' && view.twists.sweeten === 'honey') return TWIST_WORDS.honey;
+  if (view.phase === 'stir' && view.twists.stir === 'counter') return TWIST_WORDS.counter;
+  return null;
 }
 
 function LemonadeBrewSign() {
@@ -425,6 +462,7 @@ function LemonadeBrewSign() {
   const holdable = view?.phase === 'squeeze' || view?.phase === 'sweeten';
   const hold = useHoldHandlers(holdable);
   if (!view) return null;
+  const twist = twistLine(view);
 
   return (
     <div className="pt-sign stand-gauge brew-sign" role="group" aria-label="Brew">
@@ -439,6 +477,11 @@ function LemonadeBrewSign() {
         {view.phase === 'sweeten' && <SweetenScene view={view} />}
         {(view.phase === 'stir' || view.phase === 'done') && <StirScene view={view} />}
       </div>
+      {twist && (
+        <div className="brew-twist" role="status">
+          {twist}
+        </div>
+      )}
       <div className="brew-action">
         <ActionLine view={view} />
       </div>

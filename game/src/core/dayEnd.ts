@@ -1,3 +1,4 @@
+import { fadeAllAwareness } from './marketing';
 import { cents } from './money';
 import { getDailyPlotRent } from './rent';
 import {
@@ -35,11 +36,13 @@ export interface DayProjection {
   /** Revenue minus cost of the cups sold so far today. */
   earned: number;
   rentAndWages: number;
+  /** Campaigns bought today (already paid from cash): an expense of the day. */
+  marketing: number;
   /** The hurdle rate x the money the player started today with (fixed all day). */
   hurdleCharge: number;
-  /** rentAndWages + hurdleCharge: what `earned` has to beat. */
+  /** rentAndWages + marketing + hurdleCharge: what `earned` has to beat. */
   line: number;
-  /** earned - rent - wages (NOPAT). */
+  /** earned - rent - wages - marketing (NOPAT). */
   nopat: number;
   /** earned - line. */
   valueCreated: number;
@@ -48,14 +51,17 @@ export interface DayProjection {
 export function projectDay(s: SliceState, t: Tuning = TUNING): DayProjection {
   const earned = cents(s.dayRevenue - s.dayCogs);
   const rentAndWages = cents(getDailyPlotRent(s, t) + getDailyWages(s, t));
+  // Marketing is a cost of today, like rent, so it sits in the line the day must beat.
+  const marketing = cents(s.dayMarketing);
   const hurdleCharge = getDailyHurdleCharge(s, t);
-  const line = cents(rentAndWages + hurdleCharge);
+  const line = cents(rentAndWages + marketing + hurdleCharge);
   return {
     earned,
     rentAndWages,
+    marketing,
     hurdleCharge,
     line,
-    nopat: cents(earned - rentAndWages),
+    nopat: cents(earned - rentAndWages - marketing),
     valueCreated: cents(earned - line),
   };
 }
@@ -67,7 +73,7 @@ export const beatTheLine = (r: Pick<DayRecord, 'valueCreated'>): boolean => r.va
  * Closing the books at the closing bell.
  *
  * Economic-value accounting in one place:
- *   NOPAT          = revenue − cost of goods sold − (rent + wages)
+ *   NOPAT          = revenue − cost of goods sold − (rent + wages) − marketing
  *   hurdle charge  = hurdle rate x the money the day started with (`openingWorth`)
  *   value created  = NOPAT − hurdle charge   (positive means the money out-earned Grandma's bank)
  *   return         = NOPAT / that same money (floored at $1 so it never divides by 0),
@@ -79,7 +85,7 @@ export const beatTheLine = (r: Pick<DayRecord, 'valueCreated'>): boolean => r.va
 export function closeDay(cur: SliceState, t: Tuning = TUNING): { state: SliceState; record: DayRecord } | null {
   if (cur.day > cur.maxDays) return null;
 
-  const { rentAndWages, hurdleCharge, nopat, valueCreated } = projectDay(cur, t);
+  const { rentAndWages, marketing, hurdleCharge, nopat, valueCreated } = projectDay(cur, t);
   const cumulativeValue = cents(cur.totalValueCreated + valueCreated);
   // The base of today's line: YOU at this morning's opening bell (frozen all day).
   const chargedOn = getMoneyInBusiness(cur);
@@ -91,6 +97,7 @@ export function closeDay(cur: SliceState, t: Tuning = TUNING): { state: SliceSta
     revenue: cur.dayRevenue,
     cogs: cur.dayCogs,
     rentAndWages,
+    marketing,
     nopat,
     hurdleCharge,
     chargedOn,
@@ -100,6 +107,7 @@ export function closeDay(cur: SliceState, t: Tuning = TUNING): { state: SliceSta
     grade: computeDayGrade(roicPct, t),
   };
 
+  // Only rent and wages leave the cash box now: campaigns were paid when bought.
   const cashAfter = cents(cur.cash - rentAndWages);
   const state: SliceState = {
     ...cur,
@@ -109,7 +117,9 @@ export function closeDay(cur: SliceState, t: Tuning = TUNING): { state: SliceSta
     dayCupsSold: 0,
     dayRevenue: 0,
     dayCogs: 0,
-    dayRentPaid: 0,
+    dayMarketing: 0,
+    // Overnight every district forgets a little (core/marketing.ts fadedAwareness).
+    awareness: fadeAllAwareness(cur.awareness, t),
     totalRent: cents(cur.totalRent + rentAndWages),
     totalValueCreated: cumulativeValue,
     lastDayCapitalCharge: hurdleCharge,

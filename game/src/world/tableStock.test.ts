@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CRATE_LEMON_SLOTS, MAX_TABLE_CUPS, tableStockView } from './tableStock';
+import { CRATE_LEMON_SLOTS, isSoldOut, MAX_TABLE_CUPS, tableStockView } from './tableStock';
 
 describe('tableStockView', () => {
   it('shows nothing ready and an empty crate when the stand is out of everything', () => {
@@ -46,5 +46,14 @@ describe('tableStockView', () => {
   it('never draws a negative or fractional count', () => {
     expect(tableStockView({ readyCups: -3, lemons: -1 })).toEqual({ cups: 0, pitcher: 'empty', crateLemons: 0 });
     expect(tableStockView({ readyCups: 2.9, lemons: 4.9 })).toMatchObject({ cups: 2, crateLemons: 2 });
+  });
+});
+
+describe('isSoldOut', () => {
+  it('only when there are no ready cups AND no lemons to brew', () => {
+    expect(isSoldOut({ readyCups: 0, lemons: 0 })).toBe(true);
+    // Lemons left: not sold out, the player just has to brew.
+    expect(isSoldOut({ readyCups: 0, lemons: 3 })).toBe(false);
+    expect(isSoldOut({ readyCups: 2, lemons: 0 })).toBe(false);
   });
 });

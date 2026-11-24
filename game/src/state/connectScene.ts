@@ -2,7 +2,7 @@ import { lemonCupsLeft } from '../core/brewing';
 import { cosmeticRandom, gameplayRandom } from '../core/runRandom';
 import { getConversionProb } from '../core/demand';
 import { getNeighborhood } from '../core/neighborhoods';
-import { trafficMultiplier } from '../core/plots';
+import { crowdAt, liveWalkersPerDay } from '../core/standSales';
 import { CentralParkScene } from '../world/CentralParkScene';
 import { publishAnchors } from './anchorStore';
 import {
@@ -10,6 +10,8 @@ import {
   selectDistrictPlotsKey,
   selectLivePlotId,
   selectSellerPresent,
+  selectClockPaused,
+  selectEffectiveClockSpeed,
   selectStandOpen,
   useGameStore,
 } from './gameStore';
@@ -90,15 +92,25 @@ export function connectScene(container: HTMLElement): () => void {
       { equalityFn: sameTuple, fireImmediately: true }
     ),
 
-    // The live plot, and its foot traffic: a busier plot sends customers more often
-    // (core/plots.ts trafficMultiplier). With no live plot there is no queue, so the
-    // multiplier is neutral (1) rather than a number from some other plot.
+    // The live plot.
     useGameStore.subscribe(
       (s) => [s.neighborhoodId, selectLivePlotId(s)] as const,
-      ([, id]) => {
-        scene.setLivePlot(id);
-        scene.setFootTraffic(id === null ? 1 : trafficMultiplier(id));
+      ([, id]) => scene.setLivePlot(id),
+      { equalityFn: sameTuple, fireImmediately: true }
+    ),
+
+    // How many passers-by reach the live stand a day: the ONE sales formula
+    // (core/standSales.ts liveWalkersPerDay: the plot's walkers, shared between the
+    // player's stands in the district, lifted by marketing awareness), plus the clock
+    // speed. Sent even when it is 0 (no stand of the player's here): the scene then
+    // shrinks back to its quiet crowd and still strolls at the clock's speed, instead of
+    // keeping the last district's crowd and speed.
+    useGameStore.subscribe(
+      (s) => {
+        const id = selectLivePlotId(s);
+        return [id === null ? 0 : liveWalkersPerDay(id, crowdAt(s.economy, id)), selectEffectiveClockSpeed(s)] as const;
       },
+      ([walkers, speed]) => scene.setLiveDemand(walkers, speed),
       { equalityFn: sameTuple, fireImmediately: true }
     ),
 
@@ -110,6 +122,9 @@ export function connectScene(container: HTMLElement): () => void {
     useGameStore.subscribe((s) => s.workingAtStand, (v) => scene.setWorkingAtStand(v)),
 
     useGameStore.subscribe(selectStandOpen, (open) => scene.setStandOpen(open), { fireImmediately: true }),
+
+    // While a window pauses the day clock, no customer decisions are owed (core/liveCrowd.ts).
+    useGameStore.subscribe(selectClockPaused, (paused) => scene.setClockRunning(!paused), { fireImmediately: true }),
 
     // Stock on the live stand's counter: the two piles the HUD stock card shows, ready
     // cups (brewed, waiting to be sold) and lemons left (not brewed yet). Pitchers owned

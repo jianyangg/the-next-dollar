@@ -188,6 +188,7 @@ describe('rent and day close', () => {
       revenue: 12,
       cogs: 4,
       rentAndWages: 14,
+      marketing: 0,
       nopat: -6,
       hurdleCharge: 4.5,
       chargedOn: 30,

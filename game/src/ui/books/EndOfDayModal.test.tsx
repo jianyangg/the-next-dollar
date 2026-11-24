@@ -19,6 +19,7 @@ const record: DayRecord = {
   revenue: 24,
   cogs: 4,
   rentAndWages: 2,
+  marketing: 0,
   nopat: 18,
   hurdleCharge: 1.15,
   chargedOn: 23,
@@ -97,6 +98,23 @@ describe('EndOfDayModal', () => {
     expect(screen.getByLabelText('Day won')).toBeTruthy();
     expect(text).not.toContain('Run seed'); // a testing tool, not shown to players
     fireEvent.click(screen.getByRole('button', { name: /next day/i }));
+  });
+
+  it('says nothing about marketing on a day without a campaign', () => {
+    render(<EndOfDayModal />);
+    act(() => void vi.advanceTimersByTime(5000));
+    expect(document.body.textContent).not.toContain('marketing');
+    expect(document.querySelector('.eodr-note')).toBeNull();
+  });
+
+  it("explains a campaign day in one line with the record's own figure, and prints its receipt row", () => {
+    useGameStore.setState({
+      eodRecord: { ...record, marketing: 24, nopat: -6, valueCreated: -7.15 },
+    });
+    render(<EndOfDayModal />);
+    act(() => void vi.advanceTimersByTime(5000));
+    expect(document.querySelector('.eodr-note')?.textContent).toBe('Today includes $24.00 of marketing');
+    expect(document.body.textContent).toContain('Marketing-$24.00');
   });
 
   it('a day below the line says so in red, with the missed stamp', () => {

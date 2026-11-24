@@ -1,7 +1,7 @@
 import { formatClockTime } from '../core/clock';
 import { getNeighborhood } from '../core/neighborhoods';
 import { FOUNDER_CATALOG } from '../world/pixelArt';
-import { useGameStore } from '../state/gameStore';
+import { selectEffectiveClockSpeed, useGameStore } from '../state/gameStore';
 import { getIcons, getPortraits } from './assets';
 import { fmtSignedMoney } from './format';
 import { CountUp, Key } from './kit/Money';
@@ -54,6 +54,10 @@ export function Hud() {
   const cash = useGameStore((s) => s.economy.cash);
   const totalValueCreated = useGameStore((s) => s.economy.totalValueCreated);
   const clockSpeed = useGameStore((s) => s.clockSpeed);
+  // The badge shows the speed the game is really running at: at the counter (serving or
+  // brewing) it is 1x even when 2x is chosen (core/clock.ts effectiveClockSpeed).
+  const runningSpeed = useGameStore(selectEffectiveClockSpeed);
+  const heldAtCounter = runningSpeed !== clockSpeed;
   const muted = useGameStore((s) => s.muted);
   const mapOpen = useGameStore((s) => s.mapOpen);
   const booksOpen = useGameStore((s) => s.booksOpen);
@@ -85,12 +89,12 @@ export function Hud() {
             </span>
             <button
               type="button"
-              className={`hud-speed ${clockSpeed === 2 ? 'is-fast' : ''}`}
+              className={`hud-speed ${runningSpeed === 2 ? 'is-fast' : ''}`}
               onClick={actions.toggleClockSpeed}
-              aria-label={`Clock speed ${clockSpeed}x`}
-              title="Clock speed"
+              aria-label={`Clock speed ${runningSpeed}x`}
+              title={heldAtCounter ? 'The counter runs at 1x; 2x comes back when you step away' : 'Clock speed'}
             >
-              {clockSpeed}x
+              {runningSpeed}x
             </button>
           </div>
           <div className="hud-place">{neighborhood.shortName}</div>

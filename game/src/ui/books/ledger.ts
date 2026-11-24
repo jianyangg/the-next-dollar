@@ -1,3 +1,6 @@
+import { NEIGHBORHOODS, type NeighborhoodId } from '../../core/neighborhoods';
+import { awarenessPct } from '../stand/awareness';
+
 /**
  * Pure helpers for the Books drawer.
  */
@@ -31,4 +34,25 @@ export function meterShape(dailyHurdle: number, projectedNopat: number): MeterSh
     linePct: pct(dailyHurdle),
     clears: projectedNopat >= dailyHurdle,
   };
+}
+
+export interface AwarenessLine {
+  id: NeighborhoodId;
+  name: string;
+  /** 0..100, as the Advertise panel shows it. */
+  pct: number;
+}
+
+/**
+ * The districts to list under "Built, not counted in your worth", in map order.
+ *
+ * Why "shows as at least 1" and not "> 0": awareness fades by a fixed share each night
+ * (x0.75), so it never reaches exactly 0. Every district ever advertised would stay in
+ * the list forever as a row reading "0". A district is listed while its awareness still
+ * prints as 1 or more, the same rounding the Advertise panel uses.
+ */
+export function awarenessLines(awareness: Readonly<Record<NeighborhoodId, number>>): AwarenessLine[] {
+  return NEIGHBORHOODS.map((n) => ({ id: n.id, name: n.name, pct: awarenessPct(awareness[n.id]) })).filter(
+    (line) => line.pct >= 1
+  );
 }

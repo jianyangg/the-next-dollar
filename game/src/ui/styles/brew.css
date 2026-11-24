@@ -314,6 +314,11 @@
 .brew-sugar.is-pouring {
   visibility: visible;
 }
+/* Honey twist: an amber jar and amber drops instead of the white sugar bag. */
+.brew-bag.is-honey,
+.brew-sugar.is-honey > i {
+  background: var(--sun-ray);
+}
 .brew-sugar > i {
   position: absolute;
   left: 4px;
@@ -526,6 +531,13 @@
 }
 
 /* ---------- Action line ---------- */
+/* The current step's twist, announced above the action line (BrewMinigame twistLine). */
+.brew-twist {
+  text-align: center;
+  color: var(--warn-sign);
+  font-family: var(--f-display);
+}
+
 .brew-action {
   display: flex;
   align-items: center;

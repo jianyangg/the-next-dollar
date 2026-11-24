@@ -54,7 +54,10 @@ interface CursorMenuProps {
   /** Keyboard control is on (e.g. false while a mini-game owns the keys). Mouse always works. */
   active?: boolean;
   blocking?: boolean;
-  /** 'column' moves with up/down (W/S); 'row' with left/right (A/D). */
+  /**
+   * 'column' moves with up/down (W/S); 'row' with left/right (A/D). A row that wraps onto
+   * more lines also hops between them with up/down (see `lineHopIndex`).
+   */
   orientation?: 'column' | 'row';
   /** Accessible name for the menu. */
   label: string;
@@ -85,6 +88,53 @@ export function nextEnabledIndex(items: Pick<CursorMenuItem, 'disabled'>[], from
     if (!items[candidate].disabled) return candidate;
   }
   return from; // every item disabled: stay put
+}
+
+/** Where an item's button sits on screen; only the parts line-hopping needs. */
+export interface ItemBox {
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+}
+
+/**
+ * Index of the closest enabled item on the visual line above (step -1) or below (+1).
+ *
+ * Why geometry: a 'row' menu wraps when it runs out of width (the price row puts "Done"
+ * under "$2"). The list is one-dimensional, but the player sees a grid, so S/Down must
+ * go to what is drawn below, not to the next item in the list. We read where each
+ * button actually landed and pick, among items on a different line in that direction,
+ * the nearest line first, then the one closest horizontally to the cursor.
+ *
+ * Returns `from` when nothing is above/below (a row that fits on one line): the key
+ * then does nothing, which is what a single line looks like it should do.
+ */
+export function lineHopIndex(
+  boxes: readonly (ItemBox | null)[],
+  items: Pick<CursorMenuItem, 'disabled'>[],
+  from: number,
+  step: 1 | -1
+): number {
+  const here = boxes[from];
+  if (!here) return from;
+  const centreX = (here.left + here.right) / 2;
+  let best = from;
+  let bestLineGap = Infinity;
+  let bestXGap = Infinity;
+  boxes.forEach((box, i) => {
+    if (!box || i === from || items[i]?.disabled) return;
+    // "On another line" = no vertical overlap with the cursor's box, in the right direction.
+    const lineGap = step === 1 ? box.top - here.bottom : here.top - box.bottom;
+    if (lineGap < -1) return; // 1px slack for borders that touch
+    const xGap = Math.abs((box.left + box.right) / 2 - centreX);
+    if (lineGap < bestLineGap - 1 || (Math.abs(lineGap - bestLineGap) <= 1 && xGap < bestXGap)) {
+      best = i;
+      bestLineGap = lineGap;
+      bestXGap = xGap;
+    }
+  });
+  return best;
 }
 
 export function CursorMenu({
@@ -121,8 +171,18 @@ export function CursorMenu({
     }
   }, [items, cursor]);
 
-  const move = (step: 1 | -1) => {
-    const next = nextEnabledIndex(items, cursor, step);
+  // The rendered buttons, so a wrapped row can move up/down by where items really sit.
+  const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const move = (step: 1 | -1, across = false) => {
+    const next = across
+      ? lineHopIndex(
+          items.map((_, i) => buttonRefs.current[i]?.getBoundingClientRect() ?? null),
+          items,
+          cursor,
+          step
+        )
+      : nextEnabledIndex(items, cursor, step);
     if (next !== cursor) {
       soundEngine.playClick();
       setCursor(next);
@@ -160,6 +220,19 @@ export function CursorMenu({
         e.preventDefault();
         move(1);
         return true;
+      }
+      // A row menu can wrap onto several lines, so W/S and Up/Down hop between them.
+      if (orientation === 'row') {
+        const vertical = (PREV_KEYS.column as readonly string[]).includes(e.key)
+          ? -1
+          : (NEXT_KEYS.column as readonly string[]).includes(e.key)
+            ? 1
+            : 0;
+        if (vertical !== 0) {
+          e.preventDefault();
+          move(vertical, true);
+          return true;
+        }
       }
       if (e.key === 'Escape' && onBack) {
         e.preventDefault();
@@ -199,6 +272,9 @@ export function CursorMenu({
       {items.map((item, i) => (
         <li key={item.id} role="none">
           <button
+            ref={(el) => {
+              buttonRefs.current[i] = el;
+            }}
             type="button"
             role="menuitem"
             className={`pt-menu-item ${i === cursor ? 'is-cursor' : ''}`}

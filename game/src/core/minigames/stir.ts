@@ -42,7 +42,12 @@ export const MAX_SLOP = 0.5;
  */
 export const STIR_MAX_SEC = 5;
 
+/** 1 = clockwise (W D S A), -1 = the other way (W A S D). A twist picks it per brew. */
+export type StirDirection = 1 | -1;
+
 export interface StirState {
+  /** Which way round counts as a turn (twist; same tempo rules either way). */
+  direction: StirDirection;
   /** Seconds since the first quarter turn (0 until then). */
   clock: number;
   /** Quadrant the spoon is in now, or null before the first turn. */
@@ -60,8 +65,9 @@ export interface StirState {
   done: boolean;
 }
 
-export function init(): StirState {
+export function init(direction: StirDirection = 1): StirState {
   return {
+    direction,
     clock: 0,
     at: null,
     quarters: 0,
@@ -74,10 +80,11 @@ export function init(): StirState {
   };
 }
 
-/** The quadrant that counts as the next clockwise quarter turn. */
+/** The quadrant that counts as the next quarter turn in this brew's direction. */
 export function nextQuadrant(state: StirState): StirQuadrant | null {
   if (state.at === null) return null; // any quadrant can start the stir
-  return STIR_ORDER[(STIR_ORDER.indexOf(state.at) + 1) % STIR_ORDER.length] ?? 'W';
+  const n = STIR_ORDER.length;
+  return STIR_ORDER[(((STIR_ORDER.indexOf(state.at) + state.direction) % n) + n) % n] ?? 'W';
 }
 
 export function step(state: StirState, dt: number): StirState {
@@ -98,7 +105,7 @@ export function steadiness(interval: number, previous: number | null): number {
 export type TurnOutcome = 'start' | 'turn' | 'slop' | 'settled' | 'ignored';
 
 /**
- * The spoon entered `quadrant`. Only the next clockwise quadrant counts; anything else
+ * The spoon entered `quadrant`. Only the next quadrant in this brew's direction counts; anything else
  * (a reversal, the mouse jittering on a boundary, a skipped quarter) is ignored
  * without penalty, so a wobbly hand on the mouse is never punished for noise.
  */

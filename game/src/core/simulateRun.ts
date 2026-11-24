@@ -6,7 +6,9 @@ import * as Purchases from './purchases';
 import { createRunStreams } from './rng';
 import { applySale } from './sales';
 import { countOwnedStands, createInitialState, getWorth, grandmaWorth, type SliceState } from './sliceModel';
-import { buyersPerDay, liveCupsPerDay, ownStandsInDistrict, staffedCupsPerDay } from './standSales';
+import { buyCampaign } from './marketing';
+import type { NeighborhoodId } from './neighborhoods';
+import { buyersPerDay, crowdAt, liveCupsPerDay, staffedCupsPerDay } from './standSales';
 import { cupCost, type Tuning, TUNING } from './tuning';
 
 /**
@@ -68,6 +70,11 @@ export interface SimMorning {
   /** One sealed bid for the seller's stand; true when the stand was won. */
   bid(amount: number, keepCash: number): boolean;
   setPrice(price: number): void;
+  /**
+   * Buy one marketing campaign in `district` (core/marketing.ts buyCampaign). Refused
+   * when the rule refuses or when it would leave less than `keepCash`.
+   */
+  advertise(district: NeighborhoodId, keepCash: number): boolean;
   /** Expected daily profit of the chain at `price` if every stand the player owns had a worker. */
   chainProfitPerDay(price: number): number;
   /** Cash needed to open a stand on an empty plot. */
@@ -157,7 +164,7 @@ export function simulateRun(policy: SimPolicy, tuning: Tuning = TUNING, seed = 1
     let total = 0;
     for (const p of PLOTS) {
       if (plots[p.id] !== 'built') continue;
-      const cups = staffedCupsPerDay(p.id, price, t, ownStandsInDistrict(plots, p.id));
+      const cups = staffedCupsPerDay(p.id, price, crowdAt({ plots, awareness: state.awareness }, p.id), t);
       total += cups * (price - cupCost(t)) - plannedRent(p.id, t) - t.workerDailyWage;
     }
     return total;
@@ -201,6 +208,13 @@ export function simulateRun(policy: SimPolicy, tuning: Tuning = TUNING, seed = 1
       log.push(`d${day} price $${price}`);
       state = { ...state, pricePerCup: price };
     },
+    advertise(district, keepCash) {
+      const next = buyCampaign(state, district, t);
+      if (!next || next.cash < keepCash) return false;
+      log.push(`d${day} advertise ${district} $${(state.cash - next.cash).toFixed(2)}`);
+      state = next;
+      return true;
+    },
   });
 
   // Day 1 starts the way the tutorial does: lease the corner, kit, pitcher, build.
@@ -218,23 +232,20 @@ export function simulateRun(policy: SimPolicy, tuning: Tuning = TUNING, seed = 1
     const price = state.pricePerCup;
     const livePlot =
       policy.counter === 'busiest'
-        ? [...built].sort((a, b) => buyersPerDay(b, price, t) - buyersPerDay(a, price, t))[0]
+        ? [...built].sort((a, b) => buyersPerDay(b, price, crowdAt(state, b), t) - buyersPerDay(a, price, crowdAt(state, a), t))[0]
         : built.includes(FIRST_PLOT)
           ? FIRST_PLOT
           : built[0];
     const workersHere = livePlot && state.staffedPlots.includes(livePlot) ? 1 : 0;
     const focus = policy.focus * (day === 1 ? DAY_ONE_COUNTER_SHARE : 1);
     /** Cups per full day at the live counter if the player never left it. */
-    const shareOf = (id: PlotId): number => ownStandsInDistrict(state.plots, id);
-    const liveRate = livePlot
-      ? liveCupsPerDay(livePlot, price, { workersHere, focus: 1, standsInDistrict: shareOf(livePlot) }, t)
-      : 0;
+    const liveRate = livePlot ? liveCupsPerDay(livePlot, price, { workersHere, focus: 1, crowd: crowdAt(state, livePlot) }, t) : 0;
     /** Cups the whole chain expects to sell in a full day (for deciding how many lemons to buy). */
     const expectedCups =
       liveRate * focus +
       state.staffedPlots
         .filter((id) => state.plots[id] === 'built')
-        .reduce((sum, id) => sum + staffedCupsPerDay(id, price, t, shareOf(id)) * (id === livePlot ? 1 - focus : 1), 0);
+        .reduce((sum, id) => sum + staffedCupsPerDay(id, price, crowdAt(state, id), t) * (id === livePlot ? 1 - focus : 1), 0);
 
     let awayCarry: Record<PlotId, number> = {};
     liveCarry = 0;

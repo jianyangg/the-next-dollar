@@ -75,3 +75,16 @@ export function tableStockView({ readyCups, lemons }: TableStockInput): TableSto
     crateLemons: CRATE_STEPS.find((s) => left >= s.minLemons)?.shown ?? 0,
   };
 }
+
+/**
+ * The stand has nothing left to sell: no brewed cups and no lemons to brew more.
+ *
+ * This is the same condition that closes the stand to customers (state/gameStore.ts
+ * `selectStandOpen` needs `cupsInStock > 0`, and ready cups + lemons left IS
+ * `cupsInStock`), so the SOLD OUT sign over the stand only ever shows while walkers
+ * really are skipping the line. Stock is shared by every stand the player owns, so
+ * when it runs out, every built stand on the street is sold out at once.
+ */
+export function isSoldOut({ readyCups, lemons }: TableStockInput): boolean {
+  return wholeCount(readyCups) + wholeCount(lemons) === 0;
+}

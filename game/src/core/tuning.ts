@@ -60,6 +60,16 @@ export interface Tuning {
   crowdShareTwoStands: number;
   crowdShareThreeStands: number;
 
+  // --- marketing (core/marketing.ts) ---
+  /** Share of awareness lost at every closing bell (0.25 = a quarter a day). */
+  awarenessFadePerDay: number;
+  /** Share of the gap to full awareness one campaign closes (0.5 = half the gap). */
+  campaignGapShare: number;
+  /** Extra walkers at full awareness (0.4 = 40% more passers-by). */
+  awarenessWalkerLift: number;
+  /** A campaign's price per walker the district sees in a day. */
+  campaignCostPerWalker: number;
+
   // --- knobs the game leaves at 1; the simulation's sensitivity test moves them ---
   /** Multiplies every district's permit fee (core/neighborhoods.ts permitFee). */
   permitScale: number;
@@ -87,10 +97,14 @@ export const TUNING: Tuning = {
   stallKitResale: 8.4,
   pitcherResale: 7,
   workerCupsPerDay: 20,
-  pourMsAlone: 2000,
+  pourMsAlone: 1500,
   pourMsWithWorker: 600,
   crowdShareTwoStands: 0.8,
   crowdShareThreeStands: 0.6,
+  awarenessFadePerDay: 0.25,
+  campaignGapShare: 0.5,
+  awarenessWalkerLift: 0.4,
+  campaignCostPerWalker: 0.2,
   permitScale: 1,
   rentScale: 1,
   walkerScale: 1,

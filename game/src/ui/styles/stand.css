@@ -280,3 +280,95 @@
   bottom: var(--s-5);
   pointer-events: auto;
 }
+
+/* ---------- Advertise panel: awareness now, tomorrow, and after one more campaign ---------- */
+.stand-ad-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.stand-ad-name {
+  font-family: var(--f-display);
+  font-size: var(--t-title);
+  line-height: 1;
+}
+.stand-ad-now {
+  font-family: var(--f-num);
+  font-weight: 700;
+  font-size: var(--t-big);
+}
+.stand-ad-of,
+.stand-ad-dim {
+  font-size: var(--t-small);
+  color: var(--sign-dim);
+}
+/* The bar. Blue (accent) because green is the pour bar and yellow is reserved for THE LINE. */
+.stand-ad-bar {
+  position: relative;
+  height: 28px;
+  background: var(--sign-2);
+  border: 3px solid var(--outline);
+}
+.stand-ad-fill,
+.stand-ad-ghost {
+  position: absolute;
+  inset: 0 auto 0 0;
+}
+.stand-ad-fill {
+  background: var(--accent);
+}
+/* What one more campaign would add: the same colour, faded, under the solid fill. */
+.stand-ad-ghost {
+  background: var(--accent);
+  opacity: 0.35;
+}
+/* Tomorrow's level after tonight's fade: a dark post that sticks out above and below. */
+.stand-ad-tick {
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  width: var(--px);
+  transform: translateX(-50%);
+  background: var(--outline);
+}
+.stand-ad-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  font-size: var(--t-body);
+}
+.stand-ad-legend li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+/* Legend swatches drawn exactly like the bar marks they name. */
+.stand-ad-key {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.stand-ad-key.is-tick {
+  width: var(--px);
+  background: var(--outline);
+  margin: 0 6px;
+}
+.stand-ad-key.is-ghost {
+  background: var(--accent);
+  opacity: 0.35;
+  border: 2px solid var(--outline);
+}
+.stand-ad-lift {
+  font-size: var(--t-big);
+  font-weight: 800;
+  color: var(--gain-sign);
+}
+/* Warning that extra walkers would not sell at stands already at the worker's limit. */
+.stand-ad-warn {
+  color: var(--warn-sign);
+  font-weight: 700;
+}

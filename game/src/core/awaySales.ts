@@ -1,7 +1,7 @@
 import { type PlotId } from './plots';
 import { applySale } from './sales';
 import type { SliceState } from './sliceModel';
-import { ownStandsInDistrict, staffedCupsPerDay } from './standSales';
+import { crowdAt, type PlotCrowd, staffedCupsPerDay } from './standSales';
 import { type Tuning, TUNING } from './tuning';
 
 /**
@@ -64,13 +64,8 @@ export interface AwayStepResult {
  * Cups per full day a staffed plot is expected to sell at the current price. The number
  * itself comes from core/standSales.ts, the one sales formula shared with the live stand.
  */
-export function awayCupsPerDay(
-  plotId: PlotId,
-  pricePerCup: number,
-  t: Tuning = TUNING,
-  standsInDistrict = 1
-): number {
-  return staffedCupsPerDay(plotId, pricePerCup, t, standsInDistrict);
+export function awayCupsPerDay(plotId: PlotId, pricePerCup: number, crowd: PlotCrowd, t: Tuning = TUNING): number {
+  return staffedCupsPerDay(plotId, pricePerCup, crowd, t);
 }
 
 export function stepAwaySales(input: AwayStepInput): AwayStepResult {
@@ -83,7 +78,7 @@ export function stepAwaySales(input: AwayStepInput): AwayStepResult {
 
   for (const plotId of state.staffedPlots) {
     if (plotId === input.livePlotId || state.plots[plotId] !== 'built') continue;
-    let owed = (carry[plotId] ?? 0) + awayCupsPerDay(plotId, state.pricePerCup, t, ownStandsInDistrict(state.plots, plotId)) * input.dayFraction;
+    let owed = (carry[plotId] ?? 0) + awayCupsPerDay(plotId, state.pricePerCup, crowdAt(state, plotId), t) * input.dayFraction;
     while (owed >= 1) {
       owed -= 1;
       if (state.cupsInStock - input.reservedCups >= 1) {

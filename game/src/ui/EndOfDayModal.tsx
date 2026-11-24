@@ -22,7 +22,7 @@ import './styles/eod.css';
 /**
  * Closing bell: the day's VERDICT first, then the receipt that explains it.
  *
- * The day has one goal (beat the line: rent + wages + the 5% charge), so the screen
+ * The day has one goal (beat the line: rent + wages + marketing + Grandma's 15%), so the screen
  * leads with one beat: "BEAT THE LINE" in green or "MISSED THE LINE" in red, a stamp
  * that slams down when the receipt finishes printing, and the run's tally of days
  * beaten. The old letter grade is gone: it was S on almost every day (it graded the
@@ -106,6 +106,12 @@ function EndOfDayBody({ eodRecord }: { eodRecord: DayRecord }) {
             <span className="eodr-where">
               {neighborhood.name} · Day {eodRecord.day} of {maxDays}
             </span>
+            {/* A campaign is an expense of the day it is bought, but its walkers come over
+                the following days. Saying so next to the verdict explains why an
+                investment day can miss the line. The figure is the closed record's own. */}
+            {eodRecord.marketing > 0 && (
+              <p className="eodr-note">Today includes ${eodRecord.marketing.toFixed(2)} of marketing</p>
+            )}
           </header>
 
           <section className="pt-paper eodr-receipt" aria-label="Receipt">

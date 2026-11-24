@@ -5,11 +5,12 @@ import { getDailyWages, MANAGER_DAILY_WAGE, WORKER_DAILY_WAGE } from '../core/sl
 import { STAND_DIVEST_PROCEEDS } from '../core/purchases';
 import { getNeighborhood } from '../core/neighborhoods';
 import { useQueueLength } from '../state/anchorStore';
-import { type GameState, selectWorkersHere, useGameStore } from '../state/gameStore';
+import { type GameState, selectCampaign, selectWorkersHere, useGameStore } from '../state/gameStore';
 import { BrewStep } from './BrewMinigame';
 import { getConversionProb } from '../core/demand';
 import { type CursorMenuItem, CursorMenu } from './kit/CursorMenu';
 import { Key } from './kit/Money';
+import { AdvertisePanel, campaignPriceLabel } from './stand/AdvertisePanel';
 import { PriceCustomers } from './stand/PriceCustomers';
 import { StockTag } from './stand/StockTag';
 import { useStoreMotionValue } from './useStoreMotionValue';
@@ -18,7 +19,7 @@ import './styles/stand.css';
 /**
  * What the player sees while standing BEHIND their counter:
  *   - bottom-left: a black SIGN holding the action menu (Brew, Serve, Price, Staff,
- *     Market, Sell stand, Leave) next to a PAPER tag of stock numbers;
+ *     Advertise, Market, Sell stand, Leave) next to a PAPER tag of stock numbers;
  *   - bottom-centre: the brew gauge while a mini-game runs (BrewMinigame.tsx).
  *
  * The menu is NOT blocking (see CursorMenu): F, Space, B, M and Esc keep reaching the
@@ -61,7 +62,7 @@ function Labelled({ k, children }: { k: string; children: string }) {
   );
 }
 
-type Panel = 'price' | 'staff' | 'sell' | null;
+type Panel = 'price' | 'staff' | 'advertise' | 'sell' | null;
 
 /** The sign: main menu, plus a row of choices under it for Price or Staff. */
 function StandMenu() {
@@ -75,6 +76,8 @@ function StandMenu() {
   const managers = useGameStore((s) => s.economy.managers);
   const dailyWages = useGameStore((s) => getDailyWages(s.economy));
   const neighborhoodId = useGameStore((s) => s.neighborhoodId);
+  // One campaign's price in this district (a number or null), straight from the rules.
+  const campaignCost = useGameStore((s) => selectCampaign(s).cost);
   const pouring = useGameStore(selectPouring);
   const brewing = useGameStore(selectBrewing);
   const queueLength = useQueueLength();
@@ -114,6 +117,13 @@ function StandMenu() {
       label: 'Staff',
       value: dailyWages > 0 ? `-$${dailyWages}/d` : undefined,
       onSelect: () => setPanel('staff'),
+    },
+    {
+      id: 'advertise',
+      label: 'Advertise',
+      // The price of one campaign here, or why there is none (no walkers to reach).
+      value: campaignPriceLabel(campaignCost),
+      onSelect: () => setPanel('advertise'),
     },
     { id: 'market', label: 'Market', onSelect: () => actions.selectNeighborhood('market') },
     {
@@ -168,7 +178,7 @@ function StandMenu() {
   return (
     <div className="pt-sign stand-sign">
       {/* Only one menu listens to keys at a time, or E would confirm in both. */}
-      {/* A sub-row (Price, Staff, Sell) REPLACES the main menu, like a JRPG sub-menu:
+      {/* A sub-row (Price, Staff, Advertise, Sell) REPLACES the main menu, like a JRPG sub-menu:
           the sign stays short enough for a 650px-tall window, and Esc/Done brings the
           main menu back. Only one menu is ever mounted, so only one hears E. */}
       {panel === null && <CursorMenu label="Stand" items={mainItems} active={keysFree} />}
@@ -191,6 +201,7 @@ function StandMenu() {
           <CursorMenu label="Staff" orientation="row" items={staffItems} active={keysFree} onBack={closePanel} />
         </div>
       )}
+      {panel === 'advertise' && <AdvertisePanel active={keysFree} onDone={closePanel} />}
       {panel === 'sell' && (
         <div className="stand-sub">
           <CursorMenu label="Sell stand?" orientation="row" items={sellItems} active={keysFree} onBack={closePanel} />

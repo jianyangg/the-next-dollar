@@ -1,5 +1,6 @@
 import { cents } from './money';
-import { getDailyHurdleCharge, getDayNopat, type SliceState } from './sliceModel';
+import { projectDay } from './dayEnd';
+import { getDailyHurdleCharge, type SliceState } from './sliceModel';
 
 /**
  * Money chips: the in-world "receipt" that floats up when the player spends or earns.
@@ -18,10 +19,14 @@ import { getDailyHurdleCharge, getDayNopat, type SliceState } from './sliceModel
  *   - Buying stock or equipment moves money from CASH into STOCK or GEAR; PROFIT does
  *     not move. Showing "PROFIT $0" right next to "CASH −$10" is the whole point:
  *     spending is not the same as losing money.
- *   - THE LINE (what today must earn to keep pace with Grandma's bank) is fixed at the
- *     opening bell, so no action during the day moves it and the line chip no longer
- *     appears for same-day actions. It is kept for comparisons across a bell (the line
- *     of a new morning against yesterday's).
+ *   - PROFIT is today's profit exactly as the closing receipt will book it
+ *     (core/dayEnd.ts projectDay: earned minus rent, wages and marketing), so a lease,
+ *     a hire or a campaign shows what it really takes off today's profit.
+ *   - The LINE chip shows only Grandma's part of the line (her rate on the money the
+ *     day started with), which is fixed at the opening bell, so it never appears for
+ *     same-day actions. A campaign does raise today's line, but by its own cost, and
+ *     that cost is already in the PROFIT chip; showing it twice would read as a double
+ *     loss. The chip is kept for comparisons across a bell.
  */
 
 export type ChipKind = 'cash' | 'stock' | 'gear' | 'profit' | 'line';
@@ -53,7 +58,7 @@ export function ledgerChips(before: SliceState, after: SliceState): MoneyChip[] 
     cash: cents(after.cash - before.cash),
     stock: cents(after.inventoryValue - before.inventoryValue),
     gear: cents(after.equipmentValue - before.equipmentValue),
-    profit: cents(getDayNopat(after) - getDayNopat(before)),
+    profit: cents(projectDay(after).nopat - projectDay(before).nopat),
     line: cents(getDailyHurdleCharge(after) - getDailyHurdleCharge(before)),
   };
   const balancesMoved = deltas.cash !== 0 || deltas.stock !== 0 || deltas.gear !== 0;
