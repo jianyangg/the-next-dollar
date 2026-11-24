@@ -1,0 +1,25 @@
+# Runs on every push and pull request: type-check, unit tests, production build.
+# It never calls Gemini: seller-agent tests use a stub client (CONFIGURATION.md "Deterministic tests use stubs").
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  game:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: game
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: game/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build

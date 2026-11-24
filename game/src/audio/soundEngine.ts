@@ -1,3 +1,5 @@
+import { cosmeticRandom } from '../core/runRandom';
+
 /**
  * Zero-dependency Web Audio API sound effects & upbeat NYC Afternoon Jazz-Bossa
  * tycoon soundtrack engine (with automatic `/audio/nyc-theme.mp3` support).
@@ -714,7 +716,7 @@ class WebAudioSoundEngine implements SoundEngine {
 
     try {
       const now = ctx.currentTime;
-      const jitter = 0.92 + Math.random() * 0.16; // subtle ±8% pitch variation
+      const jitter = 0.92 + cosmeticRandom() * 0.16; // subtle ±8% pitch variation
 
       // Soft low-pass filter at 300Hz for a muted, cozy sneaker pat
       const lp = ctx.createBiquadFilter();
@@ -1212,7 +1214,7 @@ class WebAudioSoundEngine implements SoundEngine {
     const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
     const data = buffer.getChannelData(0);
     for (let i = 0; i < length; i++) {
-      data[i] = Math.random() * 2 - 1;
+      data[i] = cosmeticRandom() * 2 - 1;
     }
     this.noiseBuffer = buffer;
     return buffer;

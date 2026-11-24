@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { playStep } from '../audio/soundEngine';
+import type { Random } from '../core/rng';
 import { NeighborhoodId, getNeighborhood } from '../core/neighborhoods';
 import {
   DistrictPedestrianKind,
@@ -113,6 +114,12 @@ interface StandStyleOptions {
   parentGroup: THREE.Group;
 }
 
+/** The two seeded random streams the scene needs (see src/core/rng.ts). */
+export interface SceneRandom {
+  gameplay: Random;
+  cosmetic: Random;
+}
+
 export interface SceneCallbacks {
   onCustomerPurchase: () => void;
   onCustomerWalkout?: () => void;
@@ -222,9 +229,16 @@ export class CentralParkScene {
   private summerTreeTex!: THREE.CanvasTexture;
   private autumnTreeTex!: THREE.CanvasTexture;
 
-  constructor(container: HTMLElement, callbacks: SceneCallbacks) {
+  // Seeded random streams are injected (not imported as globals) so the scene
+  // stays testable. `gameplay` draws change game outcomes (customer flow);
+  // `cosmetic` draws are visuals only, kept separate so they can never shift
+  // the order of gameplay draws.
+  private readonly rng: SceneRandom;
+
+  constructor(container: HTMLElement, callbacks: SceneCallbacks, rng: SceneRandom) {
     this.container = container;
     this.callbacks = callbacks;
+    this.rng = rng;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -324,19 +338,19 @@ export class CentralParkScene {
         opacity: 1,
       });
       const mesh = new THREE.Mesh(this.sparkleGeo, mat);
-      const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.45;
-      const spread = 1.1 + Math.random() * 1.4;
+      const angle = (i / count) * Math.PI * 2 + (this.rng.cosmetic() - 0.5) * 0.45;
+      const spread = 1.1 + this.rng.cosmetic() * 1.4;
       mesh.position.set(
-        OWN_STAND_POS.x + (Math.random() - 0.5) * 0.7,
-        1.2 + Math.random() * 0.35,
-        OWN_STAND_POS.z + (Math.random() - 0.5) * 0.4
+        OWN_STAND_POS.x + (this.rng.cosmetic() - 0.5) * 0.7,
+        1.2 + this.rng.cosmetic() * 0.35,
+        OWN_STAND_POS.z + (this.rng.cosmetic() - 0.5) * 0.4
       );
       this.scene.add(mesh);
 
       this.sparkles.push({
         mesh,
         vx: Math.cos(angle) * spread,
-        vy: 2.8 + Math.random() * 2.1,
+        vy: 2.8 + this.rng.cosmetic() * 2.1,
         vz: Math.sin(angle) * spread * 0.65,
         life: 0.65,
         maxLife: 0.65,
@@ -351,8 +365,8 @@ export class CentralParkScene {
 
     front.state = 'leaving';
     front.queueSlot = -1;
-    front.boughtCooldown = 8 + Math.random() * 4;
-    front.vx = (Math.random() > 0.5 ? 1 : -1) * front.speed;
+    front.boughtCooldown = 8 + this.rng.gameplay() * 4;
+    front.vx = (this.rng.gameplay() > 0.5 ? 1 : -1) * front.speed;
 
     this.shuffleQueueForward();
     return { patienceRatio };
@@ -369,7 +383,7 @@ export class CentralParkScene {
     for (const ped of this.queue) {
       ped.state = 'leaving';
       ped.queueSlot = -1;
-      ped.boughtCooldown = 2 + Math.random() * 2;
+      ped.boughtCooldown = 2 + this.rng.gameplay() * 2;
     }
     this.queue = [];
   }
@@ -2805,7 +2819,7 @@ export class CentralParkScene {
         homeZ: a.z,
         vx: a.speed * a.dir,
         speed: a.speed,
-        animTimer: Math.random() * 5,
+        animTimer: this.rng.cosmetic() * 5,
         canBuy: true,
         boughtCooldown: idx === 0 ? 0.5 : 1.5 + idx * 0.7,
         state: 'strolling',
@@ -2833,18 +2847,18 @@ export class CentralParkScene {
 
   private respawnPedestrianOffscreen(ped: Pedestrian): void {
     const kinds = DISTRICT_PEDESTRIANS[this.currentNeighborhood];
-    const nextKind = kinds[Math.floor(Math.random() * kinds.length)];
-    const fromLeft = Math.random() > 0.5;
+    const nextKind = kinds[Math.floor(this.rng.cosmetic() * kinds.length)];
+    const fromLeft = this.rng.gameplay() > 0.5;
     ped.frames = this.pedSpriteBank[nextKind];
     ped.x = fromLeft ? -17.5 : 17.5;
-    ped.homeZ = 0.4 + Math.random() * 1.45;
+    ped.homeZ = 0.4 + this.rng.cosmetic() * 1.45;
     ped.z = ped.homeZ;
-    ped.speed = 1.4 + Math.random() * 0.55;
+    ped.speed = 1.4 + this.rng.gameplay() * 0.55;
     ped.vx = fromLeft ? ped.speed : -ped.speed;
     ped.state = 'strolling';
     ped.queueSlot = -1;
-    ped.boughtCooldown = 1.2 + Math.random() * 2.5;
-    ped.careful = Math.random() < 0.8;
+    ped.boughtCooldown = 1.2 + this.rng.gameplay() * 2.5;
+    ped.careful = this.rng.cosmetic() < 0.8;
     ped.koTimer = 0;
     ped.soulSprite.visible = false;
   }
@@ -3209,8 +3223,8 @@ export class CentralParkScene {
           if (qIdx >= 0) this.queue.splice(qIdx, 1);
           ped.state = 'leaving';
           ped.queueSlot = -1;
-          ped.boughtCooldown = 10 + Math.random() * 4;
-          ped.vx = (Math.random() > 0.5 ? 1 : -1) * ped.speed * 1.25;
+          ped.boughtCooldown = 10 + this.rng.gameplay() * 4;
+          ped.vx = (this.rng.gameplay() > 0.5 ? 1 : -1) * ped.speed * 1.25;
           walkedOut = true;
           this.callbacks.onCustomerWalkout?.();
         }
@@ -3285,7 +3299,7 @@ export class CentralParkScene {
         ped.patience = QUEUE_MAX_PATIENCE;
         ped.maxPatience = QUEUE_MAX_PATIENCE;
         this.queue.push(ped);
-        this.queueJoinCooldown = 2.6 + Math.random() * 2.2;
+        this.queueJoinCooldown = 2.6 + this.rng.gameplay() * 2.2;
         continue;
       }
 

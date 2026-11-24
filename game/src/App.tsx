@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  appendCustomerReview,
-  computeDayGrade,
   createInitialState,
   createReviewFromPatience,
   DayRecord,
@@ -13,14 +11,21 @@ import {
   HURDLE_RATE,
   LedgerToast,
   MANAGER_DAILY_WAGE,
-  SELLER_ASK,
-  SELLER_HIDDEN_MIN,
   SliceState,
   STALL_KIT_COST,
   WORKER_DAILY_WAGE,
 } from './core/sliceModel';
-import { getNeighborhood, NeighborhoodId, NEIGHBORHOODS } from './core/neighborhoods';
+import { getNeighborhood, NeighborhoodId } from './core/neighborhoods';
+import { advanceClock, formatClockTime, isClockPaused } from './core/clock';
+import { closeDay, startNextDay as advanceToNextDay } from './core/dayEnd';
+import { CENTRAL_PARK_DEAL, resolveSealedBid } from './core/deal';
+import * as Purchases from './core/purchases';
+import { getDailyPlotRent } from './core/rent';
+import { applySale, applyWalkout, salePopLabel } from './core/sales';
+import { applyBrewOutcome, BrewTier, pickChallenge, StirKey, sweetSpots } from './core/brewing';
+import { BrewGameState, initGame, pressGame, pressStirKey, stepGame } from './core/minigames';
 import { soundEngine } from './audio/soundEngine';
+import { cosmeticRandom, gameplayRandom, getRunSeed } from './core/runRandom';
 import { ManhattanMapModal } from './ui/ManhattanMapModal';
 import { CentralParkScene, NearbyTarget, ProjectedAnchors } from './world/CentralParkScene';
 import {
@@ -44,26 +49,6 @@ interface SalePop {
   isPerfect?: boolean;
 }
 
-type BrewChallengeKind = 'triple-squeeze' | 'keep-in-tube' | 'rapid-stir' | 'moving-bullseye';
-type StirKey = 'W' | 'A' | 'S' | 'D' | 'SPACE';
-
-const BREW_CHALLENGE_KINDS: BrewChallengeKind[] = [
-  'triple-squeeze',
-  'keep-in-tube',
-  'rapid-stir',
-  'moving-bullseye',
-];
-
-function formatClockTime(progress: number): string {
-  const clamped = Math.max(0, Math.min(1, progress));
-  const totalMinutes = Math.floor((clamped * 720) / 5) * 5; // 8:00 AM (0) to 8:00 PM (720m)
-  const hour24 = 8 + Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  const period = hour24 >= 12 ? 'PM' : 'AM';
-  const hour12 = hour24 > 12 ? hour24 - 12 : hour24;
-  return `${hour12}:${mins.toString().padStart(2, '0')} ${period}`;
-}
-
 type ActiveModal =
   | 'seller-stand'
   | 'market-stalls'
@@ -78,11 +63,16 @@ const STARTER_QUESTIONS = [
   'Why are you selling?',
 ];
 
-const SELLER_PERIODS = [
-  { period: '2 periods ago', sales: '$14', lemons: '$5', manager: '$0', rent: '$3', profit: '$6' },
-  { period: 'Last period', sales: '$15', lemons: '$5', manager: '$0', rent: '$3', profit: '$7' },
-  { period: 'Latest', sales: '$16', lemons: '$5', manager: '$0', rent: '$3', profit: '$8' },
-];
+// The seller's published books, formatted for the deal table. The numbers live in core/deal.ts.
+const SELLER_ASK = CENTRAL_PARK_DEAL.askingPrice;
+const SELLER_PERIODS = CENTRAL_PARK_DEAL.books.map((b) => ({
+  period: b.label,
+  sales: `$${b.sales}`,
+  lemons: `$${b.lemons}`,
+  manager: `$${b.managerWage}`,
+  rent: `$${b.rent}`,
+  profit: `$${b.profit}`,
+}));
 
 const UI_ICON_KINDS: UiIconKind[] = [
   'coin',
@@ -144,35 +134,37 @@ export function App() {
   const brewedCupsRef = useRef(brewedCups);
   brewedCupsRef.current = brewedCups;
 
-  // 4-Challenge Rotating Arcade Brewing State
-  const [brewGameActive, setBrewGameActive] = useState(false);
-  const [brewKind, setBrewKind] = useState<BrewChallengeKind>('triple-squeeze');
-  const brewKindRef = useRef<BrewChallengeKind>('triple-squeeze');
-  const lastBrewKindRef = useRef<BrewChallengeKind | null>(null);
-  const [brewNeedlePos, setBrewNeedlePos] = useState(0);
-  const brewNeedlePosRef = useRef(0);
-  const [bullseyePos, setBullseyePos] = useState(0.5);
-  const bullseyePosRef = useRef(0.5);
-  const [tripleTargets, setTripleTargets] = useState<[number, number, number]>([0.24, 0.5, 0.76]);
-  const tripleTargetsRef = useRef<[number, number, number]>([0.24, 0.5, 0.76]);
-  const [tripleStep, setTripleStep] = useState(0);
-  const tripleStepRef = useRef(0);
-  const [tripleHits, setTripleHits] = useState(0);
-  const tripleHitsRef = useRef(0);
-  const [tubeCenter, setTubeCenter] = useState(0.5);
-  const tubeCenterRef = useRef(0.5);
-  const [tubeDrop, setTubeDrop] = useState(0.5);
-  const tubeDropRef = useRef(0.5);
-  const [tubeFill, setTubeFill] = useState(0.32);
-  const tubeFillRef = useRef(0.32);
+  // 4-Challenge Rotating Arcade Brewing State.
+  // The whole running mini-game is one immutable value from core/minigames; the
+  // ref mirrors it so the animation loop and key handlers read the latest frame.
+  const [brewGame, setBrewGameState] = useState<BrewGameState | null>(null);
+  const brewGameRef = useRef<BrewGameState | null>(null);
+  const setBrewGame = useCallback((g: BrewGameState | null) => {
+    brewGameRef.current = g;
+    setBrewGameState(g);
+  }, []);
+  const lastBrewKindRef = useRef<BrewGameState['kind'] | null>(null);
   const spaceHeldRef = useRef(false);
-  const [stirSeq, setStirSeq] = useState<StirKey[]>(['A', 'W', 'D', 'S', 'SPACE']);
-  const stirSeqRef = useRef<StirKey[]>(['A', 'W', 'D', 'S', 'SPACE']);
-  const [stirIndex, setStirIndex] = useState(0);
-  const stirIndexRef = useRef(0);
-  const [stirFuse, setStirFuse] = useState(1);
-  const stirPenaltyRef = useRef(0);
   const [stirShake, setStirShake] = useState(false);
+
+  // Read-only views of the running game for the JSX below.
+  const brewGameActive = brewGame !== null;
+  const brewKind = brewGame?.kind ?? 'triple-squeeze';
+  const tripleGame = brewGame?.kind === 'triple-squeeze' ? brewGame : null;
+  const tubeGame = brewGame?.kind === 'keep-in-tube' ? brewGame : null;
+  const stirGame = brewGame?.kind === 'rapid-stir' ? brewGame : null;
+  const bullseyeGame = brewGame?.kind === 'moving-bullseye' ? brewGame : null;
+  const tripleTargets = tripleGame?.targets ?? [0.24, 0.5, 0.76];
+  const tripleStep = tripleGame?.step ?? 0;
+  const tripleHits = tripleGame?.hits ?? 0;
+  const brewNeedlePos = tripleGame?.needle ?? bullseyeGame?.needle ?? 0;
+  const bullseyePos = bullseyeGame?.bullseye ?? 0.5;
+  const tubeCenter = tubeGame?.center ?? 0.5;
+  const tubeDrop = tubeGame?.drop ?? 0.5;
+  const tubeFill = tubeGame?.fill ?? 0.32;
+  const stirSeq: StirKey[] = stirGame?.seq ?? ['A', 'W', 'D', 'S', 'SPACE'];
+  const stirIndex = stirGame?.index ?? 0;
+  const stirFuse = stirGame?.fuse ?? 1;
 
   // Real-Time Day Clock (8:00 AM -> 8:00 PM) & 8:00 PM Closing Bell Scorecard
   const [dayTimeProgress, setDayTimeProgress] = useState(0);
@@ -287,7 +279,7 @@ export function App() {
     if (brewRafRef.current !== null) {
       cancelAnimationFrame(brewRafRef.current);
       brewRafRef.current = null;
-      setBrewGameActive(false);
+      setBrewGame(null);
     }
     if (serveRafRef.current !== null) {
       cancelAnimationFrame(serveRafRef.current);
@@ -335,10 +327,7 @@ export function App() {
     comboRef.current = 0;
     setCombo(0);
     const id = reviewIdRef.current++;
-    setState((prev) => {
-      const { reviews, ratingAvg } = appendCustomerReview(prev, 0, id);
-      return { ...prev, reviews, ratingAvg };
-    });
+    setState((prev) => applyWalkout(prev, id));
     pushToast('★ 1.0 Customer left!', 'negative', 'own-stand');
   }, [pushToast]);
 
@@ -367,7 +356,7 @@ export function App() {
       onTaxiHit: handleTaxiHit,
       onAnchorsUpdate: setAnchors,
       onInteract: handleInteract,
-    });
+    }, { gameplay: gameplayRandom, cosmetic: cosmeticRandom });
     sceneRef.current = world;
     world.setPlayerSpecies(founderSpecies);
     world.setNeighborhood(neighborhoodId);
@@ -421,7 +410,7 @@ export function App() {
       if (brewRafRef.current !== null) {
         cancelAnimationFrame(brewRafRef.current);
         brewRafRef.current = null;
-        setBrewGameActive(false);
+        setBrewGame(null);
       }
       if (serveRafRef.current !== null) {
         cancelAnimationFrame(serveRafRef.current);
@@ -458,65 +447,40 @@ export function App() {
     }
   };
 
-  // Sweet-spot half-widths around center (0.5) — widen with pitchers and hired workers
-  const perfectHalf = Math.min(
-    0.16,
-    0.055 + Math.max(0, state.pitchers - 1) * 0.018 + state.workers * 0.022
-  );
-  const goodHalf = Math.min(
-    0.32,
-    0.17 + Math.max(0, state.pitchers - 1) * 0.025 + state.workers * 0.03
-  );
-  const tubeWidth = Math.min(
-    0.42,
-    0.25 + Math.max(0, state.pitchers - 1) * 0.03 + state.workers * 0.035
-  );
+  // Sweet-spot widths widen with pitchers and hired workers (core/brewing.ts)
+  const { perfectHalf, goodHalf, tubeWidth } = sweetSpots(state);
 
   const finishBrewOutcome = useCallback(
-    (tier: 'perfect' | 'good' | 'sour') => {
+    (tier: BrewTier) => {
       if (brewRafRef.current !== null) {
         cancelAnimationFrame(brewRafRef.current);
         brewRafRef.current = null;
       }
       spaceHeldRef.current = false;
-      setBrewGameActive(false);
+      setBrewGame(null);
 
       const latest = stateRef.current;
+      // Toasts show the cups actually added. (They used to fall back to the full
+      // batch size when the pitcher was already full, which overstated the brew.)
+      const { added } = applyBrewOutcome(tier, brewedCupsRef.current, latest.cupsInStock);
+      setBrewedCups((prev) => applyBrewOutcome(tier, prev, latest.cupsInStock).brewedCups);
       if (tier === 'perfect') {
-        const batch = 6;
-        const added = Math.max(
-          0,
-          Math.min(latest.cupsInStock, brewedCupsRef.current + batch) - brewedCupsRef.current
-        );
-        setBrewedCups((prev) => Math.min(latest.cupsInStock, prev + batch));
         soundEngine.playPerfect();
-        pushSalePop(`✨ PERFECT BREW! +${added || batch}`, Math.max(3, comboRef.current), true);
-        pushToast(`✨ PERFECT BREW! +${added || batch}`, 'positive', 'own-stand');
+        pushSalePop(`✨ PERFECT BREW! +${added}`, Math.max(3, comboRef.current), true);
+        pushToast(`✨ PERFECT BREW! +${added}`, 'positive', 'own-stand');
       } else if (tier === 'good') {
-        const batch = 4;
-        const added = Math.max(
-          0,
-          Math.min(latest.cupsInStock, brewedCupsRef.current + batch) - brewedCupsRef.current
-        );
-        setBrewedCups((prev) => Math.min(latest.cupsInStock, prev + batch));
         soundEngine.playBrew();
-        pushToast(`GOOD BREW! +${added || batch}`, 'positive', 'own-stand');
+        pushToast(`GOOD BREW! +${added}`, 'positive', 'own-stand');
       } else {
-        const batch = 2;
-        const added = Math.max(
-          0,
-          Math.min(latest.cupsInStock, brewedCupsRef.current + batch) - brewedCupsRef.current
-        );
-        setBrewedCups((prev) => Math.min(latest.cupsInStock, prev + batch));
         soundEngine.playReject();
-        pushToast(`Sour batch (+${added || batch})`, 'negative', 'own-stand');
+        pushToast(`Sour batch (+${added})`, 'negative', 'own-stand');
       }
     },
-    [pushSalePop, pushToast]
+    [pushSalePop, pushToast, setBrewGame]
   );
 
   const startBrewGame = useCallback(() => {
-    if (brewGameActive) return;
+    if (brewGameRef.current) return;
     const cur = stateRef.current;
     if (cur.pitchers < 1) {
       soundEngine.playReject();
@@ -534,233 +498,86 @@ export function App() {
       return;
     }
 
-    // Pick one of the 4 arcade challenges, never repeating the last one twice in a row
-    const pool = BREW_CHALLENGE_KINDS.filter((k) => k !== lastBrewKindRef.current);
-    const chosen = pool[Math.floor(Math.random() * pool.length)] ?? 'triple-squeeze';
+    // One of the 4 arcade challenges, never the same one twice in a row.
+    const chosen = pickChallenge(lastBrewKindRef.current, gameplayRandom);
     lastBrewKindRef.current = chosen;
-    brewKindRef.current = chosen;
-    setBrewKind(chosen);
-
+    setBrewGame(initGame(chosen, gameplayRandom));
     soundEngine.playClick();
-    setBrewGameActive(true);
     spaceHeldRef.current = false;
 
-    const startTime = performance.now();
-    let lastNow = startTime;
-
-    if (chosen === 'triple-squeeze') {
-      const t1 = +(0.18 + Math.random() * 0.12).toFixed(2);
-      const t2 = +(0.44 + Math.random() * 0.12).toFixed(2);
-      const t3 = +(0.72 + Math.random() * 0.14).toFixed(2);
-      const targets: [number, number, number] = [t1, t2, t3];
-      tripleTargetsRef.current = targets;
-      setTripleTargets(targets);
-      tripleStepRef.current = 0;
-      setTripleStep(0);
-      tripleHitsRef.current = 0;
-      setTripleHits(0);
-      brewNeedlePosRef.current = 0;
-      setBrewNeedlePos(0);
-
-      const tick = (now: number) => {
-        const elapsedSec = (now - startTime) / 1000;
-        if (elapsedSec >= 3.2) {
-          const hits = tripleHitsRef.current;
-          finishBrewOutcome(hits >= 3 ? 'perfect' : hits === 2 ? 'good' : 'sour');
-          return;
-        }
-        const cycle = (elapsedSec * 1.38) % 2;
-        const pos = cycle <= 1 ? cycle : 2 - cycle;
-        brewNeedlePosRef.current = pos;
-        setBrewNeedlePos(pos);
-        brewRafRef.current = requestAnimationFrame(tick);
-      };
-      brewRafRef.current = requestAnimationFrame(tick);
-    } else if (chosen === 'keep-in-tube') {
-      tubeCenterRef.current = 0.5;
-      setTubeCenter(0.5);
-      tubeDropRef.current = 0.5;
-      setTubeDrop(0.5);
-      tubeFillRef.current = 0.32;
-      setTubeFill(0.32);
-      const phaseOffset = Math.random() * Math.PI * 2;
-
-      const tick = (now: number) => {
-        const dt = Math.min(0.05, (now - lastNow) / 1000);
-        lastNow = now;
-        const elapsedSec = (now - startTime) / 1000;
-
-        const latest = stateRef.current;
-        const width = Math.min(
-          0.42,
-          0.25 + Math.max(0, latest.pitchers - 1) * 0.03 + latest.workers * 0.035
-        );
-        const center = Math.max(
-          width / 2,
-          Math.min(
-            1 - width / 2,
-            0.5 +
-              0.31 * Math.sin(elapsedSec * 2.15 + phaseOffset) +
-              0.11 * Math.cos(elapsedSec * 3.8)
-          )
-        );
-        tubeCenterRef.current = center;
-        setTubeCenter(center);
-
-        const accel = spaceHeldRef.current ? 1.15 : -0.68;
-        const nextDrop = Math.max(0.03, Math.min(0.97, tubeDropRef.current + accel * dt));
-        tubeDropRef.current = nextDrop;
-        setTubeDrop(nextDrop);
-
-        const inside = Math.abs(nextDrop - center) <= width / 2;
-        const nextFill = Math.max(0, Math.min(1, tubeFillRef.current + (inside ? 0.52 : -0.22) * dt));
-        tubeFillRef.current = nextFill;
-        setTubeFill(nextFill);
-
-        if (nextFill >= 1) {
-          finishBrewOutcome('perfect');
-          return;
-        }
-        if (elapsedSec >= 4.0) {
-          finishBrewOutcome(nextFill >= 0.65 ? 'good' : 'sour');
-          return;
-        }
-        brewRafRef.current = requestAnimationFrame(tick);
-      };
-      brewRafRef.current = requestAnimationFrame(tick);
-    } else if (chosen === 'rapid-stir') {
-      const dirs: StirKey[] = ['W', 'A', 'S', 'D'];
-      const seq: StirKey[] = [];
-      for (let i = 0; i < 4; i++) {
-        const filtered = dirs.filter((d) => d !== seq[i - 1]);
-        seq.push(filtered[Math.floor(Math.random() * filtered.length)] ?? 'W');
+    // One loop for every challenge: advance the pure game state by the real
+    // frame time, render it, and stop when the rules report an outcome.
+    let lastNow = performance.now();
+    const tick = (now: number) => {
+      const game = brewGameRef.current;
+      if (!game) return;
+      const dt = Math.max(0, (now - lastNow) / 1000);
+      lastNow = now;
+      const latest = stateRef.current;
+      const result = stepGame(game, dt, {
+        pitchers: latest.pitchers,
+        workers: latest.workers,
+        spaceHeld: spaceHeldRef.current,
+      });
+      setBrewGame(result.state);
+      if (result.outcome) {
+        finishBrewOutcome(result.outcome);
+        return;
       }
-      seq.push('SPACE');
-      stirSeqRef.current = seq;
-      setStirSeq(seq);
-      stirIndexRef.current = 0;
-      setStirIndex(0);
-      stirPenaltyRef.current = 0;
-      setStirFuse(1);
-      setStirShake(false);
-
-      const tick = (now: number) => {
-        const elapsedSec = (now - startTime) / 1000 + stirPenaltyRef.current;
-        const remaining = Math.max(0, 1 - elapsedSec / 2.6);
-        setStirFuse(remaining);
-        if (remaining <= 0) {
-          finishBrewOutcome(stirIndexRef.current >= 3 ? 'good' : 'sour');
-          return;
-        }
-        brewRafRef.current = requestAnimationFrame(tick);
-      };
       brewRafRef.current = requestAnimationFrame(tick);
-    } else {
-      // Challenge D: Counter-Moving Bullseye (high-speed crossing)
-      brewNeedlePosRef.current = 0;
-      setBrewNeedlePos(0);
-      bullseyePosRef.current = 0.78;
-      setBullseyePos(0.78);
-      const phaseOffset = Math.random() * Math.PI;
-
-      const tick = (now: number) => {
-        const elapsedSec = (now - startTime) / 1000;
-        if (elapsedSec >= 3.0) {
-          finishBrewOutcome('sour');
-          return;
-        }
-        const cycle = (elapsedSec * 1.95) % 2;
-        const pos = cycle <= 1 ? cycle : 2 - cycle;
-        brewNeedlePosRef.current = pos;
-        setBrewNeedlePos(pos);
-
-        const bPos = 0.5 + 0.3 * Math.cos(elapsedSec * 2.4 + phaseOffset);
-        bullseyePosRef.current = bPos;
-        setBullseyePos(bPos);
-        brewRafRef.current = requestAnimationFrame(tick);
-      };
-      brewRafRef.current = requestAnimationFrame(tick);
-    }
-  }, [brewGameActive, finishBrewOutcome, pushToast]);
+    };
+    brewRafRef.current = requestAnimationFrame(tick);
+  }, [finishBrewOutcome, pushToast, setBrewGame]);
 
   const handleStirKeyInput = useCallback(
     (pressedKey: StirKey) => {
-      if (!brewGameActive || brewKindRef.current !== 'rapid-stir') return;
-      const expected = stirSeqRef.current[stirIndexRef.current];
-      if (pressedKey === expected) {
-        const nextIdx = stirIndexRef.current + 1;
-        stirIndexRef.current = nextIdx;
-        setStirIndex(nextIdx);
-        soundEngine.playClick();
-        if (nextIdx >= stirSeqRef.current.length) {
-          finishBrewOutcome('perfect');
-        }
-      } else {
+      const game = brewGameRef.current;
+      if (!game || game.kind !== 'rapid-stir') return;
+      const result = pressStirKey(game, pressedKey);
+      setBrewGame(result.state);
+      if (result.shake) {
         soundEngine.playReject();
-        stirPenaltyRef.current += 0.28;
         setStirShake(true);
         window.setTimeout(() => setStirShake(false), 180);
+        return;
       }
+      soundEngine.playClick();
+      if (result.outcome) finishBrewOutcome(result.outcome);
     },
-    [brewGameActive, finishBrewOutcome]
+    [finishBrewOutcome, setBrewGame]
   );
 
   const lockBrewGame = useCallback(() => {
-    if (!brewGameActive) return;
-    const kind = brewKindRef.current;
+    const game = brewGameRef.current;
+    if (!game) return;
 
-    if (kind === 'keep-in-tube') {
-      // Tapping or clicking boosts the lemon drop rightward inside the tube
-      tubeDropRef.current = Math.min(0.97, tubeDropRef.current + 0.14);
-      setTubeDrop(tubeDropRef.current);
-      soundEngine.playClick();
-      return;
-    }
-
-    if (kind === 'rapid-stir') {
-      handleStirKeyInput(stirSeqRef.current[stirIndexRef.current] ?? 'SPACE');
+    if (game.kind === 'rapid-stir') {
+      handleStirKeyInput(game.seq[game.index] ?? 'SPACE');
       return;
     }
 
     const latest = stateRef.current;
-    if (kind === 'triple-squeeze') {
-      const targetHalf = Math.min(
-        0.11,
-        0.068 + Math.max(0, latest.pitchers - 1) * 0.012 + latest.workers * 0.015
-      );
-      const curStep = tripleStepRef.current;
-      const target = tripleTargetsRef.current[curStep] ?? 0.5;
-      const hit = Math.abs(brewNeedlePosRef.current - target) <= targetHalf;
-      const nextHits = tripleHitsRef.current + (hit ? 1 : 0);
-      tripleHitsRef.current = nextHits;
-      setTripleHits(nextHits);
+    const result = pressGame(game, { pitchers: latest.pitchers, workers: latest.workers });
+
+    if (game.kind === 'keep-in-tube') {
+      // Tapping or clicking boosts the lemon drop rightward inside the tube
+      setBrewGame(result.state);
+      soundEngine.playClick();
+      return;
+    }
+
+    if (game.kind === 'triple-squeeze' && result.state.kind === 'triple-squeeze') {
+      const hit = result.state.hits > game.hits;
       if (hit) {
         soundEngine.playClick();
       } else {
         soundEngine.playReject();
       }
-
-      const nextStep = curStep + 1;
-      tripleStepRef.current = nextStep;
-      setTripleStep(nextStep);
-      if (nextStep >= 3) {
-        finishBrewOutcome(nextHits >= 3 ? 'perfect' : nextHits === 2 ? 'good' : 'sour');
-      }
-      return;
+      setBrewGame(result.state);
     }
 
-    // Challenge D: Counter-Moving Bullseye
-    const pHalf = Math.min(
-      0.16,
-      0.055 + Math.max(0, latest.pitchers - 1) * 0.018 + latest.workers * 0.022
-    );
-    const gHalf = Math.min(
-      0.32,
-      0.17 + Math.max(0, latest.pitchers - 1) * 0.025 + latest.workers * 0.03
-    );
-    const dist = Math.abs(brewNeedlePosRef.current - bullseyePosRef.current);
-    finishBrewOutcome(dist <= pHalf ? 'perfect' : dist <= gHalf ? 'good' : 'sour');
-  }, [brewGameActive, finishBrewOutcome, handleStirKeyInput]);
+    if (result.outcome) finishBrewOutcome(result.outcome);
+  }, [finishBrewOutcome, handleStirKeyInput, setBrewGame]);
 
   const startServeFrontCustomer = useCallback(() => {
     if (!workingAtStand || serveProgress !== null) return;
@@ -795,7 +612,6 @@ export function App() {
         const latest = stateRef.current;
         if (latest.cupsInStock <= 0) return;
 
-        const unitCost = 0.5;
         const revId = reviewIdRef.current++;
         const reviewPreview = createReviewFromPatience(served.patienceRatio, revId);
         const nextCombo = comboRef.current + 1;
@@ -803,34 +619,11 @@ export function App() {
         setCombo(nextCombo);
         setCashPulseKey((k) => k + 1);
 
-        setState((prev) => {
-          if (prev.cupsInStock <= 0) return prev;
-          const { reviews, ratingAvg } = appendCustomerReview(prev, served.patienceRatio, revId);
-          return {
-            ...prev,
-            cash: +(prev.cash + prev.pricePerCup).toFixed(2),
-            cupsInStock: prev.cupsInStock - 1,
-            inventoryValue: Math.max(0, +(prev.inventoryValue - unitCost).toFixed(2)),
-            dayCupsSold: prev.dayCupsSold + 1,
-            dayRevenue: +(prev.dayRevenue + prev.pricePerCup).toFixed(2),
-            dayCogs: +(prev.dayCogs + unitCost).toFixed(2),
-            totalRevenue: +(prev.totalRevenue + prev.pricePerCup).toFixed(2),
-            totalCogs: +(prev.totalCogs + unitCost).toFixed(2),
-            reviews,
-            ratingAvg,
-          };
-        });
+        setState((prev) => applySale(prev, served.patienceRatio, revId));
         setBrewedCups((c) => Math.max(0, c - 1));
         soundEngine.playCoin(nextCombo);
         sceneRef.current?.burstSaleSparkles(nextCombo);
-
-        const popLabel =
-          nextCombo >= 4
-            ? `+$${latest.pricePerCup}!!! 🔥 x${nextCombo}`
-            : nextCombo >= 2
-            ? `+$${latest.pricePerCup}!! x${nextCombo}`
-            : `+$${latest.pricePerCup}!`;
-        pushSalePop(popLabel, nextCombo);
+        pushSalePop(salePopLabel(latest.pricePerCup, nextCombo), nextCombo);
         pushToast(
           `+$${latest.pricePerCup} Cash · ★ ${reviewPreview.stars.toFixed(1)}`,
           reviewPreview.stars >= 4 ? 'positive' : 'neutral',
@@ -866,7 +659,7 @@ export function App() {
       if (isTyping || e.metaKey || e.ctrlKey || e.altKey) return;
 
       const k = e.key.toLowerCase();
-      if (brewGameActive && brewKindRef.current === 'rapid-stir' && workingAtStand) {
+      if (brewGameActive && brewGameRef.current?.kind === 'rapid-stir' && workingAtStand) {
         if (k === 'w' || e.key === 'ArrowUp') {
           e.preventDefault();
           handleStirKeyInput('W');
@@ -916,7 +709,7 @@ export function App() {
         e.preventDefault();
         spaceHeldRef.current = true;
         if (brewGameActive) {
-          if (brewKindRef.current !== 'keep-in-tube') {
+          if (brewGameRef.current?.kind !== 'keep-in-tube') {
             lockBrewGame();
           }
         } else {
@@ -974,73 +767,54 @@ export function App() {
       const served = sceneRef.current?.serveFrontCustomer();
       if (!served) return;
 
-      const unitCost = 0.5;
       const revId = reviewIdRef.current++;
       const nextCombo = comboRef.current + 1;
       comboRef.current = nextCombo;
       setCombo(nextCombo);
       setCashPulseKey((k) => k + 1);
 
-      setState((prev) => {
-        if (prev.cupsInStock <= 0) return prev;
-        const { reviews, ratingAvg } = appendCustomerReview(prev, served.patienceRatio, revId);
-        return {
-          ...prev,
-          cash: +(prev.cash + prev.pricePerCup).toFixed(2),
-          cupsInStock: prev.cupsInStock - 1,
-          inventoryValue: Math.max(0, +(prev.inventoryValue - unitCost).toFixed(2)),
-          dayCupsSold: prev.dayCupsSold + 1,
-          dayRevenue: +(prev.dayRevenue + prev.pricePerCup).toFixed(2),
-          dayCogs: +(prev.dayCogs + unitCost).toFixed(2),
-          totalRevenue: +(prev.totalRevenue + prev.pricePerCup).toFixed(2),
-          totalCogs: +(prev.totalCogs + unitCost).toFixed(2),
-          reviews,
-          ratingAvg,
-        };
-      });
+      setState((prev) => applySale(prev, served.patienceRatio, revId));
       setBrewedCups((c) => Math.max(0, c - 1));
       soundEngine.playCoin(nextCombo);
       sceneRef.current?.burstSaleSparkles(nextCombo);
-      pushSalePop(
-        nextCombo >= 4
-          ? `+$${latest.pricePerCup}!!! 🔥 x${nextCombo}`
-          : nextCombo >= 2
-          ? `+$${latest.pricePerCup}!! x${nextCombo}`
-          : `+$${latest.pricePerCup}!`,
-        nextCombo
-      );
+      pushSalePop(salePopLabel(latest.pricePerCup, nextCombo), nextCombo);
     }, intervalMs);
     return () => window.clearInterval(timer);
   }, [state.managers, state.day, state.maxDays, currentPlotStatus, eodRecord, pushSalePop]);
 
+  /**
+   * Run a pure purchase rule from core/purchases.
+   * The yes/no decision uses the latest committed state (stateRef), and the update
+   * re-runs the same rule on React's `prev` so concurrent updates (a sale landing in
+   * the same frame) are never overwritten. Phase 3's store removes this double run.
+   */
+  const runPurchase = (rule: (s: SliceState) => Purchases.PurchaseResult): Purchases.PurchaseResult => {
+    const decision = rule(stateRef.current);
+    if (decision.ok) {
+      setState((prev) => {
+        const r = rule(prev);
+        return r.ok ? r.state : prev;
+      });
+    }
+    return decision;
+  };
+
   const buyLemons = () => {
-    if (state.cash < 5) {
+    if (!runPurchase(Purchases.buyLemons).ok) {
       soundEngine.playReject();
-      pushToast('Not enough cash ($5 needed)', 'negative', 'own-stand');
+      pushToast(`Not enough cash ($${Purchases.LEMON_CRATE_COST} needed)`, 'negative', 'own-stand');
       return;
     }
-    setState((prev) => ({
-      ...prev,
-      cash: +(prev.cash - 5).toFixed(2),
-      inventoryValue: +(prev.inventoryValue + 5).toFixed(2),
-      cupsInStock: prev.cupsInStock + 10,
-    }));
     soundEngine.playBuy();
     pushToast('Cash -$5 · Stock +$5 (+10 cups) · Profit $0', 'neutral', 'own-stand');
   };
 
   const buyStallKit = () => {
-    if (state.cash < STALL_KIT_COST) {
+    if (!runPurchase(Purchases.buyStallKit).ok) {
       soundEngine.playReject();
       pushToast(`Not enough cash ($${STALL_KIT_COST} needed)`, 'negative', 'seller-stand');
       return;
     }
-    setState((prev) => ({
-      ...prev,
-      cash: +(prev.cash - STALL_KIT_COST).toFixed(2),
-      equipmentValue: +(prev.equipmentValue + STALL_KIT_COST).toFixed(2),
-      stallKits: prev.stallKits + 1,
-    }));
     soundEngine.playBuy();
     pushToast(
       `Cash -$${STALL_KIT_COST} · Equip +$${STALL_KIT_COST} (+1 Stall Kit) · Profit $0`,
@@ -1050,44 +824,27 @@ export function App() {
   };
 
   const buyPitcher = () => {
-    if (state.cash < 10) {
+    if (!runPurchase(Purchases.buyPitcher).ok) {
       soundEngine.playReject();
-      pushToast('Not enough cash ($10 needed)', 'negative', 'seller-stand');
+      pushToast(`Not enough cash ($${Purchases.PITCHER_COST} needed)`, 'negative', 'seller-stand');
       return;
     }
-    setState((prev) => ({
-      ...prev,
-      cash: +(prev.cash - 10).toFixed(2),
-      equipmentValue: +(prev.equipmentValue + 10).toFixed(2),
-      pitchers: prev.pitchers + 1,
-    }));
     soundEngine.playBuy();
     pushToast('Cash -$10 · Equip +$10 (+1 Pitcher) · Profit $0', 'neutral', 'seller-stand');
   };
 
   const sellUsedPitcher = () => {
-    if (state.pitchers < 1) {
+    if (!runPurchase(Purchases.sellUsedPitcher).ok) {
       soundEngine.playReject();
       pushToast('No pitchers to sell!', 'negative', 'own-stand');
       return;
     }
-    setState((prev) => {
-      if (prev.pitchers < 1) return prev;
-      return {
-        ...prev,
-        cash: +(prev.cash + 7).toFixed(2),
-        equipmentValue: Math.max(0, +(prev.equipmentValue - 10).toFixed(2)),
-        pitchers: Math.max(0, prev.pitchers - 1),
-        dayCogs: +(prev.dayCogs + 3).toFixed(2),
-        totalCogs: +(prev.totalCogs + 3).toFixed(2),
-      };
-    });
     soundEngine.playCoin(1);
     pushToast('Sold Pitcher: Cash +$7 | Equip -$10 | Hurdle -$0.50/d', 'neutral', 'own-stand');
   };
 
   const divestCurrentStand = () => {
-    if (currentPlotStatus !== 'built' || state.ownedStands < 1) {
+    if (!runPurchase((s) => Purchases.divestStand(s, neighborhoodId)).ok) {
       soundEngine.playReject();
       pushToast('No built stand in this district to divest!', 'negative', 'own-stand');
       return;
@@ -1095,7 +852,7 @@ export function App() {
     if (brewRafRef.current !== null) {
       cancelAnimationFrame(brewRafRef.current);
       brewRafRef.current = null;
-      setBrewGameActive(false);
+      setBrewGame(null);
     }
     if (serveRafRef.current !== null) {
       cancelAnimationFrame(serveRafRef.current);
@@ -1107,27 +864,12 @@ export function App() {
     sceneRef.current?.setWorkingAtStand(false);
     sceneRef.current?.setPlotState('empty');
     setBrewedCups(0);
-
-    setState((prev) => ({
-      ...prev,
-      cash: +(prev.cash + 8.4).toFixed(2),
-      equipmentValue: Math.max(0, +(prev.equipmentValue - 12).toFixed(2)),
-      ownedStands: Math.max(0, prev.ownedStands - 1),
-      plots: { ...prev.plots, [neighborhoodId]: 'empty' },
-      dayCogs: +(prev.dayCogs + 3.6).toFixed(2),
-      totalCogs: +(prev.totalCogs + 3.6).toFixed(2),
-    }));
     soundEngine.playCoin(1);
     pushToast('Divested Stand: Cash +$8.40 | Equip -$12 | Hurdle -$0.60/d', 'neutral', 'own-stand');
   };
 
   const signLease = () => {
-    if (neighborhoodId === 'market') return;
-    if (state.plots[neighborhoodId] !== 'empty') return;
-    setState((prev) => ({
-      ...prev,
-      plots: { ...prev.plots, [neighborhoodId]: 'leased' },
-    }));
+    if (!runPurchase((s) => Purchases.signLease(s, neighborhoodId)).ok) return;
     soundEngine.playBuy();
     pushToast(
       `Leased ${neighborhood.shortName} Plot ($${neighborhood.dailyRent}/day) — Ready for a Stall Kit!`,
@@ -1137,49 +879,33 @@ export function App() {
   };
 
   const buildStandOnPlot = () => {
-    if (neighborhoodId === 'market') return;
-    if (state.plots[neighborhoodId] !== 'leased') return;
-    if (state.stallKits < 1) {
-      soundEngine.playReject();
-      pushToast(`Need a Stall Kit ($${STALL_KIT_COST}) from Union Sq. Market!`, 'negative', 'own-stand');
+    const result = runPurchase((s) => Purchases.buildStand(s, neighborhoodId));
+    if (!result.ok) {
+      if (result.reason === 'no-stall-kit') {
+        soundEngine.playReject();
+        pushToast(`Need a Stall Kit ($${STALL_KIT_COST}) from Union Sq. Market!`, 'negative', 'own-stand');
+      }
       return;
     }
-    setState((prev) => ({
-      ...prev,
-      stallKits: prev.stallKits - 1,
-      ownedStands: prev.ownedStands + 1,
-      plots: { ...prev.plots, [neighborhoodId]: 'built' },
-    }));
     setActiveModal(null);
     soundEngine.playBuy();
     pushToast(`Stand Built in ${neighborhood.shortName}! Press [E] to step behind the counter.`, 'positive', 'own-stand');
   };
 
   const hireWorker = () => {
-    setState((prev) => ({ ...prev, workers: prev.workers + 1 }));
+    setState(Purchases.hireWorker);
     soundEngine.playBuy();
     pushToast(`Hired Worker ($${WORKER_DAILY_WAGE}/day) · Brew sweet spot widened!`, 'positive', 'own-stand');
   };
 
   const hireManager = () => {
-    setState((prev) => ({ ...prev, managers: prev.managers + 1 }));
+    setState(Purchases.hireManager);
     soundEngine.playBuy();
     pushToast(`Hired Manager ($${MANAGER_DAILY_WAGE}/day) · Stand auto-brews & serves!`, 'positive', 'own-stand');
   };
 
-  // Daily rent sums all leased/built district plots plus any acquired seller stand
-  const dailyPlotRent = useMemo(() => {
-    let total = 0;
-    for (const n of NEIGHBORHOODS) {
-      if (n.id !== 'market' && state.plots[n.id] !== 'empty') {
-        total += n.dailyRent;
-      }
-    }
-    if (state.dealStatus === 'won') {
-      total += 3;
-    }
-    return +total.toFixed(2);
-  }, [state.plots, state.dealStatus]);
+  // Daily rent: every leased/built district plot plus any acquired seller stand (core/rent.ts)
+  const dailyPlotRent = getDailyPlotRent(state);
 
   const dailyWages = getDailyWages(state);
 
@@ -1191,7 +917,7 @@ export function App() {
     if (brewRafRef.current !== null) {
       cancelAnimationFrame(brewRafRef.current);
       brewRafRef.current = null;
-      setBrewGameActive(false);
+      setBrewGame(null);
     }
     if (serveRafRef.current !== null) {
       cancelAnimationFrame(serveRafRef.current);
@@ -1205,51 +931,11 @@ export function App() {
     // Unserved brewed lemonade in the pitcher spoils overnight; raw lemons in crate stay
     setBrewedCups(0);
 
-    let plotRent = 0;
-    for (const n of NEIGHBORHOODS) {
-      if (n.id !== 'market' && cur.plots[n.id] !== 'empty') {
-        plotRent += n.dailyRent;
-      }
-    }
-    if (cur.dealStatus === 'won') {
-      plotRent += 3;
-    }
-    const wages = getDailyWages(cur);
-    const rentAndWages = +(plotRent + wages).toFixed(2);
-    const hurdleCharge = getDailyHurdleCharge(cur);
-    const nopat = +(cur.dayRevenue - cur.dayCogs - rentAndWages).toFixed(2);
-    const valueCreated = +(nopat - hurdleCharge).toFixed(2);
-    const cumulativeValue = +(cur.totalValueCreated + valueCreated).toFixed(2);
-    const invested = getInvestedCapital(cur);
-    const roicPct = +((nopat / Math.max(1, invested)) * 100).toFixed(1);
-    const grade = computeDayGrade(roicPct);
-
-    const record: DayRecord = {
-      day: cur.day,
-      cupsSold: cur.dayCupsSold,
-      revenue: cur.dayRevenue,
-      cogs: cur.dayCogs,
-      rentAndWages,
-      nopat,
-      hurdleCharge,
-      valueCreated,
-      cumulativeValue,
-      roicPct,
-      grade,
-    };
-
-    setState((prev) => ({
-      ...prev,
-      cash: +(prev.cash - rentAndWages).toFixed(2),
-      dayCupsSold: 0,
-      dayRevenue: 0,
-      dayCogs: 0,
-      dayRentPaid: 0,
-      totalRent: +(prev.totalRent + rentAndWages).toFixed(2),
-      totalValueCreated: cumulativeValue,
-      lastDayCapitalCharge: hurdleCharge,
-      dayHistory: [...prev.dayHistory, record],
-    }));
+    // The books are closed by the pure rule in core/dayEnd.ts.
+    const closed = closeDay(cur);
+    if (!closed) return;
+    const { record } = closed;
+    setState((prev) => closeDay(prev)?.state ?? prev);
 
     setEodRecord(record);
     soundEngine.playDayEnd();
@@ -1261,31 +947,25 @@ export function App() {
     dayTimeProgressRef.current = 0;
     setDayTimeProgress(0);
     sceneRef.current?.setTimeOfDay(0);
-    setState((prev) => ({
-      ...prev,
-      day: Math.min(prev.maxDays, prev.day + 1),
-    }));
+    setState(advanceToNextDay);
   }, []);
 
   // Smart Pause & Real-Time Day Clock (8:00 AM -> 8:00 PM over 120s at 1x, 60s at 2x)
-  const clockPaused =
-    founderModalOpen ||
-    booksOpen ||
-    activeModal !== null ||
-    mapOpen ||
-    eodRecord !== null ||
-    (state.day === 1 && state.ownedStands < 1) ||
-    state.day > state.maxDays;
+  const clockPaused = isClockPaused({
+    overlayOpen: founderModalOpen || booksOpen || activeModal !== null || mapOpen || eodRecord !== null,
+    day: state.day,
+    maxDays: state.maxDays,
+    ownedStands: state.ownedStands,
+  });
 
   useEffect(() => {
     if (clockPaused) return;
-    const durationSec = clockSpeed === 2 ? 60 : 120;
     let lastTime = performance.now();
     const interval = window.setInterval(() => {
       const now = performance.now();
-      const dt = Math.min(0.25, (now - lastTime) / 1000);
+      const realDt = (now - lastTime) / 1000;
       lastTime = now;
-      const next = Math.min(1, dayTimeProgressRef.current + dt / durationSec);
+      const next = advanceClock(dayTimeProgressRef.current, realDt, clockSpeed);
       dayTimeProgressRef.current = next;
       setDayTimeProgress(next);
       sceneRef.current?.setTimeOfDay(next);
@@ -1312,28 +992,25 @@ export function App() {
   };
 
   const submitSealedBid = () => {
-    if (state.dealStatus !== 'open') return;
     const bid = Number(bidInput);
-    if (!Number.isFinite(bid) || bid <= 0) return;
-    if (bid > state.cash) {
+    // The hidden minimum is compared only inside core/deal.ts.
+    const result = resolveSealedBid(stateRef.current, CENTRAL_PARK_DEAL, bid);
+    if (result.kind === 'deal-closed' || result.kind === 'invalid') return;
+    if (result.kind === 'insufficient-cash') {
       soundEngine.playReject();
-      setBidMessage(`Insufficient cash: you have $${state.cash.toFixed(2)}.`);
+      setBidMessage(`Insufficient cash: you have $${result.cash.toFixed(2)}.`);
       return;
     }
-    if (bid >= SELLER_HIDDEN_MIN) {
-      setState((prev) => ({
-        ...prev,
-        cash: +(prev.cash - bid).toFixed(2),
-        equipmentValue: +(prev.equipmentValue + bid).toFixed(2),
-        ownedStands: prev.ownedStands + 1,
-        dealStatus: 'won',
-        dealBidPrice: bid,
-      }));
+    // Re-resolve on React's latest state so a sale landing in the same frame is kept.
+    setState((prev) => {
+      const r = resolveSealedBid(prev, CENTRAL_PARK_DEAL, bid);
+      return r.kind === 'won' || r.kind === 'rejected' ? r.state : prev;
+    });
+    if (result.kind === 'won') {
       soundEngine.playBuy();
       setBidMessage(`Accepted! Stand joined your chain at $${bid}.`);
       pushToast(`Acquired Stand · Cash -$${bid} · Equip +$${bid}`, 'positive', 'seller-stand');
     } else {
-      setState((prev) => ({ ...prev, dealStatus: 'rejected', dealBidPrice: bid }));
       soundEngine.playReject();
       setBidMessage(`Seller declined your $${bid} bid and walked away. Deal closed.`);
       pushToast(`Bid $${bid} Rejected — Cash Preserved`, 'neutral', 'seller-stand');
@@ -3037,6 +2714,10 @@ export function App() {
             </div>
 
             <div className="modal-body">
+              {/* Run seed: lets a playtester report this exact run (replay with ?seed=N). */}
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', textAlign: 'right' }}>
+                Run seed {getRunSeed()}
+              </div>
               {/* Hero Score & ROIC vs 5% Hurdle */}
               <div className="eod-hero-grid">
                 <div className="eod-hero-metric">
